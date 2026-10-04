@@ -19,7 +19,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.5.1");
+DOTTY_CARTRIDGE("music", "Music", "0.6.0");
 
 namespace {
 

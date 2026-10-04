@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 #include <Wire.h>
 
 #include "battery.h"
@@ -9,6 +10,7 @@
 #include "core_ble.h"
 #include "lock_screen.h"
 #include "log.h"
+#include "net.h"
 #include "power.h"
 #include "ui.h"
 
@@ -194,6 +196,54 @@ void loopLock() {
   }
 }
 
+// While an iPhone pairs, Dotty shows the code to type on the phone.
+void drawPairing(uint32_t code) {
+  char digits[8];
+  snprintf(digits, sizeof(digits), "%03lu %03lu", code / 1000, code % 1000);
+  epd.fillScreen(EpdDisplay::kWhite);
+  ui::drawHeader(epd, "Pair with iPhone");
+  epd.setTextColor(EpdDisplay::kBlack);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, "Type this code", 70);
+  ui::drawCentered(epd, "on your iPhone", 90);
+  epd.setFont(&FreeSansBold24pt7b);
+  ui::drawCentered(epd, digits, 145);
+}
+
+void drawPairingResult(bool success) {
+  epd.fillScreen(EpdDisplay::kWhite);
+  ui::drawHeader(epd, "Pair with iPhone");
+  epd.setTextColor(EpdDisplay::kBlack);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, success ? "Paired!" : "Pairing failed", 110);
+}
+
+void handlePairing() {
+  static bool showing = false;
+  uint32_t code;
+  if (ble::pairingCode(code) && !showing) {
+    showing = true;
+    lastInteraction = millis();
+    if (isLocked) {
+      wakePeripherals();
+      isLocked = false;
+    }
+    epd.waitBusy();
+    drawPairing(code);
+    refresh(true);
+  }
+  bool success;
+  if (ble::takePairingResult(success)) {
+    showing = false;
+    epd.waitBusy();
+    drawPairingResult(success);
+    refresh(false);
+    epd.waitBusy();
+    delay(1500);
+    showApp();
+  }
+}
+
 void logBattery() {
   static uint32_t lastLog = 0;
   if (lastLog != 0 && millis() - lastLog < kBatteryLogIntervalMs) return;
@@ -229,12 +279,14 @@ void begin(const Config &config) {
   LOGI("boot", "touch %s", touch.begin() ? "ok" : "FAILED");
   LOGI("boot", "rtc %s", rtc.begin(Wire) ? "ok" : "FAILED");
   ble::begin();
+  net::registerCommands();
   lastInteraction = millis();
 }
 
 bool update(Input &input) {
   logBattery();
   ble::poll();
+  handlePairing();
   power::setWakeLock(power::kWakeLockBle, ble::connected());
   const bool bootClick = handleButtons();
   const Touch::Gesture gesture = touch.poll();
@@ -294,6 +346,7 @@ void wake() {
 void lock() {
   if (isLocked) return;
   isLocked = true;
+  if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock
   const String playing = nowPlaying();
   LOGI("ui", "locked%s", playing.length() ? " (keeps playing)" : "");
   drawLock();

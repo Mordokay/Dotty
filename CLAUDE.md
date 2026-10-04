@@ -137,7 +137,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Register commands with `ble::on("<cartridge>.<verb>", handler)`; handlers run on the
   main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. A
   handler that reboots must defer it until after its reply has been notified.
-- Core commands: `core.ping`, `core.info`, `core.toLauncher` (cartridges only);
+- Pairing: Info is open; Command/Event/Data need encryption + authentication, so the
+  first command makes iOS pair. Dotty is DISPLAY_ONLY: it shows a random 6-digit code
+  (shell pairing screen) that the user types on the phone. Bonded, MITM, LE Secure
+  Connections; bonds in NVS shared by all firmwares. `core.forget` deletes all bonds.
+  bleak/macOS also gets a pairing prompt on the first command now.
+- Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only);
   launcher: `launcher.start`, `install.begin/end/abort`; music: `music.status`,
   `music.toggle`, `music.volume`.
 - Identity: advertisement = flags + service UUID + manufacturer data `0xFFFF` + 6-byte
@@ -161,6 +166,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `cartridges/<id>/cartridge.json` = description + requires.
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
+- Bluetooth while locked is per firmware: `shell::Config::bluetoothWhileLocked`.
+  false (default; launcher, music, weather): locking stops BLE so Dotty sleeps; unlock
+  restarts it. true (e.g. a future ANCS notifications cartridge): a connected phone stays
+  connected while locked (Dotty stays awake while connected). OFF always cuts BLE.
+  Advertising happens whenever BLE is on and nothing is connected.
 - Power: wake lock `kWakeLockBle` while connected. Before light sleep the shell calls
   `ble::stop()` (NimBLE deinit; the controller can't sleep without a 32 kHz crystal) and
   `ble::start()` on unlock — so Dotty is only reachable while unlocked or awake.
@@ -174,13 +184,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.bin/.json/.icon`. Every BLE install is copied there (verified). `install.fromCard
   {id, version?, sha256?}` flashes from the card in ~2.5 s (whole region erased up front;
   4 KB sequential erases took 10 s). `library.list` lists the card.
-- `cartridges/launcher/net.*`: Wi-Fi creds in NVS namespace `wifi` (shared), HTTPS via
+- `lib/dotty_core/src/net.*` (every firmware): up to 8 saved networks as JSON in NVS
+  namespace `wifi`; `net::connect()` scans and joins the strongest known one. HTTPS via
   `esp_http_client` + `esp_crt_bundle_attach` (real certificate checks), manual redirect
-  loop (GitHub release downloads redirect). Wi-Fi is on only during a fetch.
-- `wifi.set {ssid, password}` (tests the connection), `wifi.status`, `wifi.forget`;
-  `library.fetch {id, version?, sha256?, install? = true}`: catalog over HTTPS → download
+  loop (GitHub release downloads redirect). Wi-Fi is on only while something needs it.
+- BLE: `wifi.scan` → {ssid, rssi, secure, known}, `wifi.add {ssid, password}` (joins to
+  check, saves only on success), `wifi.list`, `wifi.remove {ssid}`, `wifi.status`;
+  launcher `library.fetch {id, version?, sha256?, install? = true}`: catalog over HTTPS → download
   to the card (skipped if that sha is already there) → install from the card → reboot.
-  Events `fetch.progress {stage, done, size}`. Launcher-only commands for now.
+  Events `fetch.progress {stage, done, size}`.
 - Intended app flow: the iOS app fetches the catalog, the user picks, the app sends
   `library.fetch` over BLE; BLE image upload (`install.begin`) is the fallback.
 

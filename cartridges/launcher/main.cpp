@@ -21,7 +21,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.3.0");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.4.0");
 
 namespace {
 
@@ -400,30 +400,7 @@ bool downloadToCard(const library::Entry &entry, const String &url, String &erro
   return library::commit(entry, job.hasIcon ? job.icon : nullptr, error);
 }
 
-void registerWifiCommands() {
-  net::begin();
-
-  ble::on("wifi.set", [](JsonObjectConst args, JsonObject reply) {
-    const String ssid = args["ssid"] | "";
-    if (ssid.isEmpty()) {
-      reply["ok"] = false;
-      reply["error"] = "ssid is required";
-      return;
-    }
-    net::setCredentials(ssid, args["password"] | "");
-    // Try it now so a typo is reported right away.
-    String error;
-    reply["connected"] = net::connect(error);
-    if (error.length()) reply["error"] = error;
-    else reply["ip"] = net::ip();
-    net::disconnect();
-  });
-  ble::on("wifi.status", [](JsonObjectConst, JsonObject reply) {
-    reply["configured"] = net::hasCredentials();
-    reply["ssid"] = net::ssid();
-  });
-  ble::on("wifi.forget", [](JsonObjectConst, JsonObject) { net::forget(); });
-
+void registerFetchCommand() {
   // {id, version?, sha256?, install? = true}: Dotty reads the catalog over Wi-Fi,
   // downloads the cartridge onto the card (skipped if that build is already there),
   // then installs it from the card. Progress: fetch.progress events.
@@ -538,7 +515,7 @@ void setup() {
   }
   ble::extendInfo([](JsonObject info) {
     info["card"] = library::available();
-    info["wifi"] = net::hasCredentials();
+    info["wifi"] = !net::saved().empty();
     if (!hasCartridge) {
       info["installed"] = nullptr;
       return;
@@ -558,7 +535,7 @@ void setup() {
   });
   registerBleInstallCommands();
   registerLibraryCommands();
-  registerWifiCommands();
+  registerFetchCommand();
   shell::showApp();
 }
 

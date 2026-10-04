@@ -31,6 +31,10 @@ QueueHandle_t queue = nullptr;
 NimBLECharacteristic *infoChar = nullptr;
 NimBLECharacteristic *eventChar = nullptr;
 volatile bool isConnected = false;
+volatile bool pairingActive = false;
+volatile uint32_t passkey = 0;
+volatile bool pairingDone = false;
+volatile bool pairingSucceeded = false;
 bool isRunning = false;
 String deviceName;
 
@@ -50,6 +54,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
     isConnected = false;
+    if (pairingActive) {
+      pairingActive = false;
+      pairingSucceeded = false;
+      pairingDone = true;
+    }
     LOGI("ble", "disconnected (reason %d)", reason);
   }
   void onMTUChange(uint16_t mtu, NimBLEConnInfo &) override {
@@ -57,6 +66,23 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onConnParamsUpdate(NimBLEConnInfo &info) override {
     LOGI("ble", "interval %.2f ms, latency %u", info.getConnInterval() * 1.25f, info.getConnLatency());
+  }
+  // iOS asks for the code; Dotty shows a fresh random one on its screen.
+  uint32_t onPassKeyDisplay() override {
+    passkey = esp_random() % 1000000;
+    pairingActive = true;
+    LOGI("ble", "pairing: showing code");
+    return passkey;
+  }
+  void onAuthenticationComplete(NimBLEConnInfo &info) override {
+    const bool ok = info.isEncrypted() && info.isAuthenticated();
+    LOGI("ble", "pairing %s (bonded %d)", ok ? "succeeded" : "failed", info.isBonded());
+    if (pairingActive || !ok) {
+      pairingSucceeded = ok;
+      pairingDone = true;
+    }
+    pairingActive = false;
+    if (!ok) NimBLEDevice::getServer()->disconnect(info.getConnHandle());
   }
   void onPhyUpdate(NimBLEConnInfo &, uint8_t txPhy, uint8_t rxPhy) override {
     LOGI("ble", "PHY tx %u rx %u (2 = 2M)", txPhy, rxPhy);
@@ -143,6 +169,16 @@ void registerCoreCommands() {
     buildInfo(info);
     reply["info"] = info;
   });
+  // Forgets every bonded phone (after replying). The phone must also "Forget This
+  // Device" in its Bluetooth settings.
+  on("core.forget", [](JsonObjectConst, JsonObject) {
+    static TimerHandle_t timer = xTimerCreate(
+        "forget", pdMS_TO_TICKS(300), pdFALSE, nullptr, [](TimerHandle_t) {
+          NimBLEDevice::deleteAllBonds();
+          LOGI("ble", "all bonds deleted");
+        });
+    xTimerStart(timer, 0);
+  });
   if (!cartridge::isLauncher()) {
     on("core.toLauncher", [](JsonObjectConst, JsonObject) {
       // Reply first, then reboot once the event has had time to go out.
@@ -175,6 +211,9 @@ void start() {
   if (isRunning) return;
   NimBLEDevice::init(deviceName.c_str());
   NimBLEDevice::setMTU(517);
+  // Bonded, MITM-protected (passkey), LE Secure Connections; Dotty can only display.
+  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   // Prefer the 2M PHY (double bitrate) when the phone/Mac supports it.
   NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
 
@@ -183,15 +222,14 @@ void start() {
   server->advertiseOnDisconnect(true);
 
   NimBLEService *service = server->createService(kServiceUuid);
+  constexpr uint32_t kSecureWrite = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+                                     NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_AUTHEN;
   infoChar = service->createCharacteristic(kInfoUuid, NIMBLE_PROPERTY::READ);
-  NimBLECharacteristic *command =
-      service->createCharacteristic(kCommandUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-  command->setCallbacks(&commandCallbacks);
-  eventChar = service->createCharacteristic(kEventUuid, NIMBLE_PROPERTY::NOTIFY);
-  // Data accepts acknowledged writes (reliable: unacknowledged ones get dropped under
-  // load) and unacknowledged ones.
-  service->createCharacteristic(kDataUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR)
-      ->setCallbacks(&dataCallbacks);
+  service->createCharacteristic(kCommandUuid, kSecureWrite)->setCallbacks(&commandCallbacks);
+  eventChar = service->createCharacteristic(
+      kEventUuid, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC |
+                      NIMBLE_PROPERTY::READ_AUTHEN);
+  service->createCharacteristic(kDataUuid, kSecureWrite)->setCallbacks(&dataCallbacks);
   refreshInfo();
 
   // Advertisement (31 bytes, full): flags + service UUID + manufacturer data with the
@@ -265,6 +303,18 @@ void notify(JsonDocument &event) {
 
 bool connected() {
   return isConnected;
+}
+
+bool pairingCode(uint32_t &code) {
+  code = passkey;
+  return pairingActive;
+}
+
+bool takePairingResult(bool &success) {
+  if (!pairingDone) return false;
+  pairingDone = false;
+  success = pairingSucceeded;
+  return true;
 }
 
 }  // namespace ble

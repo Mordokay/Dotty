@@ -28,6 +28,11 @@ struct Config {
   String (*nowPlaying)() = nullptr;
   // Last chance to stop things before the power-off picture is drawn.
   void (*beforePowerOff)() = nullptr;
+  // Bluetooth while locked. false (default): locking turns Bluetooth off (the phone
+  // disconnects) so Dotty can sleep between minute wake-ups; unlocking turns it back on.
+  // true: a connected phone stays connected while locked (e.g. a cartridge receiving
+  // iPhone notifications); Dotty then stays awake while connected. OFF always cuts it.
+  bool bluetoothWhileLocked = false;
   // Power-off pictures; one is picked at random each time.
   const Picture *offPictures = nullptr;
   size_t offPictureCount = 0;

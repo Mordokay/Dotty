@@ -10,7 +10,12 @@
 //   Info    (read)            JSON: role, id, name, version, battery, commands, …
 //   Command (write)           JSON: {"cmd": "music.volume", "value": 60}
 //   Event   (notify)          JSON: replies {"cmd": …, "ok": true, …} and status updates
-//   Data    (write)           bulk bytes (cartridge installs), acknowledged writes
+//   Data    (write)           bulk bytes (cartridge installs)
+//
+// Security: Info is open (so an app can identify a Dotty before pairing); Command, Event
+// and Data need an encrypted, authenticated link. The first use makes iOS pair: Dotty
+// shows a 6-digit code on its screen (it is "display only") and the user types it on the
+// phone. Bonds live in NVS, shared by every firmware, so pairing survives cartridge swaps.
 //
 // Advertising carries the name "Dotty-XXXX" plus manufacturer data 0xFFFF + the
 // 6-byte chip serial (factory MAC), so an app can tell Dottys apart while scanning
@@ -46,6 +51,11 @@ void poll();
 void notify(JsonDocument &event);
 
 bool connected();
+
+// Pairing code to show while an iPhone is pairing (false when none is in progress).
+bool pairingCode(uint32_t &code);
+// Reports the end of a pairing once: true if it succeeded.
+bool takePairingResult(bool &success);
 
 // Bluetooth off/on around light sleep (the controller can't sleep on this board).
 void stop();
