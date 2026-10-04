@@ -162,7 +162,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `protocol` = install protocol version, `release` tag). `--release` publishes a GitHub
   Release marked latest (needs a clean, pushed tree); the app reads
   `https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json`. Bump the
-  version in `DOTTY_CARTRIDGE()` when a cartridge changes. Optional per-cartridge
+  version in `DOTTY_CARTRIDGE()` when a cartridge changes **and publish a new catalog**:
+  the app installs whatever the latest release has, so a stale catalog silently
+  downgrades devices (happened: Music 0.5.1 replaced a USB-flashed 0.6.0). Optional per-cartridge
   `cartridges/<id>/cartridge.json` = description + requires.
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
