@@ -34,7 +34,7 @@ Full pin map: [`include/board_pins.h`](../include/board_pins.h).
 ## Power
 - On battery, the board stays on only while firmware holds **GPIO17 high** (soft power latch).
   Long-press PWR to power on; current firmware releases the latch after a 2 s PWR hold.
-- GPIO6 LOW powers the e-paper, GPIO42 LOW powers the audio codec/amp.
+- GPIO6 LOW powers the e-paper, GPIO42 LOW powers the audio codec/amp **and the touch controller**.
 
 ## Flash layout (`partitions.csv`)
 Two 3 MB app slots (`app0`/`app1`) for BLE OTA updates from the iOS app, 1.9 MB `spiffs`

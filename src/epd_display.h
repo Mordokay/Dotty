@@ -18,13 +18,20 @@ class EpdDisplay : public GFXcanvas1 {
   // Powers the panel and sets up SPI. Call once before any refresh.
   void begin();
 
+  // Both refreshes return as soon as the image is sent; the panel keeps updating
+  // on its own (see isBusy). The canvas can be redrawn meanwhile. A new refresh
+  // waits for the previous one to finish first.
+
   // Full refresh: the panel flashes black/white for ~2 s and all ghosting is cleared.
   // Also stores the image as the base for later partial refreshes.
   void refreshFull();
 
-  // Partial refresh: no flash, well under a second. Ghosting slowly builds up,
+  // Partial refresh: no flash, ~0.6 s. Ghosting slowly builds up,
   // so do a refreshFull() every few dozen partial updates.
   void refreshPartial();
+
+  bool isBusy() const;
+  void waitBusy();
 
   // Cuts power to the panel. The image stays on screen.
   void powerOff();
@@ -37,7 +44,6 @@ class EpdDisplay : public GFXcanvas1 {
   void setLut(const uint8_t *lut);
   void writeRam(uint8_t command);
   void update(uint8_t mode);
-  void waitBusy();
   void command(uint8_t cmd);
   void data(uint8_t value);
   void data(const uint8_t *values, size_t len);

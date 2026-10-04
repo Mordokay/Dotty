@@ -16,6 +16,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   for slow, discrete frame changes — not smooth animation.
 - Power: on battery the board stays on only while **GPIO17 is high** (soft latch). Set it
   first thing in `setup()`. GPIO6 LOW = e-paper power on, GPIO42 LOW = audio power on.
+- **GPIO42 (audio power) also powers the FT6336 touch controller** — undocumented by
+  Waveshare. Switch it on before talking to touch, or the FT6336 NACKs every read.
+  The FT6336 also NACKs its ID register 0xA8; probe it via 0x02 (touch status).
+- Touch coordinates map 1:1 onto the display (no rotation/mirroring).
+- Audio pins (from Waveshare's codec_board config): I2S MCLK 14, BCLK 15, WS 38,
+  DOUT 45, DIN 16; amplifier enable GPIO46 (HIGH). ES8311 at I2C 0x18.
 - Buttons are active-low with pull-ups. The PWR button is still held down right after a
   battery power-on, so ignore it until it has been released once.
 - Battery: `analogReadMilliVolts(4) * 2`.

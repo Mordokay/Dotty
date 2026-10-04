@@ -13,7 +13,7 @@
 
 // Power switches
 #define PIN_EPD_PWR   6   // LOW = e-paper powered
-#define PIN_AUDIO_PWR 42  // LOW = audio codec/amp powered
+#define PIN_AUDIO_PWR 42  // LOW = audio codec/amp AND touch controller powered
 #define PIN_VBAT_PWR  17  // HIGH = hold system power on battery (soft power latch)
 
 // Buttons (pull-up, LOW = pressed)
@@ -31,6 +31,18 @@
 #define PIN_I2C_SCL   48
 #define PIN_TP_INT    21
 #define PIN_TP_RST    7
+
+#define I2C_ADDR_ES8311 0x18
+#define I2C_ADDR_FT6336 0x38
+
+// Audio: ES8311 codec over I2S, NS4150-class amplifier enable
+// Source: 08_Audio_Test/src/codec_board/board_cfg.h ("S3_ePaper_1_54")
+#define PIN_I2S_MCLK  14
+#define PIN_I2S_BCLK  15
+#define PIN_I2S_WS    38
+#define PIN_I2S_DOUT  45  // ESP32 -> codec DAC
+#define PIN_I2S_DIN   16  // codec ADC (mic) -> ESP32
+#define PIN_PA_EN     46  // HIGH = speaker amplifier on
 
 // TF card (SDMMC, 1-bit)
 #define PIN_SD_CLK    39

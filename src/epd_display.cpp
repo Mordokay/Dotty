@@ -79,6 +79,7 @@ void EpdDisplay::begin() {
 }
 
 void EpdDisplay::refreshFull() {
+  waitBusy();
   initFull();
   writeRam(0x24);  // new image
   writeRam(0x26);  // previous image: base for partial refreshes
@@ -87,6 +88,7 @@ void EpdDisplay::refreshFull() {
 }
 
 void EpdDisplay::refreshPartial() {
+  waitBusy();
   if (!partialMode_) {
     initPartial();
     partialMode_ = true;
@@ -97,6 +99,7 @@ void EpdDisplay::refreshPartial() {
 }
 
 void EpdDisplay::powerOff() {
+  waitBusy();
   command(0x10);  // deep sleep
   data(0x01);
   delay(5);
@@ -192,16 +195,20 @@ void EpdDisplay::writeRam(uint8_t cmd) {
   data(getBuffer(), kBufferLen);
 }
 
+// Starts the display update and returns without waiting for it.
 void EpdDisplay::update(uint8_t mode) {
   command(0x22);
   data(mode);
   command(0x20);
-  waitBusy();
+}
+
+bool EpdDisplay::isBusy() const {
+  return digitalRead(PIN_EPD_BUSY) == HIGH;
 }
 
 void EpdDisplay::waitBusy() {
   const uint32_t start = millis();
-  while (digitalRead(PIN_EPD_BUSY) == HIGH) {
+  while (isBusy()) {
     if (millis() - start > kBusyTimeoutMs) {
       log_e("e-paper busy timeout");
       return;
