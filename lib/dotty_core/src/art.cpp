@@ -25,4 +25,22 @@ void drawPadlock(Adafruit_GFX &gfx, int16_t cx, int16_t top) {
   gfx.fillRect(cx - 2, sy + 24, 5, 11, kWhite);
 }
 
+void drawWifi(Adafruit_GFX &gfx, int16_t x, int16_t y, int16_t size) {
+  // Designed on a 64 px grid: arcs radiate upwards from (32, 50), 45° either side.
+  const float s = size / 64.0f;
+  const float cx = 32 * s, cy = 50 * s;
+  const float bands[3][2] = {{14 * s, 20 * s}, {26 * s, 32 * s}, {38 * s, 44 * s}};
+  for (int16_t py = 0; py < size; py++) {
+    for (int16_t px = 0; px < size; px++) {
+      const float dx = px - cx, dy = cy - py;
+      const float d = sqrtf(dx * dx + dy * dy);
+      bool on = d <= 5.5f * s;  // the dot
+      if (!on && dy > 0 && fabsf(dx) <= dy) {  // within 45° of straight up
+        for (const auto &band : bands) on |= d >= band[0] && d < band[1];
+      }
+      if (on) gfx.drawPixel(x + px, y + py, kBlack);
+    }
+  }
+}
+
 }  // namespace art

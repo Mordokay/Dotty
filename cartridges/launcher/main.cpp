@@ -10,6 +10,7 @@
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
 
+#include "art.h"
 #include "battery.h"
 #include "cartridge.h"
 #include "core_ble.h"
@@ -95,7 +96,8 @@ void drawJob() {
   if (job.hasIcon) {
     epd.drawBitmap(iconX, iconY, job.icon, installer::kIconSize, installer::kIconSize, kBlack);
   } else {
-    epd.drawRoundRect(iconX, iconY, installer::kIconSize, installer::kIconSize, 8, kBlack);
+    // No icon yet (e.g. connecting to Wi-Fi before the catalog arrives).
+    art::drawWifi(epd, iconX, iconY, installer::kIconSize);
   }
 
   epd.setFont(&FreeSans9pt7b);
@@ -112,12 +114,15 @@ void drawJob() {
   epd.drawRoundRect(barX, barY, barW, barH, 6, kBlack);
   epd.fillRoundRect(barX + 2, barY + 2, (barW - 4) * percent / 100, barH - 4, 4, kBlack);
 
+  // Size and version are unknown at first while fetching (until the catalog arrives).
   epd.setFont(&FreeSans9pt7b);
-  char line[40];
-  snprintf(line, sizeof(line), "%d%%  %u / %u KB", percent, static_cast<unsigned>(done / 1024),
-           static_cast<unsigned>(job.size / 1024));
-  ui::drawCentered(epd, line, 172);
-  ui::drawCentered(epd, "v" + job.version, 194);
+  if (job.size > 0) {
+    char line[40];
+    snprintf(line, sizeof(line), "%d%%  %u / %u KB", percent, static_cast<unsigned>(done / 1024),
+             static_cast<unsigned>(job.size / 1024));
+    ui::drawCentered(epd, line, 172);
+  }
+  if (job.version.length()) ui::drawCentered(epd, "v" + job.version, 194);
 }
 
 // Partial refresh about once a second while the percentage moves.
@@ -133,7 +138,8 @@ void updateJobScreen() {
   shell::refresh(false);
 }
 
-void startJob(const String &action, const String &name, const String &version, size_t size) {
+void startJob(const String &action, const String &name, const String &version, size_t size,
+              const uint8_t *icon = nullptr) {
   job.stage = Stage::Running;
   job.action = action;
   job.name = name;
@@ -141,7 +147,8 @@ void startJob(const String &action, const String &name, const String &version, s
   job.size = size;
   job.done = 0;
   job.error = "";
-  job.hasIcon = false;
+  job.hasIcon = icon != nullptr;
+  if (icon) memcpy(job.icon, icon, sizeof(job.icon));
   job.failureShown = false;
   hasCartridge = false;  // the old cartridge is being overwritten
   shell::wake();
@@ -420,8 +427,14 @@ void registerFetchCommand() {
     if (id.isEmpty()) return fail("id is required");
     if (!library::available()) return fail("no SD card");
 
+    // Show what we already know: the app sends name/version/size from its catalog copy,
+    // and an earlier version on the card provides the icon.
     job.fromBle = false;
-    startJob("Connecting to Wi-Fi", id, wantVersion, 0);
+    library::Entry previous;
+    uint8_t cardIcon[installer::kIconBytes];
+    const bool haveIcon = library::find(id, "", previous) && library::readIcon(previous, cardIcon);
+    startJob("Connecting to Wi-Fi", args["name"] | (previous.name.length() ? previous.name : id), wantVersion,
+             args["size"] | 0, haveIcon ? cardIcon : nullptr);
     if (!net::connect(error)) return fail(error);
 
     notifyFetch("catalog", 0, 0);
@@ -446,19 +459,25 @@ void registerFetchCommand() {
 
     size_t iconLen = 0;
     const char *icon64 = item["icon"] | "";
-    job.hasIcon = mbedtls_base64_decode(job.icon, sizeof(job.icon), &iconLen,
-                                        reinterpret_cast<const uint8_t *>(icon64), strlen(icon64)) == 0 &&
-                  iconLen == sizeof(job.icon);
+    uint8_t catalogIcon[installer::kIconBytes];
+    if (mbedtls_base64_decode(catalogIcon, sizeof(catalogIcon), &iconLen,
+                              reinterpret_cast<const uint8_t *>(icon64), strlen(icon64)) == 0 &&
+        iconLen == sizeof(catalogIcon)) {
+      memcpy(job.icon, catalogIcon, sizeof(job.icon));
+      job.hasIcon = true;
+    } else {
+      LOGW("fetch", "catalog icon missing or invalid (%u chars)", static_cast<unsigned>(strlen(icon64)));
+    }
     job.name = entry.name;
     job.version = entry.version;
     job.size = entry.size;
 
     library::Entry onCard;
     const bool cached = library::find(id, entry.version, onCard) && onCard.sha256 == entry.sha256;
+    job.action = cached ? "Already on the card" : "Downloading";
+    drawJob();
+    shell::refresh(false);
     if (!cached) {
-      job.action = "Downloading";
-      drawJob();
-      shell::refresh(false);
       if (!downloadToCard(entry, item["firmware"] | "", error)) return fail(error);
     }
     net::disconnect();

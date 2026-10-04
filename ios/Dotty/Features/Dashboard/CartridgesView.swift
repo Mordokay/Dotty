@@ -134,7 +134,9 @@ struct CartridgesView: View {
             install?.stage = "Switching to the launcher"
             try await link.ensureLauncher()
             install?.stage = "Connecting to Wi-Fi"
-            try await link.send("library.fetch", ["id": cartridge.id, "sha256": cartridge.sha256], timeout: 300)
+            // Name/version/size let Dotty's screen show the cartridge before the catalog arrives.
+            try await link.send("library.fetch", ["id": cartridge.id, "name": cartridge.name, "version": cartridge.version,
+                                                  "size": cartridge.size, "sha256": cartridge.sha256], timeout: 300)
             install?.stage = "Restarting"
             install?.progress = nil
             try await link.waitForReconnect()
