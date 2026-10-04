@@ -5,7 +5,7 @@ import SwiftUI
 struct WiFiView: View {
     @Environment(DottyLink.self) private var link
     @State private var visible: [Network] = []
-    @State private var saved: [String] = []
+    @State private var state = WiFiState()
     @State private var scanning = false
     @State private var error: String?
     @State private var joining: Network?
@@ -28,8 +28,8 @@ struct WiFiView: View {
                         .padding(.top, Spacing.l)
                     if let notice { NoticeCard(kind: .success, text: notice) }
                     if let error { NoticeCard(kind: .error, text: error) }
+                    if !state.saved.isEmpty { savedCard }
                     visibleCard
-                    if !saved.isEmpty { savedCard }
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)
@@ -60,7 +60,8 @@ struct WiFiView: View {
             }
             ForEach(visible) { network in
                 LightRow(title: network.ssid,
-                         subtitle: network.known ? "Saved" : (network.secure ? "Needs a password" : "Open"),
+                         subtitle: network.known ? (state.preferred == network.ssid ? "Saved · picked" : "Saved")
+                                                 : (network.secure ? "Needs a password" : "Open"),
                          systemImage: network.known ? "checkmark.circle" : (network.secure ? "lock" : "wifi"),
                          action: { joining = network }) {
                     SignalStrength(rssi: network.rssi)
@@ -69,14 +70,23 @@ struct WiFiView: View {
         }
     }
 
+    /// Saved networks, and which one Dotty uses: automatic (the strongest) or a picked one.
     private var savedCard: some View {
         GlassCard(title: "Saved on Dotty") {
-            ForEach(saved, id: \.self) { name in
-                LightRow(title: name, systemImage: "wifi") {
+            LightRow(title: "Automatic", subtitle: "Joins the strongest saved network",
+                     systemImage: state.preferred.isEmpty ? "checkmark.circle.fill" : "circle",
+                     action: { Task { await prefer("") } })
+            ForEach(state.saved, id: \.self) { name in
+                LightRow(title: name, subtitle: state.detail(for: name),
+                         systemImage: state.preferred == name ? "checkmark.circle.fill" : "circle",
+                         action: { Task { await prefer(name) } }) {
                     Button("Remove") { Task { await remove(name) } }
                         .buttonStyle(.quiet(DottyLight.ember.color))
                 }
             }
+            Text("A picked network is used whenever it's in range; otherwise Dotty falls back to the strongest.")
+                .font(.lpCaption).foregroundStyle(Color.inkMuted)
+                .padding(.horizontal, Spacing.m).padding(.vertical, Spacing.s)
         }
     }
 
@@ -95,10 +105,20 @@ struct WiFiView: View {
                 return Network(ssid: ssid, rssi: item["rssi"] as? Int ?? -100,
                                secure: item["secure"] as? Bool ?? true, known: item["known"] as? Bool ?? false)
             }
-            saved = try await link.send("wifi.list")["networks"] as? [String] ?? []
+            state = try await WiFiState.load(from: link)
         } catch {
             self.error = link.connection == .connected ? error.localizedDescription
                                                        : "Dotty isn't connected. Press PWR on Dotty to wake it."
+        }
+    }
+
+    private func prefer(_ name: String) async {
+        guard state.preferred != name else { return }
+        do {
+            try await link.send("wifi.prefer", ["ssid": name])
+            state = try await WiFiState.load(from: link)
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
@@ -109,6 +129,54 @@ struct WiFiView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// What Dotty knows about Wi-Fi (`wifi.list`; no radio use, so it's cheap to ask).
+struct WiFiState: Equatable {
+    struct Seen: Equatable {
+        let ssid: String
+        let rssi: Int
+    }
+
+    var saved: [String] = []
+    /// "" = automatic (the strongest saved network).
+    var preferred = ""
+    /// The last network Dotty joined, with its signal then.
+    var last: Seen?
+    /// Set only while Dotty's Wi-Fi is on (syncing, downloading).
+    var current: Seen?
+
+    static func load(from link: DottyLink) async throws -> WiFiState {
+        let reply = try await link.send("wifi.list")
+        func seen(_ key: String) -> Seen? {
+            guard let item = reply[key] as? [String: Any], let ssid = item["ssid"] as? String else { return nil }
+            return Seen(ssid: ssid, rssi: item["rssi"] as? Int ?? 0)
+        }
+        return WiFiState(saved: reply["networks"] as? [String] ?? [], preferred: reply["preferred"] as? String ?? "",
+                         last: seen("last"), current: seen("current"))
+    }
+
+    /// The network Dotty uses, for the dashboard: "Connected to Home", "Uses Home (picked)"…
+    var summary: String {
+        if let current { return "Connected to \(current.ssid) now" }
+        if saved.isEmpty { return "Not set up yet" }
+        if !preferred.isEmpty { return "Uses \(preferred) (picked)" }
+        if let last { return "Last joined \(last.ssid) · \(Self.quality(last.rssi))" }
+        return saved.count == 1 ? "Knows \(saved[0])" : "Knows \(saved.count) networks, joins the strongest"
+    }
+
+    /// The row detail in the saved list.
+    func detail(for ssid: String) -> String? {
+        if current?.ssid == ssid { return "Connected now" }
+        if let last, last.ssid == ssid { return "Last joined · \(Self.quality(last.rssi)) (\(last.rssi) dBm)" }
+        return nil
+    }
+
+    /// Dotty's antenna is small: below −75 dBm transfers crawl.
+    static func quality(_ rssi: Int) -> String {
+        if rssi >= -60 { return "strong signal" }
+        return rssi >= -75 ? "fair signal" : "weak signal"
     }
 }
 

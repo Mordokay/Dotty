@@ -9,7 +9,8 @@
 //
 // Dotty remembers up to kMaxNetworks networks in NVS (namespace "wifi", kept across
 // cartridges and reboots). Whenever it needs the internet it scans and joins the
-// strongest network it knows. Wi-Fi is switched on only while something needs it.
+// preferred network if one is set and in range, otherwise the strongest one it knows.
+// Wi-Fi is switched on only while something needs it.
 // HTTPS checks certificates against ESP-IDF's built-in CA bundle and follows redirects
 // (GitHub release downloads redirect to a storage host).
 namespace net {
@@ -29,6 +30,14 @@ void begin();
 std::vector<String> saved();
 bool remember(const String &ssid, const String &password);  // false if the list is full
 void forget(const String &ssid);
+
+// The network to join first when it's in range ("" = automatic: the strongest).
+String preferred();
+void setPreferred(const String &ssid);
+
+// The last network Dotty joined and its signal then (kept across reboots; "" if none).
+String lastSsid();
+int lastRssi();
 
 // Visible networks, strongest first, one entry per name.
 std::vector<Network> scan();
@@ -51,7 +60,7 @@ using Sink = std::function<bool(const uint8_t *data, size_t len)>;
 using Progress = std::function<void(size_t done, size_t total)>;
 bool download(const String &url, Sink sink, Progress progress, String &error);
 
-// BLE commands: wifi.scan, wifi.add, wifi.list, wifi.remove, wifi.status.
+// BLE commands: wifi.scan, wifi.add, wifi.list, wifi.remove, wifi.prefer, wifi.status.
 void registerCommands();
 
 }  // namespace net

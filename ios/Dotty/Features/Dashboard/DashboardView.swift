@@ -6,6 +6,7 @@ struct DashboardView: View {
     @State private var path: [Route] = []
     @State private var confirmForget = false
     @State private var showDesignSystem = false
+    @State private var wifi: WiFiState?
 
     enum Route: Hashable {
         case cartridges, wifi, music
@@ -40,8 +41,10 @@ struct DashboardView: View {
                                      systemImage: "square.stack.3d.up", action: { path.append(.cartridges) })
                         }
                         GlassCard(title: "Wi-Fi") {
-                            LightRow(title: "Wi-Fi networks", subtitle: "Networks Dotty can join",
-                                     systemImage: "wifi", action: { path.append(.wifi) })
+                            LightRow(title: "Wi-Fi networks", subtitle: wifi?.summary ?? "Networks Dotty can join",
+                                     systemImage: "wifi", action: { path.append(.wifi) }) {
+                                if let rssi = wifi?.current?.rssi ?? wifi?.last?.rssi { SignalStrength(rssi: rssi) }
+                            }
                         }
                         GlassCard(title: "Settings") {
                             LightRow(title: "Forget this Dotty", systemImage: "xmark.circle",
@@ -53,7 +56,10 @@ struct DashboardView: View {
                     .padding(.horizontal, Spacing.l)
                     .padding(.bottom, Spacing.xxl)
                 }
-                .refreshable { link.refreshInfo() }
+                .refreshable {
+                    link.refreshInfo()
+                    await loadWiFi()
+                }
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { route in
@@ -64,6 +70,8 @@ struct DashboardView: View {
                 }
             }
         }
+        // On connect (and back from the Wi-Fi screen): which network Dotty uses.
+        .task(id: wifiReloadKey) { await loadWiFi() }
         .confirmationDialog("Forget this Dotty?", isPresented: $confirmForget, titleVisibility: .visible) {
             Button("Forget", role: .destructive) { Task { await link.forget() } }
         } message: {
@@ -132,6 +140,15 @@ struct DashboardView: View {
 
     private func screenSymbol(_ route: Route) -> String {
         route == .music ? "music.note.list" : "square.stack.3d.up"
+    }
+
+    private var wifiReloadKey: String {
+        "\(link.connection == .connected)-\(link.info?.id ?? "")-\(path.count)"
+    }
+
+    private func loadWiFi() async {
+        guard link.connection == .connected, link.info?.supports("wifi") == true else { return }
+        wifi = try? await WiFiState.load(from: link)
     }
 
     private func batterySymbol(_ percent: Int) -> String {

@@ -21,6 +21,9 @@ struct Saved {
   String ssid, password;
 };
 std::vector<Saved> networks;
+String preferredSsid;
+String lastJoinedSsid;
+int lastJoinedRssi = 0;
 
 void load() {
   networks.clear();
@@ -29,10 +32,21 @@ void load() {
   const String json = prefs.getString("networks", "[]");
   prefs.end();
   JsonDocument doc;
-  if (deserializeJson(doc, json) != DeserializationError::Ok) return;
-  for (JsonObjectConst n : doc.as<JsonArrayConst>()) {
-    networks.push_back({n["ssid"] | "", n["password"] | ""});
+  if (deserializeJson(doc, json) == DeserializationError::Ok) {
+    for (JsonObjectConst n : doc.as<JsonArrayConst>()) networks.push_back({n["ssid"] | "", n["password"] | ""});
   }
+  prefs.begin("wifi", true);
+  preferredSsid = prefs.getString("preferred", "");
+  lastJoinedSsid = prefs.getString("last", "");
+  lastJoinedRssi = prefs.getInt("lastRssi", 0);
+  prefs.end();
+}
+
+void putString(const char *key, const String &value) {
+  Preferences prefs;
+  prefs.begin("wifi", false);
+  prefs.putString(key, value);
+  prefs.end();
 }
 
 void store() {
@@ -65,6 +79,15 @@ bool join(const String &ssid, const String &password, String &error) {
   while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs) delay(100);
   if (WiFi.status() == WL_CONNECTED) {
     LOGI("wifi", "joined '%s', %s, %d dBm", ssid.c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    lastJoinedRssi = WiFi.RSSI();
+    if (ssid != lastJoinedSsid) {
+      lastJoinedSsid = ssid;
+      putString("last", ssid);
+    }
+    Preferences prefs;  // the signal changes every time; one small NVS write per join
+    prefs.begin("wifi", false);
+    prefs.putInt("lastRssi", lastJoinedRssi);
+    prefs.end();
     return true;
   }
   error = WiFi.status() == WL_CONNECT_FAILED ? "wrong password?" : "cannot join '" + ssid + "'";
@@ -144,6 +167,25 @@ void forget(const String &ssid) {
                                 [&](const Saved &n) { return n.ssid == ssid; }),
                  networks.end());
   store();
+  if (preferredSsid == ssid) setPreferred("");
+}
+
+String preferred() {
+  return preferredSsid;
+}
+
+void setPreferred(const String &ssid) {
+  preferredSsid = ssid;
+  putString("preferred", ssid);
+  LOGI("wifi", "preferred network: %s", ssid.length() ? ssid.c_str() : "automatic");
+}
+
+String lastSsid() {
+  return lastJoinedSsid;
+}
+
+int lastRssi() {
+  return lastJoinedRssi;
 }
 
 std::vector<Network> scan() {
@@ -178,7 +220,10 @@ bool connect(String &error) {
     error = "no Wi-Fi set up";
     return false;
   }
-  for (const Network &n : scan()) {  // strongest first
+  std::vector<Network> visible = scan();  // strongest first
+  // The preferred network goes first when it's in range; the rest stay strongest first.
+  std::stable_partition(visible.begin(), visible.end(), [](const Network &n) { return n.ssid == preferredSsid; });
+  for (const Network &n : visible) {
     const Saved *s = findSaved(n.ssid);
     if (s && join(s->ssid, s->password, error)) return true;
   }
@@ -275,9 +320,31 @@ void registerCommands() {
     }
   });
 
+  // Saved networks, the preferred one ("" = automatic), the last one joined and, while Wi-Fi
+  // is on, the current one. No radio use: cheap enough for the dashboard.
   ble::on("wifi.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["networks"].to<JsonArray>();
     for (const String &name : saved()) list.add(name);
+    reply["preferred"] = preferredSsid;
+    if (lastJoinedSsid.length()) {
+      reply["last"]["ssid"] = lastJoinedSsid;
+      reply["last"]["rssi"] = lastJoinedRssi;
+    }
+    if (connected()) {
+      reply["current"]["ssid"] = ssid();
+      reply["current"]["rssi"] = rssi();
+    }
+  });
+
+  // {ssid}: join this saved network first whenever it's in range; "" = automatic.
+  ble::on("wifi.prefer", [](JsonObjectConst args, JsonObject reply) {
+    const String name = args["ssid"] | "";
+    if (name.length() && !findSaved(name)) {
+      reply["ok"] = false;
+      reply["error"] = "Dotty doesn't know that network";
+      return;
+    }
+    setPreferred(name);
   });
 
   ble::on("wifi.remove", [](JsonObjectConst args, JsonObject) { forget(args["ssid"] | ""); });

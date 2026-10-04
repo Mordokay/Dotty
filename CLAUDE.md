@@ -267,8 +267,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   namespace `wifi`; `net::connect()` scans and joins the strongest known one. HTTPS via
   `esp_http_client` + `esp_crt_bundle_attach` (real certificate checks), manual redirect
   loop (GitHub release downloads redirect). Wi-Fi is on only while something needs it.
+- Preferred network (NVS `wifi/preferred`, "" = automatic): `connect()` tries it first when
+  it's in range, then the rest strongest first. The last joined network and its RSSI are
+  kept (`wifi/last`, `wifi/lastRssi`) so the app can show what Dotty uses even though Wi-Fi
+  is off most of the time.
 - BLE: `wifi.scan` → {ssid, rssi, secure, known}, `wifi.add {ssid, password}` (joins to
-  check, saves only on success), `wifi.list`, `wifi.remove {ssid}`, `wifi.status`;
+  check, saves only on success), `wifi.list` → {networks, preferred, last?, current?} (no
+  radio use; the dashboard calls it on connect), `wifi.prefer {ssid}` ("" = automatic),
+  `wifi.remove {ssid}`, `wifi.status`;
   launcher `library.fetch {id, version?, sha256?, install? = true}`: catalog over HTTPS → download
   to the card (skipped if that sha is already there) → install from the card → reboot.
   Events `fetch.progress {stage, done, size}`.
