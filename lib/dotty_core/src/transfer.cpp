@@ -362,6 +362,7 @@ void registerCommands(std::function<void(const Summary &)> onFinished) {
     reply["url"] = "http://" + net::ip();
     reply["token"] = token;
     reply["ssid"] = net::ssid();
+    reply["rssi"] = net::rssi();  // the app suggests a hotspot when this is weak
     reply["bluetooth"] = "paused";  // the app finishes with POST /done and reconnects
     blePauseAt = millis() + kBlePauseDelayMs;
     LOGI("transfer", "ready at %s", net::ip().c_str());

@@ -7,7 +7,7 @@
 // Fast file uploads from the phone over the local Wi-Fi (Bluetooth would be ~20-50x slower).
 //
 //   1. BLE transfer.start → Dotty joins its best saved network, starts an HTTP server and
-//      replies {url, token, ssid, bluetooth: "paused"}. The token travels only over the
+//      replies {url, token, ssid, rssi, bluetooth: "paused"}. The token travels only over the
 //      encrypted BLE link. Then BLE pauses: Wi-Fi and BLE share the radio, and uploads run
 //      ~2x faster without it.
 //   2. The phone (same Wi-Fi) sends each file:

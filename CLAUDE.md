@@ -228,7 +228,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `transfer::Summary` (received, failed, appFinished); Music shows "Songs received" or
   "Transfer failed" for 4 s, then the player. `.part` leftovers are deleted when a session
   starts. Wi-Fi signal matters most (small antenna): at −85 dBm a stress test ran at 95–166
-  KB/s; next to an iPhone hotspot the user measured > 500 KB/s. Card writes run on a separate task
+  KB/s; next to an iPhone hotspot the user measured > 500 KB/s. `transfer.start` replies
+  `rssi`; below −75 dBm the app suggests the hotspot.
+- `esp_http_server` rejects URIs over 512 characters (`CONFIG_HTTPD_MAX_URI_LEN`) before any
+  handler runs, so Dotty never logs it. iOS gives **decomposed** (NFD) file names — Korean
+  ~1.7× longer — so the app sends `SongOutbox.storedName` (NFC, ≤ 120 bytes), keeping
+  every upload URL under ~390 characters. Card writes run on a separate task
   (3 × 16 KB blocks) so they overlap receiving. Holds the Network wake lock meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
   `transfer::registerCommands(onFinished)` and call `transfer::poll()` in the loop.
 
@@ -303,7 +308,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   catalog, 1-bit icons → pixel-art Image), `Features/Pairing` (scan + pairing sheet),
   `Features/Dashboard` (status, cartridges via `library.fetch`, Wi-Fi via
   `wifi.scan/add/list/remove`), `Features/Music` (the Music cartridge's screen, opened from
-  the dashboard: remote, playlists, library; `SongOutbox` = the upload queue, saved in
+  the dashboard: remote, playlists, library; pages Player · Library · Playlists via `LightTabs` (design system); Library has
+  search and multi-select (add to a playlist / new playlist / delete); `SongOutbox` = the upload queue, saved in
   Application Support/Outbox with queue.json so it survives closing the app, drops songs
   Dotty already has (stored name + size), keeps the screen awake while syncing, and ends
   an interrupted session with POST /done on the next launch), `Features/Common/DottyBits.swift` (small shared views).

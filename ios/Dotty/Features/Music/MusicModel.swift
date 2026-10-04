@@ -194,8 +194,19 @@ final class MusicModel {
         await edit("music.playlist.remove", ["name": playlist, "song": song])
     }
 
-    func deleteSong(_ name: String) async {
-        await edit("music.song.delete", ["name": name])
+    func deleteSongs(_ names: [String]) async {
+        do {
+            for name in names { try await link.send("music.song.delete", ["name": name]) }
+        } catch {
+            self.error = describe(error)
+        }
+        try? await loadLibrary()
+    }
+
+    /// Makes a playlist and fills it (the library's "New playlist…" for a selection).
+    func createPlaylist(_ name: String, with songNames: [String]) async {
+        await createPlaylist(name)
+        await add(songNames, to: name)
     }
 
     private func edit(_ command: String, _ arguments: [String: Any]) async {

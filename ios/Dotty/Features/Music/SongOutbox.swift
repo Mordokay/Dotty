@@ -32,6 +32,9 @@ final class SongOutbox {
     private(set) var syncStarted: Date?
     var error: String?
     var notice: String?
+    /// Set when Dotty's Wi-Fi was weak during the last sync (uploads crawl; a hotspot next
+    /// to Dotty measured 3x faster than a far router).
+    private(set) var weakSignal: (ssid: String, rssi: Int)?
 
     /// Runs after a sync, once Dotty is reachable again (reload the library).
     var onSynced: (() async -> Void)?
@@ -85,7 +88,8 @@ final class SongOutbox {
     @discardableResult
     func dropSongsOnDotty(_ library: [MusicModel.Song]) -> Int {
         guard !syncing else { return 0 }
-        let onDotty = Set(library.map { "\($0.name)/\($0.size)" })
+        // Compare composed forms: songs sent by older app versions kept iOS's decomposed names.
+        let onDotty = Set(library.map { "\($0.name.precomposedStringWithCanonicalMapping)/\($0.size)" })
         let done = uploads.filter { onDotty.contains("\(Self.storedName($0.name))/\($0.size)") }
         done.forEach { try? FileManager.default.removeItem(at: $0.file) }
         uploads.removeAll { upload in done.contains { $0.id == upload.id } }
@@ -149,6 +153,8 @@ final class SongOutbox {
             // Newer firmware turns Bluetooth off while it receives (uploads run ~2x faster)
             // and expects POST /done instead of transfer.stop.
             pausesBluetooth = reply["bluetooth"] as? String == "paused"
+            let rssi = reply["rssi"] as? Int ?? 0
+            weakSignal = rssi != 0 && rssi < Self.weakSignalDbm ? (ssid, rssi) : nil
         } catch {
             self.error = link.connection == .connected ? error.localizedDescription
                                                        : "Dotty isn't connected. Press PWR on Dotty to wake it."
@@ -223,7 +229,10 @@ final class SongOutbox {
     private func send(index: Int, to server: URL, token: String) async throws {
         let upload = uploads[index]
         var components = URLComponents(url: server.appending(path: "upload"), resolvingAgainstBaseURL: false)!
-        components.percentEncodedQuery = "dir=library&name=" + Self.queryEscape(upload.name)
+        // The name is sent as Dotty will store it: composed (iOS hands out decomposed Korean,
+        // ~1.7x longer) and at most 120 bytes. Dotty's server refuses URLs over 512
+        // characters before the upload starts, which failed 3 long-named songs.
+        components.percentEncodedQuery = "dir=library&name=" + Self.queryEscape(Self.storedName(upload.name))
         var request = URLRequest(url: components.url!)
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
@@ -257,6 +266,9 @@ final class SongOutbox {
         throw lastError
     }
 
+    /// Below this, uploads ran at ~100-160 KB/s (−85 dBm); a hotspot close by did > 500 KB/s.
+    static let weakSignalDbm = -75
+
     /// Strict escaping: Dotty reads "+" as a space, so only unreserved ASCII goes as-is.
     private static let unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
 
@@ -264,11 +276,12 @@ final class SongOutbox {
         text.addingPercentEncoding(withAllowedCharacters: unreserved) ?? text
     }
 
-    /// The name Dotty stores a file under: storage::safeName in the firmware (no / \ : or
-    /// control characters, no leading dots, at most 120 bytes keeping the extension).
+    /// The name Dotty stores a file under: composed Unicode, then storage::safeName in the
+    /// firmware (no / \ : or control characters, no leading dots, at most 120 bytes keeping
+    /// the extension).
     static func storedName(_ name: String) -> String {
         let blocked: Set<UInt8> = [UInt8(ascii: "/"), UInt8(ascii: "\\"), UInt8(ascii: ":")]
-        var bytes = Array(name.utf8.filter { $0 >= 32 && !blocked.contains($0) })
+        var bytes = Array(name.precomposedStringWithCanonicalMapping.utf8.filter { $0 >= 32 && !blocked.contains($0) })
         func trim() {
             let space: (UInt8) -> Bool = { $0 == 32 || (9...13).contains($0) }
             while let first = bytes.first, space(first) { bytes.removeFirst() }
