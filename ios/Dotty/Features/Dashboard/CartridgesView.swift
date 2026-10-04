@@ -7,6 +7,15 @@ struct CartridgesView: View {
     @State private var catalog: Catalog?
     @State private var loadError: String?
     @State private var install: InstallState?
+    @State private var confirmOlder: CatalogCartridge?
+
+    /// How a catalog entry relates to what's on Dotty.
+    enum Relation {
+        case notInstalled
+        case current(running: Bool)
+        case update(from: String)
+        case older(installed: String)
+    }
 
     struct InstallState {
         var cartridge: CatalogCartridge
@@ -39,6 +48,13 @@ struct CartridgesView: View {
         }
         .navigationTitle("")
         .task { await load() }
+        .confirmationDialog("Install an older version?", isPresented: Binding(
+            get: { confirmOlder != nil }, set: { if !$0 { confirmOlder = nil } }), titleVisibility: .visible,
+            presenting: confirmOlder) { cartridge in
+            Button("Install \(cartridge.version)", role: .destructive) { Task { await installCartridge(cartridge) } }
+        } message: { cartridge in
+            Text("Dotty has a newer \(cartridge.name). Installing \(cartridge.version) replaces it.")
+        }
         .onChange(of: link.lastEvent?.raw) { _, _ in
             guard let event = link.lastEvent, event.event == "fetch.progress", install != nil else { return }
             let stage = event["stage"] as? String
@@ -50,7 +66,7 @@ struct CartridgesView: View {
     }
 
     private func cartridgeCard(_ cartridge: CatalogCartridge) -> some View {
-        let running = link.info.map { !$0.isLauncher && $0.id == cartridge.id && $0.version == cartridge.version } ?? false
+        let relation = relation(to: cartridge)
         return GlassCard {
             HStack(alignment: .top, spacing: Spacing.l) {
                 Group {
@@ -73,19 +89,50 @@ struct CartridgesView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, Spacing.xs)
                     }
-                    HStack {
-                        if running {
-                            StatusPill(state: .connected, text: "Running")
-                        } else {
-                            Button("Install") { Task { await installCartridge(cartridge) } }
-                                .buttonStyle(.light())
-                                .disabled(install != nil && install?.done == false && install?.error == nil)
-                        }
-                    }
-                    .padding(.top, Spacing.s)
+                    actions(for: cartridge, relation: relation)
+                        .padding(.top, Spacing.s)
                 }
             }
             .padding(Spacing.m)
+        }
+    }
+
+    @ViewBuilder
+    private func actions(for cartridge: CatalogCartridge, relation: Relation) -> some View {
+        let busy = install != nil && install?.done == false && install?.error == nil
+        switch relation {
+        case .current(let running):
+            StatusPill(state: .connected, text: running ? "Running" : "Installed")
+        case .update(let from):
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Button("Update to \(cartridge.version)") { Task { await installCartridge(cartridge) } }
+                    .buttonStyle(.light(DottyLight.leaf.color))
+                    .disabled(busy)
+                Text("You have \(from)").font(.lpCaption).foregroundStyle(Color.inkMuted)
+            }
+        case .older(let installed):
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Button("Install older \(cartridge.version)") { confirmOlder = cartridge }
+                    .buttonStyle(.quiet())
+                    .disabled(busy)
+                Text("Dotty has a newer \(installed)").font(.lpCaption).foregroundStyle(Color.inkMuted)
+            }
+        case .notInstalled:
+            Button("Install") { Task { await installCartridge(cartridge) } }
+                .buttonStyle(.light())
+                .disabled(busy)
+        }
+    }
+
+    /// Compares with the running cartridge, or the installed one while the launcher is up.
+    private func relation(to cartridge: CatalogCartridge) -> Relation {
+        guard let info = link.info else { return .notInstalled }
+        let current = info.isLauncher ? info.installed.map { ($0.id, $0.version) } : (info.id, info.version)
+        guard let (id, version) = current, id == cartridge.id else { return .notInstalled }
+        switch cartridge.version.compare(version, options: .numeric) {
+        case .orderedSame: return .current(running: !info.isLauncher)
+        case .orderedDescending: return .update(from: version)
+        case .orderedAscending: return .older(installed: version)
         }
     }
 
