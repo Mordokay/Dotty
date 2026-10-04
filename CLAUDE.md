@@ -173,8 +173,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   never sleeps. Audio holds one while playing; Wi-Fi/BLE/OTA should add their own.
 - Locked + no wake lock + no USB host: touch hibernates, codec/amp power down, audio
   rail off, CPU light-sleeps until the next minute (or PWR). Unlock wakes peripherals.
-- Never sleeps while a computer is connected over USB (`HWCDC::isPlugged()`), so
-  flashing and logs keep working; sleep can only be tested on battery or a wall charger.
+- Tries not to sleep while a computer is connected over USB (`HWCDC::isPlugged()`), but
+  macOS idles the port when no program has it open, so a locked Dotty can still sleep on
+  USB: serial goes quiet and BLE is off ("No Dotty found"). Unlock with PWR or reset it
+  (serial_read-style RTS pulse) before flashing/BLE tests.
 - GPIO17 (power latch) is `gpio_hold_en`'d for life; GPIO6/42/46 are held during sleep.
 - Power off on USB power: the latch can't cut power, so it deep-sleeps with PWR (ext0)
   as the wake source; waking is a fresh boot.
