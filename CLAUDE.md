@@ -49,13 +49,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 ## Commands
 
 ```bash
-~/.platformio/penv/bin/pio run                                         # build
-~/.platformio/penv/bin/pio run -t upload --upload-port /dev/cu.usbmodem1101
+~/.platformio/penv/bin/pio run -e music                                # build a cartridge
+~/.platformio/penv/bin/pio run -e music -t upload --upload-port /dev/cu.usbmodem1101
 ~/.platformio/penv/bin/esptool --port /dev/cu.usbmodem1101 flash-id    # chip info
 ```
 
 - **Never use `Serial.print` directly — use `LOGI/LOGW/LOGE(tag, fmt, ...)` from
-  `src/log.h`.** With the cable plugged in but no monitor reading, `Serial.print` blocks
+  `lib/dotty_core/src/log.h`.** With the cable plugged in but no monitor reading, `Serial.print` blocks
   up to 2 s once the 256-byte USB TX buffer fills (this made taps lag 2-3 s).
   The logger writes to a 16 KB RAM ring and streams it only when there is room.
 - Lines streamed while no monitor is open are lost by macOS, but the ring keeps the last
@@ -70,19 +70,29 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ## Architecture decisions
 
+- **Launcher + cartridges** (plan agreed 2026-10-04): one firmware per product concept
+  (music, weather, …), never mixed; the iOS app swaps them over BLE. A permanent
+  launcher in the `factory` partition installs cartridges and shows progress with the
+  cartridge's icon. Shared code lives in `lib/dotty_core/src/`; each cartridge is
+  `cartridges/<name>/` with its own `[env:<name>]` in `platformio.ini`
+  (`build_src_filter = +<name>/`). Never add cartridge-specific code to dotty_core
+  unless a second cartridge needs it.
+- Launcher screens use the firefly logo (flat mark, no glow) on white, not the user's
+  photos; cartridges keep the random portrait/panda off screen.
+
 - **Partition table is OTA-ready from day one** (`partitions.csv`: two 3 MB app slots,
   1.9 MB `spiffs`/LittleFS, coredump). The long-term goal is firmware updates over BLE
   from an iOS app; don't switch to a no-OTA layout.
-- **Display driver** (`src/epd_display.*`) subclasses `GFXcanvas1`: its buffer layout
+- **Display driver** (`lib/dotty_core/src/epd_display.*`) subclasses `GFXcanvas1`: its buffer layout
   (MSB-first, 25 bytes/row, 1 = white) matches the controller RAM, so it's sent as-is.
   Init sequence and LUTs come from Waveshare's example driver. Draw with Adafruit GFX,
   then call `refreshFull()` or `refreshPartial()`. Do a full refresh every ~30 partials
   to clear ghosting.
 - Pictures: convert with `tools/img2epd.py` (system `python3` has Pillow) into
-  `include/images/*.h`, draw with `drawBitmap(..., kBlack)` on a white background.
+  `lib/dotty_core/src/images/*.h`, draw with `drawBitmap(..., kBlack)` on a white background.
   Atkinson dithering with brightness ~1.15 / contrast ~1.4 suits photos on this panel;
   generate a few variants and compare the previews before picking.
-- Pins live only in `include/board_pins.h`; source them from Waveshare's
+- Pins live only in `lib/dotty_core/src/board_pins.h`; source them from Waveshare's
   `02_Example/Arduino/*/user_config.h` when adding peripherals.
 - LVGL (8.3.11 / 9.3.0) is supported by Waveshare but not used yet; Adafruit GFX is enough
   for now on a 1-bit 200×200 screen.
@@ -98,7 +108,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - e-paper datasheet: rated "panel life 5 years", refresh at least once per 24 h, no
   refresh-count rating. Keep full refreshes rare and periodic.
 
-## Power management (`src/power.*`)
+## Power management (`lib/dotty_core/src/power.*`)
 
 - Wake locks (`power::setWakeLock`) = "do not interrupt": while any is held the CPU
   never sleeps. Audio holds one while playing; Wi-Fi/BLE/OTA should add their own.

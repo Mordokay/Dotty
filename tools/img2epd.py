@@ -6,9 +6,9 @@ C++ header with an Adafruit_GFX::drawBitmap() compatible array (rows MSB-first,
 padded to whole bytes, set bit = black) plus a PNG preview of the result.
 
 Examples:
-  python3 tools/img2epd.py ~/Downloads/profile.png include/images/sleep_portrait.h \\
+  python3 tools/img2epd.py ~/Downloads/profile.png lib/dotty_core/src/images/sleep_portrait.h \\
       --name kSleepPortrait --size 150 --crop 160 160 1000 --dither atkinson
-  python3 tools/img2epd.py panda.png include/images/sleep_panda.h \\
+  python3 tools/img2epd.py panda.png lib/dotty_core/src/images/sleep_panda.h \\
       --name kSleepPanda --size 190x135 --crop 50 228 1150 817
 """
 

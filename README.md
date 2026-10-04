@@ -31,8 +31,8 @@ From VS Code: the ✓ (build), → (upload) and 🔌 (serial monitor) buttons in
 From a terminal:
 
 ```bash
-pio run                  # build
-pio run -t upload        # build + flash
+pio run -e music              # build the music cartridge
+pio run -e music -t upload    # build + flash it
 pio device monitor       # serial output (Ctrl+C to quit)
 ```
 
@@ -64,10 +64,10 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 ```
 platformio.ini        Build config — replaces the Arduino IDE "Tools" menu
 partitions.csv        8 MB flash layout with two OTA app slots
-include/board_pins.h  Every GPIO on the board
-src/epd_display.*     e-paper driver (draw with the Adafruit GFX API)
-src/main.cpp          Firmware entry point
-include/images/       Generated 1-bit bitmaps (see tools/img2epd.py)
+cartridges/<name>/    One firmware ("cartridge") per product, e.g. cartridges/music/
+lib/dotty_core/src/   Shared code: display driver, power, logger, touch, RTC, UI, audio
+lib/dotty_core/src/board_pins.h   Every GPIO on the board
+lib/dotty_core/src/images/        Generated 1-bit bitmaps (see tools/img2epd.py)
 tools/img2epd.py      Converts a picture into a dithered e-paper bitmap header
 ios/                  Dotty iOS app (SwiftUI) and its design system docs
 docs/HARDWARE.md      Hardware reference

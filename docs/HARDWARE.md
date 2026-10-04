@@ -29,7 +29,7 @@ Verified on the device with `esptool flash-id` and the boot log:
 
 There is **no IMU** (no shake detection) and no ES7210.
 
-Full pin map: [`include/board_pins.h`](../include/board_pins.h).
+Full pin map: [`lib/dotty_core/src/board_pins.h`](../lib/dotty_core/src/board_pins.h).
 
 ## Power
 - On battery, the board stays on only while firmware holds **GPIO17 high** (soft power latch).
