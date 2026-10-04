@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"><defs></defs>
+<path d="M482 286 C 462 216, 420 178, 366 166" fill="none" stroke="#3A2413" stroke-width="22" stroke-linecap="round"/>
+<path d="M542 286 C 562 216, 604 178, 658 166" fill="none" stroke="#3A2413" stroke-width="22" stroke-linecap="round"/>
+<ellipse cx="512" cy="298" rx="62" ry="46" fill="#3A2413"/>
+<path d="M512 400 C 610 400, 640 560, 632 700 C 626 800, 580 880, 512 880 C 444 880, 398 800, 392 700 C 384 560, 414 400, 512 400 Z" fill="#C4C4C4" stroke="#1A1A1A" stroke-width="26"/><path d="M 400 640 Q 512 684 624 640" fill="none" stroke="#1A1A1A" stroke-width="20" stroke-linecap="round"/><path d="M 400 720 Q 512 764 624 720" fill="none" stroke="#1A1A1A" stroke-width="20" stroke-linecap="round"/><path d="M 400 800 Q 512 844 624 800" fill="none" stroke="#1A1A1A" stroke-width="20" stroke-linecap="round"/>
+<path d="M508 372 C 400 360, 236 410, 228 580 C 222 740, 350 840, 462 830 C 494 827, 508 806, 508 770 Z" fill="#5A3B21" transform="rotate(12 508 380)"/><path d="M508 372 C 400 360, 236 410, 228 580 C 222 740, 350 840, 462 830 C 494 827, 508 806, 508 770 Z" fill="#5A3B21" transform="translate(1024 0) scale(-1 1) rotate(12 508 380)"/>
+<path d="M372 432 C 336 432, 330 398, 346 372 C 386 286, 638 286, 678 372 C 694 398, 688 432, 652 432 C 590 450, 434 450, 372 432 Z" fill="#D0913F"/>
+</svg>

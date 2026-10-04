@@ -91,8 +91,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   BOOT + PWR 1 s → launcher, auto-lock, lock screen + sleep, off picture). Firmwares
   pass a `shell::Config` (drawApp + optional hooks) and run their own logic only while
   `shell::update()` returns true.
-- Launcher screens use the firefly logo (flat mark, no glow) on white, not the user's
-  photos; cartridges keep the random portrait/panda off screen.
+- Launcher screens use the firefly logo on white, not the user's photos; cartridges keep
+  the random portrait/panda off screen. The bitmap comes from
+  `ios/Design/Logo/dotty-mark-epaper.svg`: the flat mark with a light-grey tail, black
+  outline and segment stripes (the original pale-yellow tail dithers to almost nothing),
+  no glow. Render with `qlmanage -t -s 800`, convert with img2epd (atkinson, 120 px).
 
 - **Partition table is OTA-ready from day one** (`partitions.csv`: two 3 MB app slots,
   1.9 MB `spiffs`/LittleFS, coredump). The long-term goal is firmware updates over BLE
