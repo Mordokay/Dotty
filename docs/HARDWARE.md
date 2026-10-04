@@ -45,9 +45,9 @@ Full pin map: [`lib/dotty_core/src/board_pins.h`](../lib/dotty_core/src/board_pi
 |---|---|---|---|
 | nvs | 0x9000 | 20 KB | shared settings (Wi-Fi, iPhone bond, per-cartridge) |
 | otadata | 0xe000 | 8 KB | which app boots (blank = launcher) |
-| factory | 0x10000 | 1.5 MB | the launcher, never overwritten by the app |
-| ota_0 | 0x190000 | 4.75 MB | the active cartridge |
-| storage | 0x650000 | 1.6 MB | LittleFS |
+| factory | 0x10000 | 2 MB | the launcher, never overwritten by the app |
+| ota_0 | 0x210000 | 4 MB | the active cartridge |
+| storage | 0x610000 | 1.9 MB | LittleFS |
 | coredump | 0x7F0000 | 64 KB | crash dumps |
 
 ## Restoring the factory demo

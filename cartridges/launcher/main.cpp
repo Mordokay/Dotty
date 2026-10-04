@@ -1,21 +1,27 @@
 // Launcher: the permanent firmware in the factory partition. Shows which cartridge is
-// installed and starts it; installing cartridges over BLE comes next. Reached at boot
-// when no valid cartridge is installed, or from a cartridge with BOOT + PWR.
+// installed and starts it, installs cartridges (over BLE, or from the SD card library),
+// and keeps a copy of each installed cartridge on the card. Reached at boot when no
+// valid cartridge is installed, or from a cartridge with BOOT + PWR / core.toLauncher.
 
 #include <Arduino.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <SD_MMC.h>
+#include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
 
 #include "battery.h"
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/firefly.h"
 #include "installer.h"
+#include "library.h"
 #include "log.h"
+#include "net.h"
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.1.0");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.3.0");
 
 namespace {
 
@@ -24,17 +30,26 @@ using shell::epd;
 constexpr int16_t kW = EpdDisplay::kSize;
 constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
+constexpr const char *kCatalogUrl = "https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json";
 
 CartridgeInfo installed;
 bool hasCartridge = false;
 bool startRequested = false;  // set by the launcher.start command
 
-// Install state shown on screen. Restarting / failing is acted on in loop(), after the
-// command's reply has been sent.
-enum class InstallStage { None, Running, Done, Failed };
-InstallStage installStage = InstallStage::None;
-String installError;
-bool failureShown = false;
+// What the progress screen shows: a BLE install, an install from the card, a download.
+// Restarting / failing is acted on in loop(), after the command's reply has been sent.
+enum class Stage { None, Running, Done, Failed };
+struct Job {
+  Stage stage = Stage::None;
+  bool fromBle = false;  // progress comes from the BLE installer
+  String action;         // "Installing", "Installing from card", …
+  String name, version, error;
+  size_t size = 0, done = 0;
+  uint8_t icon[installer::kIconBytes];
+  bool hasIcon = false;
+  bool failureShown = false;
+};
+Job job;
 
 void drawHome(const char *hint = nullptr) {
   epd.fillScreen(kWhite);
@@ -70,57 +85,76 @@ void startCartridge() {
   shell::refresh(false);
 }
 
-// ---------- install screen ----------
+// ---------- progress screen ----------
 
-void drawInstall() {
-  const installer::Meta &m = installer::meta();
+void drawJob() {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
 
   const int16_t iconX = (kW - installer::kIconSize) / 2, iconY = 8;
-  if (installer::iconReady()) {
-    epd.drawBitmap(iconX, iconY, installer::icon(), installer::kIconSize, installer::kIconSize, kBlack);
+  if (job.hasIcon) {
+    epd.drawBitmap(iconX, iconY, job.icon, installer::kIconSize, installer::kIconSize, kBlack);
   } else {
     epd.drawRoundRect(iconX, iconY, installer::kIconSize, installer::kIconSize, 8, kBlack);
   }
 
   epd.setFont(&FreeSans9pt7b);
-  const char *stage = installStage == InstallStage::Done     ? "Starting"
-                      : installStage == InstallStage::Failed ? "Install failed:"
-                                                             : "Installing";
+  const String stage = job.stage == Stage::Done     ? String("Starting")
+                       : job.stage == Stage::Failed ? String("Failed:")
+                                                    : job.action;
   ui::drawCentered(epd, stage, 96);
   epd.setFont(&FreeSansBold12pt7b);
-  ui::drawCentered(epd, ui::fitText(epd, installStage == InstallStage::Failed ? installError : m.name,
-                                    kW - 16),
-                   122);
+  ui::drawCentered(epd, ui::fitText(epd, job.stage == Stage::Failed ? job.error : job.name, kW - 16), 122);
 
-  const size_t written = installStage == InstallStage::Done ? m.size : installer::written();
-  const int percent = m.size ? static_cast<int>(written * 100 / m.size) : 0;
+  const size_t done = job.stage == Stage::Done ? job.size : job.done;
+  const int percent = job.size ? static_cast<int>(done * 100 / job.size) : 0;
   const int16_t barX = 20, barY = 138, barW = kW - 40, barH = 12;
   epd.drawRoundRect(barX, barY, barW, barH, 6, kBlack);
   epd.fillRoundRect(barX + 2, barY + 2, (barW - 4) * percent / 100, barH - 4, 4, kBlack);
 
   epd.setFont(&FreeSans9pt7b);
   char line[40];
-  snprintf(line, sizeof(line), "%d%%  %u / %u KB", percent, static_cast<unsigned>(written / 1024),
-           static_cast<unsigned>(m.size / 1024));
+  snprintf(line, sizeof(line), "%d%%  %u / %u KB", percent, static_cast<unsigned>(done / 1024),
+           static_cast<unsigned>(job.size / 1024));
   ui::drawCentered(epd, line, 172);
-  ui::drawCentered(epd, "v" + m.version, 194);
+  ui::drawCentered(epd, "v" + job.version, 194);
 }
 
 // Partial refresh about once a second while the percentage moves.
-void updateInstallScreen() {
+void updateJobScreen() {
   static int shownPercent = -1;
   static uint32_t lastDraw = 0;
-  const installer::Meta &m = installer::meta();
-  const int percent = m.size ? static_cast<int>(installer::written() * 100 / m.size) : 0;
+  const int percent = job.size ? static_cast<int>(job.done * 100 / job.size) : 0;
   if (percent == shownPercent || millis() - lastDraw < 1000 || epd.isBusy()) return;
   shownPercent = percent;
   lastDraw = millis();
   shell::wake();
-  drawInstall();
+  drawJob();
   shell::refresh(false);
 }
+
+void startJob(const String &action, const String &name, const String &version, size_t size) {
+  job.stage = Stage::Running;
+  job.action = action;
+  job.name = name;
+  job.version = version;
+  job.size = size;
+  job.done = 0;
+  job.error = "";
+  job.hasIcon = false;
+  job.failureShown = false;
+  hasCartridge = false;  // the old cartridge is being overwritten
+  shell::wake();
+  drawJob();
+  shell::refresh(true);
+}
+
+void failJob(const String &error) {
+  job.stage = Stage::Failed;
+  job.error = error;
+}
+
+// ---------- BLE install ----------
 
 // Flow control for the app: progress every kProgressStep bytes received, and resend
 // requests (rate-limited) when writes were lost.
@@ -160,7 +194,35 @@ bool parseSha256(const char *hex, uint8_t out[32]) {
   return true;
 }
 
-void registerInstallCommands() {
+String sha256Hex(const uint8_t *digest) {
+  char hex[65];
+  for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+  return hex;
+}
+
+void loopBleInstall() {
+  // The app went away mid-install: give up (the slot holds a partial image now).
+  static uint32_t disconnectedSince = 0;
+  if (ble::connected()) {
+    disconnectedSince = 0;
+  } else if (disconnectedSince == 0) {
+    disconnectedSince = millis();
+  } else if (millis() - disconnectedSince > 5000) {
+    disconnectedSince = 0;
+    installer::abort();
+    failJob("interrupted");
+    return;
+  }
+  if (!job.hasIcon && installer::iconReady()) {
+    memcpy(job.icon, installer::icon(), sizeof(job.icon));
+    job.hasIcon = true;
+  }
+  job.done = installer::written();
+  notifyProgress();
+  updateJobScreen();
+}
+
+void registerBleInstallCommands() {
   installer::begin();
   ble::onData(installer::feed);
 
@@ -180,13 +242,8 @@ void registerInstallCommands() {
       reply["error"] = error;
       return;
     }
-    // The old cartridge is being overwritten.
-    hasCartridge = false;
-    installStage = InstallStage::Running;
-    failureShown = false;
-    shell::wake();
-    drawInstall();
-    shell::refresh(true);
+    job.fromBle = true;
+    startJob("Installing", m.name, m.version, m.size);
     reply["window"] = installer::kWindow;
     reply["iconBytes"] = installer::kIconBytes;
   });
@@ -196,15 +253,14 @@ void registerInstallCommands() {
     size_t missingFrom = 0;
     switch (installer::finish(error, missingFrom)) {
       case installer::Result::Done:
-        installStage = InstallStage::Done;  // loop() shows "Starting" and reboots into it
+        job.stage = Stage::Done;  // loop() saves it to the card, then reboots into it
         break;
       case installer::Result::Missing:  // the last writes were lost: the app resends
         reply["ok"] = false;
         reply["missingFrom"] = missingFrom;
         break;
       case installer::Result::Failed:
-        installStage = InstallStage::Failed;
-        installError = error;
+        failJob(error);
         reply["ok"] = false;
         reply["error"] = error;
         break;
@@ -213,16 +269,251 @@ void registerInstallCommands() {
 
   ble::on("install.abort", [](JsonObjectConst, JsonObject) {
     installer::abort();
-    installStage = InstallStage::Failed;
-    installError = "cancelled";
+    failJob("cancelled");
   });
 }
 
+// Keeps a copy of a cartridge that just arrived over BLE, so switching back is fast.
+void saveBleInstallToCard() {
+  if (!library::available()) return;
+  const installer::Meta &m = installer::meta();
+  job.action = "Saving to card";
+  job.stage = Stage::Running;
+  drawJob();
+  shell::refresh(false);
+  library::Entry entry;
+  entry.id = m.id;
+  entry.name = m.name;
+  entry.version = m.version;
+  entry.size = m.size;
+  entry.sha256 = sha256Hex(m.sha256);
+  String error;
+  if (!library::saveInstalled(entry, job.hasIcon ? job.icon : nullptr, error)) {
+    LOGW("library", "not saved: %s", error.c_str());
+  }
+  job.stage = Stage::Done;
+}
+
+// ---------- SD card library ----------
+
+void registerLibraryCommands() {
+  library::begin();
+
+  ble::on("library.list", [](JsonObjectConst, JsonObject reply) {
+    reply["card"] = library::available();
+    JsonArray list = reply["cartridges"].to<JsonArray>();
+    for (const library::Entry &e : library::list()) {
+      JsonObject item = list.add<JsonObject>();
+      item["id"] = e.id;
+      item["name"] = e.name;
+      item["version"] = e.version;
+      item["size"] = e.size;
+      item["sha256"] = e.sha256;
+    }
+  });
+
+  // {id, version?, sha256?}: version defaults to the newest on the card; a sha256 makes
+  // sure the card holds exactly the build the app expects.
+  ble::on("install.fromCard", [](JsonObjectConst args, JsonObject reply) {
+    library::Entry entry;
+    const String id = args["id"] | "";
+    const String version = args["version"] | "";
+    const String sha = args["sha256"] | "";
+    String error;
+    if (!library::available()) error = "no SD card";
+    else if (!library::find(id, version, entry)) error = "not on the card";
+    else if (sha.length() && !sha.equalsIgnoreCase(entry.sha256)) error = "a different build is on the card";
+    if (error.length()) {
+      reply["ok"] = false;
+      reply["error"] = error;
+      return;
+    }
+
+    job.fromBle = false;
+    startJob("Installing from card", entry.name, entry.version, entry.size);
+    job.hasIcon = library::readIcon(entry, job.icon);
+    const bool ok = library::install(entry, [](size_t done, size_t) {
+      job.done = done;
+      updateJobScreen();
+    }, error);
+    if (ok) {
+      job.stage = Stage::Done;
+      reply["version"] = entry.version;
+    } else {
+      failJob(error);
+      reply["ok"] = false;
+      reply["error"] = error;
+    }
+  });
+}
+
+// ---------- Wi-Fi: fetch cartridges straight from the GitHub catalog ----------
+
+void notifyFetch(const char *stage, size_t done, size_t size) {
+  static uint32_t last = 0;
+  if (done != size && millis() - last < 500) return;
+  last = millis();
+  JsonDocument event;
+  event["event"] = "fetch.progress";
+  event["stage"] = stage;
+  event["done"] = done;
+  event["size"] = size;
+  ble::notify(event);
+}
+
+// Downloads entry's firmware onto the card, verifying size and SHA-256.
+bool downloadToCard(const library::Entry &entry, const String &url, String &error) {
+  const String path = library::tempPath(entry.id, entry.version);
+  File out = SD_MMC.open(path, FILE_WRITE);
+  if (!out) {
+    error = "cannot write to the card";
+    return false;
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  size_t received = 0;
+  const bool ok = net::download(
+      url,
+      [&](const uint8_t *data, size_t len) {
+        mbedtls_sha256_update(&sha, data, len);
+        received += len;
+        return out.write(data, len) == len;
+      },
+      [](size_t done, size_t) {
+        job.done = done;
+        updateJobScreen();
+        notifyFetch("download", done, job.size);
+      },
+      error);
+  out.close();
+  uint8_t digest[32];
+  mbedtls_sha256_finish(&sha, digest);
+  mbedtls_sha256_free(&sha);
+  if (ok && received != entry.size) error = "download incomplete";
+  else if (ok && sha256Hex(digest) != entry.sha256) error = "download corrupted (SHA-256)";
+  else if (!ok && error.isEmpty()) error = "card write failed";
+  if (error.length()) {
+    SD_MMC.remove(path);
+    return false;
+  }
+  return library::commit(entry, job.hasIcon ? job.icon : nullptr, error);
+}
+
+void registerWifiCommands() {
+  net::begin();
+
+  ble::on("wifi.set", [](JsonObjectConst args, JsonObject reply) {
+    const String ssid = args["ssid"] | "";
+    if (ssid.isEmpty()) {
+      reply["ok"] = false;
+      reply["error"] = "ssid is required";
+      return;
+    }
+    net::setCredentials(ssid, args["password"] | "");
+    // Try it now so a typo is reported right away.
+    String error;
+    reply["connected"] = net::connect(error);
+    if (error.length()) reply["error"] = error;
+    else reply["ip"] = net::ip();
+    net::disconnect();
+  });
+  ble::on("wifi.status", [](JsonObjectConst, JsonObject reply) {
+    reply["configured"] = net::hasCredentials();
+    reply["ssid"] = net::ssid();
+  });
+  ble::on("wifi.forget", [](JsonObjectConst, JsonObject) { net::forget(); });
+
+  // {id, version?, sha256?, install? = true}: Dotty reads the catalog over Wi-Fi,
+  // downloads the cartridge onto the card (skipped if that build is already there),
+  // then installs it from the card. Progress: fetch.progress events.
+  ble::on("library.fetch", [](JsonObjectConst args, JsonObject reply) {
+    const String id = args["id"] | "";
+    const String wantVersion = args["version"] | "";
+    const String wantSha = args["sha256"] | "";
+    const bool install = args["install"] | true;
+    const String catalogUrl = args["catalog"] | kCatalogUrl;
+    String error;
+    auto fail = [&](const String &message) {
+      net::disconnect();
+      failJob(message);
+      reply["ok"] = false;
+      reply["error"] = message;
+    };
+    if (id.isEmpty()) return fail("id is required");
+    if (!library::available()) return fail("no SD card");
+
+    job.fromBle = false;
+    startJob("Connecting to Wi-Fi", id, wantVersion, 0);
+    if (!net::connect(error)) return fail(error);
+
+    notifyFetch("catalog", 0, 0);
+    String body;
+    if (!net::getString(catalogUrl, body, error)) return fail("catalog: " + error);
+    JsonDocument catalog;
+    if (deserializeJson(catalog, body) != DeserializationError::Ok) return fail("catalog is not valid JSON");
+    JsonObjectConst item;
+    for (JsonObjectConst e : catalog["cartridges"].as<JsonArrayConst>()) {
+      if (id == (e["id"] | "")) item = e;
+    }
+    if (item.isNull()) return fail("not in the catalog");
+
+    library::Entry entry;
+    entry.id = id;
+    entry.name = item["name"] | id;
+    entry.version = item["version"] | "";
+    entry.size = item["size"] | 0;
+    entry.sha256 = item["sha256"] | "";
+    if (wantVersion.length() && wantVersion != entry.version) return fail("catalog has " + entry.version);
+    if (wantSha.length() && !wantSha.equalsIgnoreCase(entry.sha256)) return fail("catalog build differs");
+
+    size_t iconLen = 0;
+    const char *icon64 = item["icon"] | "";
+    job.hasIcon = mbedtls_base64_decode(job.icon, sizeof(job.icon), &iconLen,
+                                        reinterpret_cast<const uint8_t *>(icon64), strlen(icon64)) == 0 &&
+                  iconLen == sizeof(job.icon);
+    job.name = entry.name;
+    job.version = entry.version;
+    job.size = entry.size;
+
+    library::Entry onCard;
+    const bool cached = library::find(id, entry.version, onCard) && onCard.sha256 == entry.sha256;
+    if (!cached) {
+      job.action = "Downloading";
+      drawJob();
+      shell::refresh(false);
+      if (!downloadToCard(entry, item["firmware"] | "", error)) return fail(error);
+    }
+    net::disconnect();
+    reply["version"] = entry.version;
+    reply["downloaded"] = !cached;
+
+    if (!install) {
+      job.stage = Stage::None;
+      hasCartridge = cartridge::readInstalled(installed);
+      shell::showApp();
+      return;
+    }
+    job.action = "Installing from card";
+    job.done = 0;
+    if (!library::install(entry, [](size_t done, size_t) {
+          job.done = done;
+          updateJobScreen();
+          notifyFetch("install", done, job.size);
+        }, error)) {
+      return fail(error);
+    }
+    job.stage = Stage::Done;  // loop() reboots into it
+  });
+}
+
+// ---------- shell hooks ----------
+
 void drawApp() {
-  if (installStage == InstallStage::None) {
+  if (job.stage == Stage::None) {
     drawHome();
   } else {
-    drawInstall();
+    drawJob();
   }
 }
 
@@ -246,6 +537,8 @@ void setup() {
     LOGI("launcher", "no cartridge installed");
   }
   ble::extendInfo([](JsonObject info) {
+    info["card"] = library::available();
+    info["wifi"] = net::hasCredentials();
     if (!hasCartridge) {
       info["installed"] = nullptr;
       return;
@@ -263,7 +556,9 @@ void setup() {
     }
     startRequested = true;  // started from loop() once this reply has gone out
   });
-  registerInstallCommands();
+  registerBleInstallCommands();
+  registerLibraryCommands();
+  registerWifiCommands();
   shell::showApp();
 }
 
@@ -272,35 +567,23 @@ void loop() {
   if (!shell::update(input)) return;
 
   if (installer::active()) {
-    // The app went away mid-install: give up (the slot holds a partial image now).
-    static uint32_t disconnectedSince = 0;
-    if (ble::connected()) {
-      disconnectedSince = 0;
-    } else if (disconnectedSince == 0) {
-      disconnectedSince = millis();
-    } else if (millis() - disconnectedSince > 5000) {
-      disconnectedSince = 0;
-      installer::abort();
-      installStage = InstallStage::Failed;
-      installError = "interrupted";
-    }
-    notifyProgress();
-    updateInstallScreen();
-  } else if (installStage == InstallStage::Done) {
-    drawInstall();
+    loopBleInstall();
+  } else if (job.stage == Stage::Done) {
+    delay(300);  // let the reply to the last command go out
+    if (job.fromBle) saveBleInstallToCard();
+    drawJob();
     shell::refresh(false);
     epd.waitBusy();
-    delay(300);  // let the install.end reply go out
     esp_restart();
-  } else if (installStage == InstallStage::Failed) {
-    // Show the error until BOOT; the slot no longer holds a valid cartridge.
-    if (!failureShown && !epd.isBusy()) {
-      failureShown = true;
-      drawInstall();
+  } else if (job.stage == Stage::Failed) {
+    // Show the error until BOOT; the slot may no longer hold a valid cartridge.
+    if (!job.failureShown && !epd.isBusy()) {
+      job.failureShown = true;
+      drawJob();
       shell::refresh(true);
     }
     if (input.boot) {
-      installStage = InstallStage::None;
+      job.stage = Stage::None;
       hasCartridge = cartridge::readInstalled(installed);
       shell::showApp();
     }

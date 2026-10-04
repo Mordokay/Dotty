@@ -78,8 +78,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `cartridges/<name>/` with its own `[env:<name>]` in `platformio.ini`
   (`build_src_filter = +<name>/`). Never add cartridge-specific code to dotty_core
   unless a second cartridge needs it.
-- Flash layout (`partitions.csv`): `factory` 1.5 MB = launcher, `ota_0` 4.75 MB = the
-  active cartridge, `storage` 1.6 MB LittleFS. Cartridge envs upload to ota_0 with
+- Flash layout (`partitions.csv`): `factory` 2 MB = launcher (grew from 1.5 MB when
+  Wi-Fi + HTTPS pushed it to 97 %), `ota_0` 4 MB = the active cartridge, `storage`
+  1.9 MB LittleFS. Cartridge envs upload to ota_0 with
   `boot_app0.bin` (boots the cartridge); `tools/pio_launcher.py` makes the launcher env
   upload to `factory` with a blank otadata (boots the launcher). The platform resets
   `ESP32_APP_OFFSET` to ota_0 during the build, hence the pre-actions in that script.
@@ -163,9 +164,25 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Power: wake lock `kWakeLockBle` while connected. Before light sleep the shell calls
   `ble::stop()` (NimBLE deinit; the controller can't sleep without a 32 kHz crystal) and
   `ble::start()` on unlock — so Dotty is only reachable while unlocked or awake.
-- Test from the Mac: `.venv/bin/python tools/ble_dotty.py scan|info|listen|cmd <name> k=v|install <bin>`
+- Test from the Mac: `.venv/bin/python tools/ble_dotty.py scan|info|listen|catalog|cmd <name> k=v k:=json|install <bin or id>`
   (`install --corrupt` checks the SHA-256 rejection). Cartridge icons: `cartridges/<id>/icon.png`.
   (venv setup in the script's docstring; bleak; Bluetooth permission already granted).
+
+## SD library + Wi-Fi fetch (launcher)
+
+- `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/<version>`
+  `.bin/.json/.icon`. Every BLE install is copied there (verified). `install.fromCard
+  {id, version?, sha256?}` flashes from the card in ~2.5 s (whole region erased up front;
+  4 KB sequential erases took 10 s). `library.list` lists the card.
+- `cartridges/launcher/net.*`: Wi-Fi creds in NVS namespace `wifi` (shared), HTTPS via
+  `esp_http_client` + `esp_crt_bundle_attach` (real certificate checks), manual redirect
+  loop (GitHub release downloads redirect). Wi-Fi is on only during a fetch.
+- `wifi.set {ssid, password}` (tests the connection), `wifi.status`, `wifi.forget`;
+  `library.fetch {id, version?, sha256?, install? = true}`: catalog over HTTPS → download
+  to the card (skipped if that sha is already there) → install from the card → reboot.
+  Events `fetch.progress {stage, done, size}`. Launcher-only commands for now.
+- Intended app flow: the iOS app fetches the catalog, the user picks, the app sends
+  `library.fetch` over BLE; BLE image upload (`install.begin`) is the fallback.
 
 ## Power management (`lib/dotty_core/src/power.*`)
 

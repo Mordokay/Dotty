@@ -8,7 +8,9 @@ Setup once:
 Examples:
   .venv/bin/python tools/ble_dotty.py scan
   .venv/bin/python tools/ble_dotty.py info
-  .venv/bin/python tools/ble_dotty.py cmd music.volume value=60
+  .venv/bin/python tools/ble_dotty.py cmd music.volume value:=60
+  .venv/bin/python tools/ble_dotty.py cmd wifi.set ssid="My Wi-Fi" password="secret"
+  .venv/bin/python tools/ble_dotty.py cmd library.fetch id=music      # Dotty downloads it over Wi-Fi
   .venv/bin/python tools/ble_dotty.py cmd core.toLauncher
   .venv/bin/python tools/ble_dotty.py listen
   .venv/bin/python tools/ble_dotty.py install .pio/build/music/firmware.bin
@@ -57,20 +59,19 @@ async def find(name, timeout):
     return found
 
 
-def parse_value(text):
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
-
-
 def build_command(cmd, params):
     if cmd.startswith("{"):
         return json.loads(cmd)
     message = {"cmd": cmd}
     for param in params:
-        key, _, value = param.partition("=")
-        message[key] = parse_value(value)
+        # httpie style: key=value is always a string, key:=value is raw JSON (numbers,
+        # booleans), so e.g. an all-digit Wi-Fi password stays a string.
+        if ":=" in param:
+            key, _, value = param.partition(":=")
+            message[key] = json.loads(value)
+        else:
+            key, _, value = param.partition("=")
+            message[key] = value
     return message
 
 
@@ -108,9 +109,9 @@ async def command(args):
         await client.start_notify(EVENT, on_event)
         await client.write_gatt_char(COMMAND, json.dumps(message).encode(), response=True)
         try:
-            print(json.dumps(await asyncio.wait_for(reply, 5), indent=2))
+            print(json.dumps(await asyncio.wait_for(reply, args.wait), indent=2))
         except asyncio.TimeoutError:
-            print("no reply within 5 s (the device may have rebooted)", file=sys.stderr)
+            print(f"no reply within {args.wait:g} s (the device may have rebooted)", file=sys.stderr)
 
 
 async def listen(args):
@@ -277,9 +278,10 @@ def main():
     sub.add_parser("scan")
     sub.add_parser("info")
     sub.add_parser("listen")
-    cmd = sub.add_parser("cmd", help="send a command: NAME [key=value ...] or a JSON object")
+    cmd = sub.add_parser("cmd", help="send a command: NAME [key=value | key:=json ...] or a JSON object")
     cmd.add_argument("cmd")
     cmd.add_argument("params", nargs="*")
+    cmd.add_argument("--wait", type=float, default=30, help="seconds to wait for the reply")
     sub.add_parser("catalog", help="list the published cartridges")
     inst = sub.add_parser("install", help="install a cartridge (.bin file or catalog id) through the launcher")
     inst.add_argument("firmware", help="path to a firmware .bin, or a cartridge id from the catalog")

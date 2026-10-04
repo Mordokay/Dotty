@@ -4,7 +4,7 @@
 # Name,    Type, SubType,  Offset,   Size
 nvs,       data, nvs,      0x9000,   0x5000
 otadata,   data, ota,      0xe000,   0x2000
-factory,   app,  factory,  0x10000,  0x180000
-ota_0,     app,  ota_0,    0x190000, 0x4C0000
-storage,   data, spiffs,   0x650000, 0x1A0000
+factory,   app,  factory,  0x10000,  0x200000
+ota_0,     app,  ota_0,    0x210000, 0x400000
+storage,   data, spiffs,   0x610000, 0x1E0000
 coredump,  data, coredump, 0x7F0000, 0x10000
