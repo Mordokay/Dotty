@@ -36,8 +36,13 @@ struct CartridgesView: View {
                     if let loadError { NoticeCard(kind: .error, text: loadError) }
                     if let catalog {
                         // The cartridge being installed is shown by the progress card instead.
+                        // Other cartridges are dimmed and inert until the install finishes.
+                        let installing = install != nil && install?.error == nil
                         ForEach(catalog.cartridges.filter { $0.id != install?.cartridge.id }) { cartridge in
                             cartridgeCard(cartridge)
+                                .opacity(installing ? 0.4 : 1)
+                                .allowsHitTesting(!installing)
+                                .animation(.settle, value: installing)
                         }
                     } else if loadError == nil {
                         HStack { Spacer(); FireflyLoader(size: 96, label: "Loading the catalog"); Spacer() }
