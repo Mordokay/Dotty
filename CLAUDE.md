@@ -150,6 +150,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Clients **must wait for CoreBluetooth's `canSendWriteWithoutResponse`** before each
   write — writes sent while its queue is full are silently dropped (bleak doesn't
   check it; ble_dotty.py reads it from bleak's CBPeripheral).
+- **Catalog** (`tools/build_catalog.py`): builds every cartridge except the launcher into
+  `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
+  requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,
+  `protocol` = install protocol version, `release` tag). `--release` publishes a GitHub
+  Release marked latest (needs a clean, pushed tree); the app reads
+  `https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json`. Bump the
+  version in `DOTTY_CARTRIDGE()` when a cartridge changes. Optional per-cartridge
+  `cartridges/<id>/cartridge.json` = description + requires.
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
 - Power: wake lock `kWakeLockBle` while connected. Before light sleep the shell calls

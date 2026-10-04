@@ -1,0 +1,4 @@
+{
+  "description": "Plays the MP3s on the SD card's /music folder, with play/pause and volume on screen.",
+  "requires": ["sd"]
+}
