@@ -172,14 +172,16 @@ struct CartridgesView: View {
     private func installCartridge(_ cartridge: CatalogCartridge) async {
         install = InstallState(cartridge: cartridge)
         do {
+            // The launcher does the install and always has the Wi-Fi commands (older
+            // cartridges may not), so switch first, then check Wi-Fi.
+            install?.stage = "Switching to the launcher"
+            try await link.ensureLauncher()
             install?.stage = "Checking Dotty's Wi-Fi"
             let saved = try await link.send("wifi.list")["networks"] as? [String] ?? []
             guard !saved.isEmpty else {
                 install?.error = "Dotty has no Wi-Fi yet. Add a network under Wi-Fi first."
                 return
             }
-            install?.stage = "Switching to the launcher"
-            try await link.ensureLauncher()
             install?.stage = "Connecting to Wi-Fi"
             // Name/version/size let Dotty's screen show the cartridge before the catalog arrives.
             try await link.send("library.fetch", ["id": cartridge.id, "name": cartridge.name, "version": cartridge.version,
