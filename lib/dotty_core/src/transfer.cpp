@@ -2,18 +2,24 @@
 
 #include <SD_MMC.h>
 #include <esp_http_server.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 #include "core_ble.h"
 #include "log.h"
 #include "net.h"
 #include "power.h"
+#include "shell.h"
 #include "storage.h"
 
 namespace transfer {
 namespace {
 
 constexpr uint32_t kIdleTimeoutMs = 2 * 60 * 1000;
-constexpr size_t kChunk = 8192;
+// Receiving and writing the card overlap: the HTTP task fills one block while a writer
+// task writes the previous one (writes took ~40 % of the time when done in line).
+constexpr size_t kBlock = 16384;
+constexpr int kBlocks = 3;
 
 httpd_handle_t server = nullptr;
 char token[33] = {};
@@ -31,6 +37,65 @@ char lastDir[128] = {};
 char lastName[128] = {};
 size_t lastSize = 0;
 bool stopRequested = false;
+// Wi-Fi and BLE share the radio: with BLE on, uploads run at about half speed (measured
+// 130 vs 240 KB/s). So BLE pauses shortly after transfer.start has been answered and
+// comes back when the session ends.
+constexpr uint32_t kBlePauseDelayMs = 400;
+uint32_t blePauseAt = 0;
+bool blePaused = false;
+
+// The card writer. Blocks travel empty → (HTTP task fills) → full → (writer) → empty.
+uint8_t *blocks[kBlocks] = {};
+size_t blockLen[kBlocks] = {};
+QueueHandle_t emptyBlocks = nullptr, fullBlocks = nullptr;
+SemaphoreHandle_t writerIdle = nullptr;
+TaskHandle_t writerTask = nullptr;
+File writeTarget;
+volatile bool writeFailed = false;
+volatile uint32_t writingMs = 0;
+constexpr int kFlush = -1;  // "no more blocks for this file"
+
+void writerLoop(void *) {
+  for (;;) {
+    int i;
+    xQueueReceive(fullBlocks, &i, portMAX_DELAY);
+    if (i == kFlush) {
+      xSemaphoreGive(writerIdle);
+      continue;
+    }
+    const uint32_t start = millis();
+    if (!writeFailed && writeTarget.write(blocks[i], blockLen[i]) != blockLen[i]) writeFailed = true;
+    writingMs += millis() - start;
+    xQueueSend(emptyBlocks, &i, portMAX_DELAY);
+  }
+}
+
+bool startWriter() {
+  if (writerTask) return true;
+  for (int i = 0; i < kBlocks; i++) {
+    blocks[i] = static_cast<uint8_t *>(heap_caps_malloc(kBlock, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (!blocks[i]) return false;
+  }
+  emptyBlocks = xQueueCreate(kBlocks, sizeof(int));
+  fullBlocks = xQueueCreate(kBlocks + 1, sizeof(int));
+  writerIdle = xSemaphoreCreateBinary();
+  for (int i = 0; i < kBlocks; i++) xQueueSend(emptyBlocks, &i, 0);
+  return xTaskCreate(writerLoop, "card-writer", 4096, nullptr, 5, &writerTask) == pdPASS;
+}
+
+void stopWriter() {
+  if (writerTask) vTaskDelete(writerTask);
+  writerTask = nullptr;
+  if (emptyBlocks) vQueueDelete(emptyBlocks);
+  if (fullBlocks) vQueueDelete(fullBlocks);
+  if (writerIdle) vSemaphoreDelete(writerIdle);
+  emptyBlocks = fullBlocks = nullptr;
+  writerIdle = nullptr;
+  for (auto &b : blocks) {
+    free(b);
+    b = nullptr;
+  }
+}
 
 String urlDecode(const char *in) {
   String out;
@@ -92,21 +157,42 @@ esp_err_t handleUpload(httpd_req_t *req) {
   currentDone = 0;
   LOGI("transfer", "receiving %s/%s (%u bytes)", dir.c_str(), name.c_str(), static_cast<unsigned>(req->content_len));
 
-  static uint8_t buffer[kChunk];
+  writeTarget = out;
+  writeFailed = false;
+  writingMs = 0;
   size_t remaining = req->content_len;
   bool ok = true;
-  while (remaining > 0) {
-    const int n = httpd_req_recv(req, reinterpret_cast<char *>(buffer), min(remaining, kChunk));
-    if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
-    if (n <= 0 || out.write(buffer, n) != static_cast<size_t>(n)) {
-      ok = false;
-      break;
+  const uint32_t started = millis();
+  while (remaining > 0 && ok && !writeFailed) {
+    int i;
+    xQueueReceive(emptyBlocks, &i, portMAX_DELAY);
+    size_t filled = 0;
+    const size_t want = min(remaining, kBlock);
+    while (filled < want) {
+      const int n = httpd_req_recv(req, reinterpret_cast<char *>(blocks[i] + filled), want - filled);
+      if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      if (n <= 0) {
+        ok = false;
+        break;
+      }
+      filled += n;
+      currentDone = req->content_len - remaining + filled;
+      lastActivity = millis();
     }
-    remaining -= n;
-    currentDone = req->content_len - remaining;
-    lastActivity = millis();
+    blockLen[i] = filled;
+    remaining -= filled;
+    xQueueSend(fullBlocks, &i, portMAX_DELAY);
   }
+  const int flush = kFlush;
+  xQueueSend(fullBlocks, &flush, portMAX_DELAY);
+  xSemaphoreTake(writerIdle, portMAX_DELAY);  // every block of this file is on the card
+  ok = ok && !writeFailed;
   out.close();
+  writeTarget = File();
+  const uint32_t elapsed = max<uint32_t>(1, millis() - started);
+  LOGI("transfer", "%u KB in %.1f s (%u KB/s), %.1f s of it writing the card",
+       static_cast<unsigned>(req->content_len / 1024), elapsed / 1000.0f,
+       static_cast<unsigned>(req->content_len / elapsed), writingMs / 1000.0f);  // writing overlaps receiving
 
   portENTER_CRITICAL(&lock);
   currentFile[0] = '\0';
@@ -127,13 +213,32 @@ esp_err_t handleUpload(httpd_req_t *req) {
   return reply(req, "200 OK", "{\"ok\":true}");
 }
 
+// POST /done: the phone has sent everything (BLE is paused, so this comes over HTTP).
+esp_err_t handleDone(httpd_req_t *req) {
+  char given[sizeof(token)] = {};
+  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Token", given, sizeof(given)) != ESP_OK ||
+      strcmp(given, token) != 0) {
+    return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  }
+  stopRequested = true;  // handled by poll(), after this reply has gone out
+  char json[48];
+  snprintf(json, sizeof(json), "{\"ok\":true,\"files\":%d}", static_cast<int>(filesReceived));
+  return reply(req, "200 OK", json);
+}
+
 bool startServer(String &error) {
+  if (!startWriter()) {
+    stopWriter();
+    error = "not enough memory for the transfer";
+    return false;
+  }
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   config.stack_size = 8192;
   config.recv_wait_timeout = 15;
   config.lru_purge_enable = true;
   if (httpd_start(&server, &config) != ESP_OK) {
+    stopWriter();
     error = "cannot start the transfer server";
     return false;
   }
@@ -142,6 +247,11 @@ bool startServer(String &error) {
   upload.method = HTTP_PUT;
   upload.handler = handleUpload;
   httpd_register_uri_handler(server, &upload);
+  httpd_uri_t done = {};
+  done.uri = "/done";
+  done.method = HTTP_POST;
+  done.handler = handleDone;
+  httpd_register_uri_handler(server, &done);
   return true;
 }
 
@@ -149,7 +259,11 @@ void stop() {
   if (!server) return;
   httpd_stop(server);
   server = nullptr;
+  stopWriter();
   net::disconnect();
+  blePauseAt = 0;
+  if (blePaused && !shell::locked()) ble::start();  // locked: the shell restarts it on unlock
+  blePaused = false;
   power::setWakeLock(power::kWakeLockNetwork, false);
   LOGI("transfer", "stopped after %d files", static_cast<int>(filesReceived));
   if (finishedCallback) finishedCallback();
@@ -180,6 +294,8 @@ void registerCommands(std::function<void()> onFinished) {
     reply["url"] = "http://" + net::ip();
     reply["token"] = token;
     reply["ssid"] = net::ssid();
+    reply["bluetooth"] = "paused";  // the app finishes with POST /done and reconnects
+    blePauseAt = millis() + kBlePauseDelayMs;
     LOGI("transfer", "ready at %s", net::ip().c_str());
   });
 
@@ -191,6 +307,11 @@ void registerCommands(std::function<void()> onFinished) {
 
 void poll() {
   if (!server) return;
+  if (blePauseAt && millis() >= blePauseAt) {
+    blePauseAt = 0;
+    blePaused = ble::running();
+    if (blePaused) ble::stop();
+  }
   if (filesReported != filesReceived) {
     filesReported = filesReceived;
     char dir[sizeof(lastDir)], name[sizeof(lastName)];

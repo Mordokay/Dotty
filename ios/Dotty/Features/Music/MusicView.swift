@@ -27,6 +27,8 @@ private struct MusicContent: View {
     @State private var naming = false
     @State private var newPlaylist = ""
     @State private var deleting: MusicModel.Song?
+    @State private var renaming: String?
+    @State private var newName = ""
 
     var body: some View {
         LightField {
@@ -56,6 +58,9 @@ private struct MusicContent: View {
             PlaylistView(model: model, name: playlist.name)
         }
         .task { await model.load() }
+        .onChange(of: link.connection) { _, state in
+            if state == .connected { Task { await model.reconnected() } }
+        }
         .onChange(of: link.eventCount) { _, _ in
             if let event = link.lastEvent { model.handle(event) }
         }
@@ -83,6 +88,15 @@ private struct MusicContent: View {
                 if !name.isEmpty { Task { await model.createPlaylist(name) } }
             }
             Button("Cancel", role: .cancel) { newPlaylist = "" }
+        }
+        .alert("Rename playlist", isPresented: .init(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if let old = renaming, !name.isEmpty, name != old { Task { _ = await model.renamePlaylist(old, to: name) } }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
         }
         .confirmationDialog("Delete this song from Dotty?", isPresented: .init(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible, presenting: deleting) { song in
@@ -118,6 +132,11 @@ private struct MusicContent: View {
                     }
                 }
                 HStack(spacing: Spacing.xl) {
+                    Button { Task { await model.setShuffle(!model.now.shuffle) } } label: {
+                        Image(systemName: model.now.shuffle ? "shuffle" : "arrow.right")
+                    }
+                    .buttonStyle(.quiet(model.now.shuffle ? DottyLight.firefly.color : .inkMuted))
+                    .accessibilityLabel(model.now.shuffle ? "Shuffle on" : "Shuffle off")
                     Spacer()
                     Button { Task { await model.previous() } } label: { Image(systemName: "backward.fill") }
                         .buttonStyle(.frostedCircle)
@@ -130,6 +149,8 @@ private struct MusicContent: View {
                     Button { Task { await model.next() } } label: { Image(systemName: "forward.fill") }
                         .buttonStyle(.frostedCircle)
                     Spacer()
+                    // Balances the shuffle button so the transport stays centred.
+                    Image(systemName: "shuffle").hidden().padding(.horizontal, Spacing.m)
                 }
                 .disabled(model.songs.isEmpty)
                 LightSlider(title: "Volume", value: $volume)
@@ -220,6 +241,7 @@ private struct MusicContent: View {
                 .buttonStyle(.plain)
                 .contextMenu {
                     Button("Play", systemImage: "play") { Task { await model.play(playlist: playlist.name) } }
+                    Button("Rename", systemImage: "pencil") { renaming = playlist.name; newName = playlist.name }
                     Button("Delete playlist", systemImage: "trash", role: .destructive) {
                         Task { await model.deletePlaylist(playlist.name) }
                     }

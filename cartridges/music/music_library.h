@@ -27,6 +27,8 @@ std::vector<String> playlists();  // sorted
 std::vector<String> playlistSongs(const String &playlist);  // only songs still in the library
 bool createPlaylist(const String &name);
 bool deletePlaylist(const String &name);
+// False if the new name is empty or taken. Playlist names are storage::safeName'd.
+bool renamePlaylist(const String &name, const String &newName);
 bool addToPlaylist(const String &playlist, const std::vector<String> &songNames);
 bool removeFromPlaylist(const String &playlist, const String &song);
 

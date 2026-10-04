@@ -3,13 +3,20 @@ import SwiftUI
 /// One playlist: play it, reorder nothing (yet), add songs from the library, remove songs.
 struct PlaylistView: View {
     let model: MusicModel
-    let name: String
+    @State private var name: String
 
     @Environment(\.dismiss) private var dismiss
     @State private var songs: [String] = []
     @State private var loading = true
     @State private var adding = false
     @State private var confirmDelete = false
+    @State private var renaming = false
+    @State private var newName = ""
+
+    init(model: MusicModel, name: String) {
+        self.model = model
+        _name = State(initialValue: name)
+    }
 
     var body: some View {
         LightField {
@@ -42,8 +49,12 @@ struct PlaylistView: View {
                                 }
                         }
                     }
-                    Button("Delete playlist", systemImage: "trash") { confirmDelete = true }
-                        .buttonStyle(.quiet(DottyLight.ember.color))
+                    HStack(spacing: Spacing.m) {
+                        Button("Rename", systemImage: "pencil") { newName = name; renaming = true }
+                            .buttonStyle(.quiet())
+                        Button("Delete playlist", systemImage: "trash") { confirmDelete = true }
+                            .buttonStyle(.quiet(DottyLight.ember.color))
+                    }
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)
@@ -60,6 +71,15 @@ struct PlaylistView: View {
             }
             .presentationDetents([.large])
             .presentationBackground(.clear)
+        }
+        .alert("Rename playlist", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                let new = newName.trimmingCharacters(in: .whitespaces)
+                guard !new.isEmpty, new != name else { return }
+                Task { if await model.renamePlaylist(name, to: new) { name = new } }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Delete \(name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete playlist", role: .destructive) {

@@ -122,6 +122,13 @@ bool deletePlaylist(const String &name) {
   return SD_MMC.remove(playlistPath(name));
 }
 
+bool renamePlaylist(const String &name, const String &newName) {
+  if (storage::safeName(newName).isEmpty() || !SD_MMC.exists(playlistPath(name))) return false;
+  if (storage::safeName(newName) == storage::safeName(name)) return true;
+  if (SD_MMC.exists(playlistPath(newName))) return false;
+  return SD_MMC.rename(playlistPath(name), playlistPath(newName));
+}
+
 bool addToPlaylist(const String &playlist, const std::vector<String> &songNames) {
   if (!SD_MMC.exists(playlistPath(playlist))) return false;
   std::vector<String> entries = readPlaylist(playlist);

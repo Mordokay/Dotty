@@ -37,6 +37,9 @@ struct WiFiView: View {
             .refreshable { await refresh() }
         }
         .task { await refresh() }
+        .onChange(of: link.connection) { _, state in
+            if state == .connected { Task { await refresh() } }  // clears a stale "not connected"
+        }
         .sheet(item: $joining) { network in
             JoinNetworkSheet(network: network) { name in
                 notice = "Dotty joined \(name) and saved it."

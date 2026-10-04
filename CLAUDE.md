@@ -206,24 +206,37 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 - Files from the phone go over the home Wi-Fi, not BLE (~20-50x faster). `transfer.start`
   → Dotty joins its best saved network, starts `esp_http_server` on port 80, replies
-  `{url, token, ssid}` (16-byte random token, only sent over encrypted BLE). Phone:
+  `{url, token, ssid, bluetooth: "paused"}` (16-byte random token, only sent over encrypted
+  BLE), then **pauses BLE** ~0.4 s later: Wi-Fi and BLE share the radio and uploads run at
+  about half speed with BLE on (measured from the Mac, 4 MB: ~130 KB/s with BLE connected,
+  ~240 KB/s without; a 200 ms BLE interval, `esp_coex_preference_set(WIFI)` and
+  `WIFI_PS_NONE` made no difference). The rest of the limit is the prebuilt core's 5.7 KB
+  TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`): a custom core build could raise it. Phone:
   `PUT <url>/upload?dir=<folder>&name=<file>` with header `X-Dotty-Token`; the file lands in
   `<myDataDir>/<dir>/<name>` (via `.part`, renamed when complete). Query values are
   url-decoded with `+` = space, so the app percent-encodes everything but unreserved ASCII.
-- `transfer.stop` (or 2 min idle) stops the server and Wi-Fi; holds the Network wake lock
-  meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
+- `POST <url>/done` (token header; the app's normal ending since BLE is paused),
+  `transfer.stop`, or 2 min idle stops the server and Wi-Fi and restarts BLE (unless locked);
+  the phone's pending connection reconnects by itself. Card writes run on a separate task
+  (3 × 16 KB blocks) so they overlap receiving. Holds the Network wake lock meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
   `transfer::registerCommands(onFinished)` and call `transfer::poll()` in the loop.
 
 ## Music cartridge (`cartridges/music/`)
 
 - Data: `data/library/*.mp3` (every song once) and `data/playlists/<name>.m3u` (`#EXTM3U`
   + lines `../library/<song>`, so the card works in computer players). `music_library.*`.
-- Queue = the library or one playlist. Next/previous (previous restarts the song after
-  3 s), auto-advance at the end, BOOT = next, volume row at the bottom of the screen.
+- Queue = the library or one playlist, played in order or shuffled (`order` over the
+  queue, current song first; shuffle saved in NVS `music/shuffle`). Next/previous
+  (previous restarts the song after 3 s), auto-advance to the end of the order, BOOT = next,
+  volume row at the bottom of the screen.
+- Screens: player with a nav bar (left = shuffle/in-order toggle, title = "Music" or the
+  playlist, right = playlists) and the playlist menu (back; "Play all" + playlists with
+  song counts, current one inverted, paged with a `< 1/2 >` row); picking one plays it and
+  pops back to the player.
   A receiving screen shows while a Wi-Fi transfer is active.
 - Commands: `music.status`, `music.toggle`, `music.next`, `music.prev`, `music.volume
-  {value}`, `music.play {playlist?, index?, song?}`, `music.library` (songs + playlists),
-  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.add
+  {value}`, `music.shuffle {on}`, `music.play {playlist?, index?, song?}`, `music.library` (songs + playlists),
+  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.rename {name, to}`, `music.playlist.add
   {name, songs[]}`, `music.playlist.remove {name, song}`, `music.song.delete {name}`,
   plus `transfer.*`. Events: `music.state` (on change, every 5 s while playing),
   `music.library` (library or playlists changed).

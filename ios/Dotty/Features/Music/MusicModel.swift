@@ -32,6 +32,7 @@ final class MusicModel {
         var position = 0
         var duration = 0
         var volume = 80
+        var shuffle = false
         /// When `position` was true, to move the progress bar between updates.
         var receivedAt = Date()
 
@@ -119,6 +120,7 @@ final class MusicModel {
         state.position = message["position"] as? Int ?? 0
         state.duration = message["duration"] as? Int ?? 0
         state.volume = message["volume"] as? Int ?? now.volume
+        state.shuffle = message["shuffle"] as? Bool ?? false
         now = state
     }
 
@@ -127,6 +129,10 @@ final class MusicModel {
     func toggle() async { await control("music.toggle") }
     func next() async { await control("music.next") }
     func previous() async { await control("music.prev") }
+
+    func setShuffle(_ on: Bool) async {
+        await control("music.shuffle", ["on": on])
+    }
 
     func setVolume(_ value: Int) async {
         await control("music.volume", ["value": value])
@@ -154,6 +160,18 @@ final class MusicModel {
 
     func createPlaylist(_ name: String) async {
         await edit("music.playlist.create", ["name": name])
+    }
+
+    /// True when Dotty took the new name.
+    func renamePlaylist(_ name: String, to newName: String) async -> Bool {
+        do {
+            try await link.send("music.playlist.rename", ["name": name, "to": newName])
+            try await loadLibrary()
+            return true
+        } catch {
+            self.error = describe(error)
+            return false
+        }
     }
 
     func deletePlaylist(_ name: String) async {
@@ -240,7 +258,7 @@ final class MusicModel {
             syncStage = nil
         }
 
-        let server: URL, token: String, ssid: String
+        let server: URL, token: String, ssid: String, pausesBluetooth: Bool
         do {
             let reply = try await link.send("transfer.start", timeout: 45)
             guard let url = (reply["url"] as? String).flatMap(URL.init(string:)), let key = reply["token"] as? String else {
@@ -249,6 +267,9 @@ final class MusicModel {
             server = url
             token = key
             ssid = reply["ssid"] as? String ?? "Dotty's Wi-Fi"
+            // Newer firmware turns Bluetooth off while it receives (uploads run ~2x faster)
+            // and expects POST /done instead of transfer.stop.
+            pausesBluetooth = reply["bluetooth"] as? String == "paused"
         } catch {
             self.error = describe(error)
             return
@@ -272,12 +293,39 @@ final class MusicModel {
         }
 
         syncStage = "Finishing"
-        _ = try? await link.send("transfer.stop")
+        if pausesBluetooth {
+            await finish(server: server, token: token)
+            syncStage = "Reconnecting to Dotty"
+            try? await link.waitForReconnect(timeout: 30)
+        } else {
+            _ = try? await link.send("transfer.stop")
+        }
         uploads.removeAll { $0.state == .sent }
         try? await loadLibrary()
+        try? await reloadState()
         if sentCount > 0 {
             notice = sentCount == 1 ? "1 song is on Dotty." : "\(sentCount) songs are on Dotty."
         }
+    }
+
+    /// Ends the session over Wi-Fi (Bluetooth is paused); Dotty also gives up after 2 minutes.
+    private func finish(server: URL, token: String) async {
+        var request = URLRequest(url: server.appending(path: "done"))
+        request.httpMethod = "POST"
+        request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
+        request.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    private func reloadState() async throws {
+        apply(state: try await link.send("music.status"))
+    }
+
+    /// Dotty came back (after a sync, sleep or going out of range): clear stale errors, reload.
+    func reconnected() async {
+        guard !syncing else { return }
+        error = nil
+        await load()
     }
 
     /// The first request can fail while iOS asks for Local Network access, so retry a little.

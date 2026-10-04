@@ -56,6 +56,7 @@ type `d` to replay everything since boot, e.g. after plugging in later.
   (~10 µA, the RTC keeps time), on USB it deep-sleeps. Press PWR to start again.
 - **Music:** tap play/pause in the middle, ⏮ / ⏭ on the sides (⏮ restarts a song after
   3 s), − / + at the bottom for volume; songs advance by themselves. BOOT = next song.
+  Top bar: left toggles shuffle, right opens the playlists (pick one, or "Play all").
   Long-press anywhere for a full refresh (clears ghosting). The iPhone app's Music screen
   sends songs from Files over your Wi-Fi and manages playlists. On the SD card:
   `/cartridges/music/data/library/` (songs) and `…/data/playlists/*.m3u`.
