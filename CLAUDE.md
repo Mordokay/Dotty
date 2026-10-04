@@ -50,7 +50,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ```bash
 ~/.platformio/penv/bin/pio run -e music                                # build a cartridge
-~/.platformio/penv/bin/pio run -e music -t upload --upload-port /dev/cu.usbmodem1101
+~/.platformio/penv/bin/pio run -e launcher -t upload --upload-port /dev/cu.usbmodem1101  # factory, boots launcher
+~/.platformio/penv/bin/pio run -e music -t upload --upload-port /dev/cu.usbmodem1101     # ota_0, boots music
 ~/.platformio/penv/bin/esptool --port /dev/cu.usbmodem1101 flash-id    # chip info
 ```
 
@@ -70,13 +71,26 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ## Architecture decisions
 
-- **Launcher + cartridges** (plan agreed 2026-10-04): one firmware per product concept
+- **Launcher + cartridges** (plan agreed 2026-10-04; launcher skeleton done): one firmware per product concept
   (music, weather, …), never mixed; the iOS app swaps them over BLE. A permanent
   launcher in the `factory` partition installs cartridges and shows progress with the
   cartridge's icon. Shared code lives in `lib/dotty_core/src/`; each cartridge is
   `cartridges/<name>/` with its own `[env:<name>]` in `platformio.ini`
   (`build_src_filter = +<name>/`). Never add cartridge-specific code to dotty_core
   unless a second cartridge needs it.
+- Flash layout (`partitions.csv`): `factory` 1.5 MB = launcher, `ota_0` 4.75 MB = the
+  active cartridge, `storage` 1.6 MB LittleFS. Cartridge envs upload to ota_0 with
+  `boot_app0.bin` (boots the cartridge); `tools/pio_launcher.py` makes the launcher env
+  upload to `factory` with a blank otadata (boots the launcher). The platform resets
+  `ESP32_APP_OFFSET` to ota_0 during the build, hence the pre-actions in that script.
+- Every firmware declares `DOTTY_CARTRIDGE(id, name, version)`; the struct lands in
+  `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
+  (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
+  switch boot partitions.
+- `lib/dotty_core/src/shell.*` owns the shared device behaviour (PWR lock/unlock/off,
+  BOOT + PWR 1 s → launcher, auto-lock, lock screen + sleep, off picture). Firmwares
+  pass a `shell::Config` (drawApp + optional hooks) and run their own logic only while
+  `shell::update()` returns true.
 - Launcher screens use the firefly logo (flat mark, no glow) on white, not the user's
   photos; cartridges keep the random portrait/panda off screen.
 
@@ -89,7 +103,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   then call `refreshFull()` or `refreshPartial()`. Do a full refresh every ~30 partials
   to clear ghosting.
 - Pictures: convert with `tools/img2epd.py` (system `python3` has Pillow) into
-  `lib/dotty_core/src/images/*.h`, draw with `drawBitmap(..., kBlack)` on a white background.
+  `cartridges/<name>/images/*.h`, draw with `drawBitmap(..., kBlack)` on a white background.
   Atkinson dithering with brightness ~1.15 / contrast ~1.4 suits photos on this panel;
   generate a few variants and compare the previews before picking.
 - Pins live only in `lib/dotty_core/src/board_pins.h`; source them from Waveshare's

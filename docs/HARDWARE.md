@@ -41,8 +41,14 @@ Full pin map: [`lib/dotty_core/src/board_pins.h`](../lib/dotty_core/src/board_pi
 - Charger: ETA6098, 0.2 A charge current (R35 = 820 kΩ). Its STAT pin only drives the orange LED.
 
 ## Flash layout (`partitions.csv`)
-Two 3 MB app slots (`app0`/`app1`) for BLE OTA updates from the iOS app, 1.9 MB `spiffs`
-data partition (LittleFS), 64 KB coredump.
+| Partition | Offset | Size | Holds |
+|---|---|---|---|
+| nvs | 0x9000 | 20 KB | shared settings (Wi-Fi, iPhone bond, per-cartridge) |
+| otadata | 0xe000 | 8 KB | which app boots (blank = launcher) |
+| factory | 0x10000 | 1.5 MB | the launcher, never overwritten by the app |
+| ota_0 | 0x190000 | 4.75 MB | the active cartridge |
+| storage | 0x650000 | 1.6 MB | LittleFS |
+| coredump | 0x7F0000 | 64 KB | crash dumps |
 
 ## Restoring the factory demo
 ```

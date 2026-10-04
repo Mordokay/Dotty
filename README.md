@@ -31,8 +31,9 @@ From VS Code: the ✓ (build), → (upload) and 🔌 (serial monitor) buttons in
 From a terminal:
 
 ```bash
-pio run -e music              # build the music cartridge
-pio run -e music -t upload    # build + flash it
+pio run -e music                 # build the music cartridge
+pio run -e launcher -t upload    # flash the launcher (permanent, factory slot)
+pio run -e music -t upload       # flash the music cartridge (cartridge slot)
 pio device monitor       # serial output (Ctrl+C to quit)
 ```
 
@@ -56,6 +57,8 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 - **Player:** tap the middle to play/pause, the − / + circles for volume.
   Long-press anywhere for a full refresh (clears ghosting).
 - **BOOT button:** switches between the player and the e-paper refresh test.
+- **BOOT + PWR held 1 s:** leave the cartridge for the launcher. The launcher shows the
+  installed cartridge; press BOOT there to start it again.
 - **Power on:** USB power boots straight away; on battery hold **PWR** until the screen
   redraws.
 
@@ -64,10 +67,11 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 ```
 platformio.ini        Build config — replaces the Arduino IDE "Tools" menu
 partitions.csv        8 MB flash layout with two OTA app slots
+cartridges/launcher/  Permanent launcher (factory partition): starts/installs cartridges
 cartridges/<name>/    One firmware ("cartridge") per product, e.g. cartridges/music/
 lib/dotty_core/src/   Shared code: display driver, power, logger, touch, RTC, UI, audio
 lib/dotty_core/src/board_pins.h   Every GPIO on the board
-lib/dotty_core/src/images/        Generated 1-bit bitmaps (see tools/img2epd.py)
+cartridges/<name>/images/        Generated 1-bit bitmaps (see tools/img2epd.py)
 tools/img2epd.py      Converts a picture into a dithered e-paper bitmap header
 ios/                  Dotty iOS app (SwiftUI) and its design system docs
 docs/HARDWARE.md      Hardware reference
