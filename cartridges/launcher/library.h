@@ -7,9 +7,9 @@
 
 // Cartridges kept on the SD card, so switching to one already there takes seconds
 // instead of a BLE transfer. Layout per version:
-//   /cartridges/<id>/<version>.bin   firmware image
-//   /cartridges/<id>/<version>.json  {id, name, version, size, sha256}
-//   /cartridges/<id>/<version>.icon  64x64 1-bit icon (optional)
+//   /cartridges/<id>/firmware/<version>.bin   firmware image
+//   /cartridges/<id>/firmware/<version>.json  {id, name, version, size, sha256}
+//   /cartridges/<id>/firmware/<version>.icon  64x64 1-bit icon (optional)
 // Every use re-checks the image against its SHA-256 before it is booted.
 namespace library {
 

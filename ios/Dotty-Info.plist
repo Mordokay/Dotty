@@ -8,5 +8,11 @@
 	<array>
 		<string>bluetooth-central</string>
 	</array>
+	<!-- Songs go to Dotty over the home Wi-Fi (plain HTTP to its local address). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

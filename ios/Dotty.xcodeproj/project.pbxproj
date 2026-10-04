@@ -262,6 +262,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Dotty;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Dotty uses Bluetooth to talk to your Dotty desk companion.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dotty sends songs to your Dotty over your Wi-Fi.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -306,6 +307,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Dotty;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Dotty uses Bluetooth to talk to your Dotty desk companion.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Dotty sends songs to your Dotty over your Wi-Fi.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

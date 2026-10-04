@@ -134,6 +134,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   JSON, refreshed every 10 s), `…0002` Command (write, JSON `{"cmd": …}`), `…0003` Event
   (notify, JSON replies `{"cmd": …, "ok": …}`), `…0004` Data (write-no-response, for
   installs).
+- Events longer than one notification (MTU − 3, ~290 B on iPhone) are split: every piece
+  but the last starts with byte `0x1E`; clients append pieces until one doesn't (done in
+  `DottyLink` and `ble_dotty.py`). Commands are written with response, max 512 bytes.
 - Register commands with `ble::on("<cartridge>.<verb>", handler)`; handlers run on the
   main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. A
   handler that reboots must defer it until after its reply has been notified.
@@ -143,8 +146,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Connections; bonds in NVS shared by all firmwares. `core.forget` deletes all bonds.
   bleak/macOS also gets a pairing prompt on the first command now.
 - Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only);
-  launcher: `launcher.start`, `install.begin/end/abort`; music: `music.status`,
-  `music.toggle`, `music.volume`.
+  launcher: `launcher.start`, `install.begin/end/abort`; music: see below.
 - Identity: advertisement = flags + service UUID + manufacturer data `0xFFFF` + 6-byte
   chip serial (factory MAC, e.g. 70:04:1D:D7:B1:00); name in the scan response. Info
   also has `"serial"`. iOS hides real MACs, so apps must use this serial.
@@ -185,9 +187,43 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (`install --corrupt` checks the SHA-256 rejection). Cartridge icons: `cartridges/<id>/icon.png`.
   (venv setup in the script's docstring; bleak; Bluetooth permission already granted).
 
+## SD card layout (`lib/dotty_core/src/storage.*`)
+
+- Every cartridge owns `/cartridges/<id>/`: `firmware/<version>.bin/.json/.icon` (kept by
+  the launcher) and `data/` (the cartridge's own files; `storage::myDataDir()`).
+- `storage::begin()` mounts the card and migrates older layouts once (firmware files at
+  the top of `/cartridges/<id>/` → `firmware/`, `/music/*` → music `data/library/`).
+- Names from the phone go through `storage::safeName` (one path segment, no dots first).
+
+## Wi-Fi file upload (`lib/dotty_core/src/transfer.*`)
+
+- Files from the phone go over the home Wi-Fi, not BLE (~20-50x faster). `transfer.start`
+  → Dotty joins its best saved network, starts `esp_http_server` on port 80, replies
+  `{url, token, ssid}` (16-byte random token, only sent over encrypted BLE). Phone:
+  `PUT <url>/upload?dir=<folder>&name=<file>` with header `X-Dotty-Token`; the file lands in
+  `<myDataDir>/<dir>/<name>` (via `.part`, renamed when complete). Query values are
+  url-decoded with `+` = space, so the app percent-encodes everything but unreserved ASCII.
+- `transfer.stop` (or 2 min idle) stops the server and Wi-Fi; holds the Network wake lock
+  meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
+  `transfer::registerCommands(onFinished)` and call `transfer::poll()` in the loop.
+
+## Music cartridge (`cartridges/music/`)
+
+- Data: `data/library/*.mp3` (every song once) and `data/playlists/<name>.m3u` (`#EXTM3U`
+  + lines `../library/<song>`, so the card works in computer players). `music_library.*`.
+- Queue = the library or one playlist. Next/previous (previous restarts the song after
+  3 s), auto-advance at the end, BOOT = next, volume row at the bottom of the screen.
+  A receiving screen shows while a Wi-Fi transfer is active.
+- Commands: `music.status`, `music.toggle`, `music.next`, `music.prev`, `music.volume
+  {value}`, `music.play {playlist?, index?, song?}`, `music.library` (songs + playlists),
+  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.add
+  {name, songs[]}`, `music.playlist.remove {name, song}`, `music.song.delete {name}`,
+  plus `transfer.*`. Events: `music.state` (on change, every 5 s while playing),
+  `music.library` (library or playlists changed).
+
 ## SD library + Wi-Fi fetch (launcher)
 
-- `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/<version>`
+- `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/firmware/<version>`
   `.bin/.json/.icon`. Every BLE install is copied there (verified). `install.fromCard
   {id, version?, sha256?}` flashes from the card in ~2.5 s (whole region erased up front;
   4 KB sequential erases took 10 s). `library.list` lists the card.
@@ -235,9 +271,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   DottyInfo, DottyMessage, PairedDotty in UserDefaults), `Catalog/Catalog.swift` (GitHub
   catalog, 1-bit icons → pixel-art Image), `Features/Pairing` (scan + pairing sheet),
   `Features/Dashboard` (status, cartridges via `library.fetch`, Wi-Fi via
-  `wifi.scan/add/list/remove`), `Features/Common/DottyBits.swift` (small shared views).
+  `wifi.scan/add/list/remove`), `Features/Music` (the Music cartridge's screen, opened from
+  the dashboard's "Running now" row: remote, Files → Wi-Fi upload queue with Sync,
+  playlists, library), `Features/Common/DottyBits.swift` (small shared views).
+- Per-cartridge screens: `DashboardView.route(for:)` maps a running cartridge id to its
+  screen (only when the firmware has the commands the screen needs).
 - `ios/Dotty-Info.plist` (outside the synced folder) adds `UIBackgroundModes:
-  bluetooth-central`, merged with the generated Info.plist (`INFOPLIST_FILE`).
+  bluetooth-central` and ATS `NSAllowsLocalNetworking` (song uploads); the target sets
+  `INFOPLIST_KEY_NSLocalNetworkUsageDescription`; merged with the generated Info.plist (`INFOPLIST_FILE`).
 - CoreBluetooth doesn't run in the Simulator: test on a real iPhone from Xcode.
 - Personal project: no references to the user's employer or its products (the app came
   from a prototype that used a company BLE package, removed on purpose — don't re-add it).

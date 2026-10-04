@@ -21,6 +21,7 @@ constexpr const char *kDataUuid = "b9c10004-fbaa-4525-8400-055f7a543231";
 constexpr size_t kMaxCommandLen = 512;
 constexpr size_t kQueueDepth = 8;
 constexpr uint32_t kInfoRefreshMs = 10000;
+constexpr uint8_t kMoreFollows = 0x1E;
 
 std::map<std::string, Handler> handlers;
 InfoExtender infoExtender;
@@ -31,6 +32,7 @@ QueueHandle_t queue = nullptr;
 NimBLECharacteristic *infoChar = nullptr;
 NimBLECharacteristic *eventChar = nullptr;
 volatile bool isConnected = false;
+volatile uint16_t peerMtu = 23;
 volatile bool pairingActive = false;
 volatile uint32_t passkey = 0;
 volatile bool pairingDone = false;
@@ -45,6 +47,7 @@ struct QueuedCommand {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     isConnected = true;
+    peerMtu = 23;
     LOGI("ble", "connected %s, interval %.2f ms", info.getAddress().toString().c_str(),
          info.getConnInterval() * 1.25f);
     // Faster transfers: 15-30 ms interval (Apple's accessory guidelines: min >= 15 ms,
@@ -62,6 +65,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     LOGI("ble", "disconnected (reason %d)", reason);
   }
   void onMTUChange(uint16_t mtu, NimBLEConnInfo &) override {
+    peerMtu = mtu;
     LOGI("ble", "MTU %u", mtu);
   }
   void onConnParamsUpdate(NimBLEConnInfo &info) override {
@@ -293,12 +297,37 @@ void poll() {
   }
 }
 
+// Messages longer than one notification go out in pieces: every piece but the last starts
+// with kMoreFollows (0x1E), and the client appends pieces until one doesn't.
 void notify(JsonDocument &event) {
   if (!isConnected || !eventChar) return;
   String json;
   serializeJson(event, json);
-  eventChar->setValue(json.c_str());
-  eventChar->notify();
+  const size_t room = peerMtu > 3 ? peerMtu - 3 : 20;
+  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(json.c_str());
+  size_t left = json.length();
+  if (left <= room) {
+    eventChar->notify(bytes, left);
+    return;
+  }
+  uint8_t piece[517];
+  while (left > 0 && isConnected) {
+    const bool last = left <= room;
+    size_t n = 0;
+    if (!last) piece[n++] = kMoreFollows;
+    const size_t take = last ? left : min(left, room - 1);
+    memcpy(piece + n, bytes, take);
+    n += take;
+    // The stack refuses when its buffers are full; give it a moment and retry.
+    bool sent = false;
+    for (int tries = 0; tries < 50 && !(sent = eventChar->notify(piece, n)); tries++) delay(5);
+    if (!sent) {
+      LOGW("ble", "notify dropped (%u bytes left)", static_cast<unsigned>(left));
+      return;
+    }
+    bytes += take;
+    left -= take;
+  }
 }
 
 bool connected() {

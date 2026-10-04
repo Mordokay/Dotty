@@ -1,0 +1,36 @@
+#pragma once
+
+#include <Arduino.h>
+
+#include <vector>
+
+// Songs and playlists in the Music cartridge's data folder on the SD card:
+//   library/<song>.mp3       every song, stored once
+//   playlists/<name>.m3u     a list of songs (lines "../library/<song>.mp3"), so the card
+//                            also works in computer music players
+namespace music {
+
+struct Song {
+  String name;  // file name in library/
+  size_t size = 0;
+};
+
+void begin();
+void rescan();
+
+const std::vector<Song> &songs();  // sorted by name
+bool hasSong(const String &name);
+String songPath(const String &name);
+bool deleteSong(const String &name);  // also drops it from every playlist
+
+std::vector<String> playlists();  // sorted
+std::vector<String> playlistSongs(const String &playlist);  // only songs still in the library
+bool createPlaylist(const String &name);
+bool deletePlaylist(const String &name);
+bool addToPlaylist(const String &playlist, const std::vector<String> &songNames);
+bool removeFromPlaylist(const String &playlist, const String &song);
+
+// "NAPA-Deslocado.mp3" → "NAPA - Deslocado"
+String title(const String &songName);
+
+}  // namespace music

@@ -54,9 +54,11 @@ type `d` to replay everything since boot, e.g. after plugging in later.
   connected over USB, so flashing and logs keep working.
 - **PWR hold 2 s:** power off. Shows a random picture (portrait or sleeping red panda); on battery the board switches off
   (~10 µA, the RTC keeps time), on USB it deep-sleeps. Press PWR to start again.
-- **Player:** tap the middle to play/pause, the − / + circles for volume.
-  Long-press anywhere for a full refresh (clears ghosting).
-- **BOOT button:** switches between the player and the e-paper refresh test.
+- **Music:** tap play/pause in the middle, ⏮ / ⏭ on the sides (⏮ restarts a song after
+  3 s), − / + at the bottom for volume; songs advance by themselves. BOOT = next song.
+  Long-press anywhere for a full refresh (clears ghosting). The iPhone app's Music screen
+  sends songs from Files over your Wi-Fi and manages playlists. On the SD card:
+  `/cartridges/music/data/library/` (songs) and `…/data/playlists/*.m3u`.
 - **BOOT + PWR held 1 s:** leave the cartridge for the launcher. The launcher shows the
   installed cartridge; press BOOT there to start it again.
 - **Power on:** USB power boots straight away; on battery hold **PWR** until the screen
@@ -66,7 +68,7 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 
 ```
 platformio.ini        Build config — replaces the Arduino IDE "Tools" menu
-partitions.csv        8 MB flash layout with two OTA app slots
+partitions.csv        8 MB flash layout: launcher (factory) + one cartridge slot
 cartridges/launcher/  Permanent launcher (factory partition): starts/installs cartridges
 cartridges/<name>/    One firmware ("cartridge") per product, e.g. cartridges/music/
 lib/dotty_core/src/   Shared code: display driver, power, logger, touch, RTC, UI, audio

@@ -7,7 +7,7 @@ struct DashboardView: View {
     @State private var confirmForget = false
     @State private var showDesignSystem = false
 
-    enum Route: Hashable { case cartridges, wifi }
+    enum Route: Hashable { case cartridges, wifi, music }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -41,6 +41,7 @@ struct DashboardView: View {
                 switch route {
                 case .cartridges: CartridgesView()
                 case .wifi: WiFiView()
+                case .music: MusicView()
                 }
             }
         }
@@ -79,9 +80,11 @@ struct DashboardView: View {
     private var dottyCard: some View {
         GlassCard(title: link.paired?.name ?? "Dotty", light: DottyLight.firefly.color) {
             if let info = link.info, link.connection == .connected {
+                // Cartridges with their own screen open it from here.
                 LightRow(title: info.cartridgeName ?? "No cartridge",
-                         subtitle: info.isLauncher ? "In the launcher" : "Running now",
-                         systemImage: "square.stack.3d.up")
+                         subtitle: info.isLauncher ? "In the launcher" : (route(for: info) != nil ? "Running now · open" : "Running now"),
+                         systemImage: "square.stack.3d.up",
+                         action: route(for: info).map { route in { path.append(route) } })
                 LightRow(title: "Battery", systemImage: batterySymbol(info.battery)) {
                     Text("\(info.battery)%")
                 }
@@ -101,6 +104,14 @@ struct DashboardView: View {
                     .padding(.vertical, Spacing.l)
                 Spacer()
             }
+        }
+    }
+
+    private func route(for info: DottyInfo) -> Route? {
+        guard !info.isLauncher else { return nil }
+        switch info.id {
+        case "music" where info.commands.contains("music.library"): return .music
+        default: return nil
         }
     }
 

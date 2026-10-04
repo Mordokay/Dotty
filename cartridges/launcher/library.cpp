@@ -6,20 +6,17 @@
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
 
-#include "board_pins.h"
 #include "installer.h"
 #include "log.h"
+#include "storage.h"
 
 namespace library {
 namespace {
 
-constexpr const char *kRoot = "/cartridges";
 constexpr size_t kChunk = 8192;
 
-bool mounted = false;
-
 String basePath(const String &id, const String &version) {
-  return String(kRoot) + "/" + id + "/" + version;
+  return storage::firmwareDir(id) + "/" + version;
 }
 
 String toHex(const uint8_t *digest) {
@@ -77,30 +74,25 @@ const esp_partition_t *slot() {
 }  // namespace
 
 bool begin() {
-  SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
-  mounted = SD_MMC.begin("/sdcard", true);  // 1-bit bus
-  if (!mounted) {
-    LOGW("library", "no SD card");
-    return false;
-  }
-  if (!SD_MMC.exists(kRoot)) SD_MMC.mkdir(kRoot);
-  LOGI("library", "%u cartridges on the card", static_cast<unsigned>(list().size()));
+  if (!storage::begin()) return false;
+  LOGI("library", "%u cartridge versions on the card", static_cast<unsigned>(list().size()));
   return true;
 }
 
 bool available() {
-  return mounted;
+  return storage::available();
 }
 
 std::vector<Entry> list() {
   std::vector<Entry> entries;
-  if (!mounted) return entries;
-  File root = SD_MMC.open(kRoot);
+  if (!available()) return entries;
+  File root = SD_MMC.open(storage::kRoot);
   if (!root) return entries;
   for (File dir = root.openNextFile(); dir; dir = root.openNextFile()) {
     if (!dir.isDirectory()) continue;
-    const String dirPath = String(kRoot) + "/" + dir.name();
+    const String dirPath = storage::firmwareDir(dir.name());
     File folder = SD_MMC.open(dirPath);
+    if (!folder) continue;
     for (File f = folder.openNextFile(); f; f = folder.openNextFile()) {
       const String name = f.name();
       Entry e;
@@ -128,12 +120,12 @@ bool readIcon(const Entry &entry, uint8_t *out) {
 }
 
 bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error) {
-  if (!mounted) {
+  if (!available()) {
     error = "no SD card";
     return false;
   }
   const esp_partition_t *part = slot();
-  SD_MMC.mkdir(String(kRoot) + "/" + entry.id);
+  storage::makeDirs(storage::firmwareDir(entry.id));
   const String base = basePath(entry.id, entry.version);
   File out = SD_MMC.open(base + ".bin", FILE_WRITE);
   if (!part || !out) {
@@ -170,7 +162,7 @@ bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error) {
 }
 
 String tempPath(const String &id, const String &version) {
-  SD_MMC.mkdir(String(kRoot) + "/" + id);
+  storage::makeDirs(storage::firmwareDir(id));
   return basePath(id, version) + ".part";
 }
 

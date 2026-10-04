@@ -94,6 +94,25 @@ async def info(args):
         print(json.dumps(json.loads(raw), indent=2))
 
 
+MORE_FOLLOWS = 0x1E
+
+
+def whole_messages(handler):
+    """Wraps an Event callback: long messages arrive in pieces, each but the last starting
+    with 0x1E; the handler only sees complete messages."""
+    pending = bytearray()
+
+    def on_piece(sender, data):
+        if data and data[0] == MORE_FOLLOWS:
+            pending.extend(data[1:])
+            return
+        message = bytes(pending) + bytes(data)
+        pending.clear()
+        handler(sender, message)
+
+    return on_piece
+
+
 async def command(args):
     message = build_command(args.cmd, args.params)
     reply = asyncio.get_running_loop().create_future()
@@ -106,7 +125,7 @@ async def command(args):
             print("event:", json.dumps(event), file=sys.stderr)
 
     async with await connect(args) as client:
-        await client.start_notify(EVENT, on_event)
+        await client.start_notify(EVENT, whole_messages(on_event))
         await client.write_gatt_char(COMMAND, json.dumps(message).encode(), response=True)
         try:
             print(json.dumps(await asyncio.wait_for(reply, args.wait), indent=2))
@@ -116,7 +135,7 @@ async def command(args):
 
 async def listen(args):
     async with await connect(args) as client:
-        await client.start_notify(EVENT, lambda _, data: print(data.decode()))
+        await client.start_notify(EVENT, whole_messages(lambda _, data: print(data.decode())))
         print("listening, Ctrl+C to stop", file=sys.stderr)
         while client.is_connected:
             await asyncio.sleep(1)
@@ -219,7 +238,7 @@ async def install(args):
         return replies[message["cmd"]]
 
     async with client:
-        await client.start_notify(EVENT, on_event)
+        await client.start_notify(EVENT, whole_messages(on_event))
         reply = await request({"cmd": "install.begin", **meta, "size": len(image),
                                "sha256": sha256, "icon": bool(icon)})
         if not reply.get("ok"):

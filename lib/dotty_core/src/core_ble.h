@@ -9,7 +9,9 @@
 //
 //   Info    (read)            JSON: role, id, name, version, battery, commands, …
 //   Command (write)           JSON: {"cmd": "music.volume", "value": 60}
-//   Event   (notify)          JSON: replies {"cmd": …, "ok": true, …} and status updates
+//   Event   (notify)          JSON: replies {"cmd": …, "ok": true, …} and status updates.
+//                             Long messages arrive in pieces: each piece but the last
+//                             starts with byte 0x1E.
 //   Data    (write)           bulk bytes (cartridge installs)
 //
 // Security: Info is open (so an app can identify a Dotty before pairing); Command, Event

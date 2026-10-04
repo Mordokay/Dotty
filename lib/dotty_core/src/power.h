@@ -10,7 +10,8 @@ namespace power {
 // transfers and OTA later).
 enum WakeLock : uint32_t {
   kWakeLockAudio = 1 << 0,
-  kWakeLockBle = 1 << 1,  // an app is connected
+  kWakeLockBle = 1 << 1,      // an app is connected
+  kWakeLockNetwork = 1 << 2,  // a Wi-Fi transfer is running
 };
 
 // Latches system power on (call first thing in setup).

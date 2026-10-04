@@ -29,6 +29,8 @@ final class DottyLink: NSObject {
     private(set) var paired: PairedDotty? = PairedDotty.load()
     /// The latest event that wasn't a reply (e.g. fetch.progress).
     private(set) var lastEvent: DottyMessage?
+    /// Counts events, so views can react to the same event arriving twice.
+    private(set) var eventCount = 0
 
     @ObservationIgnored private var central: CBCentralManager!
     @ObservationIgnored private var peripheral: CBPeripheral?
@@ -38,6 +40,8 @@ final class DottyLink: NSObject {
     @ObservationIgnored private var eventCharacteristic: CBCharacteristic?
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var wantsScan = false
+    /// Pieces of a long event (firmware: each piece but the last starts with 0x1E).
+    @ObservationIgnored private var pendingEvent = Data()
 
     private struct ReplyWaiter {
         let id = UUID()
@@ -215,6 +219,7 @@ final class DottyLink: NSObject {
             finishWaiter(id: waiter.id, with: .success(message))
         } else {
             lastEvent = message
+            eventCount += 1
         }
     }
 
@@ -283,6 +288,7 @@ extension DottyLink: @preconcurrency CBCentralManagerDelegate {
         commandCharacteristic = nil
         eventCharacteristic = nil
         subscribed = false
+        pendingEvent = Data()
         failAllReplies(DottyError.notConnected)
         failReadyWaiters(DottyError.notConnected)
         // Paired: keep a connection request pending, so Dotty reconnects by itself.
@@ -334,7 +340,12 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
             info = try? JSONDecoder().decode(DottyInfo.self, from: value)
             becameReadyIfComplete()
         case DottyUUID.event:
-            handle(DottyMessage(raw: value))
+            if value.first == 0x1E {
+                pendingEvent.append(value.dropFirst())
+            } else {
+                handle(DottyMessage(raw: pendingEvent + value))
+                pendingEvent = Data()
+            }
         default:
             break
         }
