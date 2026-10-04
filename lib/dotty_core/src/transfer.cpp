@@ -15,7 +15,11 @@
 namespace transfer {
 namespace {
 
-constexpr uint32_t kIdleTimeoutMs = 2 * 60 * 1000;
+// Ends a session nobody uses (e.g. the app was closed). BLE is paused meanwhile, so the
+// phone can't reach Dotty until then: keep it short.
+constexpr uint32_t kIdleTimeoutMs = 60 * 1000;
+constexpr int kRecvWaitSeconds = 15;
+constexpr int kMaxRecvTimeouts = 2;  // 30 s without data aborts an upload
 // Receiving and writing the card overlap: the HTTP task fills one block while a writer
 // task writes the previous one (writes took ~40 % of the time when done in line).
 constexpr size_t kBlock = 16384;
@@ -23,13 +27,14 @@ constexpr int kBlocks = 3;
 
 httpd_handle_t server = nullptr;
 char token[33] = {};
-std::function<void()> finishedCallback;
+std::function<void(const Summary &)> finishedCallback;
 portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Shared between the HTTP task and the main loop.
 volatile uint32_t lastActivity = 0;
 volatile size_t currentDone = 0, currentTotal = 0;
 volatile int filesReceived = 0;
+volatile int filesFailed = 0;
 volatile int filesReported = 0;
 // Fixed buffers (no heap allocation inside the spinlock), guarded by lock.
 char currentFile[128] = {};
@@ -64,7 +69,14 @@ void writerLoop(void *) {
       continue;
     }
     const uint32_t start = millis();
-    if (!writeFailed && writeTarget.write(blocks[i], blockLen[i]) != blockLen[i]) writeFailed = true;
+    if (!writeFailed) {
+      const size_t wrote = writeTarget.write(blocks[i], blockLen[i]);
+      if (wrote != blockLen[i]) {
+        writeFailed = true;
+        LOGE("transfer", "card write: %u of %u bytes (errno %d)", static_cast<unsigned>(wrote),
+             static_cast<unsigned>(blockLen[i]), errno);
+      }
+    }
     writingMs += millis() - start;
     xQueueSend(emptyBlocks, &i, portMAX_DELAY);
   }
@@ -134,12 +146,23 @@ esp_err_t reply(httpd_req_t *req, const char *status, const char *json) {
   return httpd_resp_sendstr(req, json);
 }
 
-esp_err_t handleUpload(httpd_req_t *req) {
+bool tokenMatches(httpd_req_t *req) {
   char given[sizeof(token)] = {};
-  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Token", given, sizeof(given)) != ESP_OK ||
-      strcmp(given, token) != 0) {
-    return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
-  }
+  return httpd_req_get_hdr_value_str(req, "X-Dotty-Token", given, sizeof(given)) == ESP_OK &&
+         strcmp(given, token) == 0;
+}
+
+void setCurrentFile(const char *name) {
+  portENTER_CRITICAL(&lock);
+  strlcpy(currentFile, name, sizeof(currentFile));
+  portEXIT_CRITICAL(&lock);
+}
+
+// POST (or PUT) /upload?dir=&name=. Replies {"ok":true,"name":<name as stored>}.
+// Phones should POST: iOS silently re-sends a PUT whose connection drops, so a failing
+// upload repeats without the app knowing.
+esp_err_t handleUpload(httpd_req_t *req) {
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
   const String dir = storage::safeName(queryValue(req, "dir"));
   const String name = storage::safeName(queryValue(req, "name"));
   if (name.isEmpty()) return reply(req, "400 Bad Request", "{\"ok\":false,\"error\":\"name is required\"}");
@@ -148,85 +171,120 @@ esp_err_t handleUpload(httpd_req_t *req) {
   storage::makeDirs(folder);
   const String path = folder + "/" + name;
   File out = SD_MMC.open(path + ".part", FILE_WRITE);
-  if (!out) return reply(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"cannot write to the card\"}");
+  if (!out) {
+    LOGE("transfer", "cannot create %s.part", path.c_str());
+    return reply(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"cannot write to the card\"}");
+  }
 
-  portENTER_CRITICAL(&lock);
-  strlcpy(currentFile, name.c_str(), sizeof(currentFile));
-  portEXIT_CRITICAL(&lock);
-  currentTotal = req->content_len;
+  const size_t total = req->content_len;
+  setCurrentFile(name.c_str());
+  currentTotal = total;
   currentDone = 0;
-  LOGI("transfer", "receiving %s/%s (%u bytes)", dir.c_str(), name.c_str(), static_cast<unsigned>(req->content_len));
+  LOGI("transfer", "receiving %s/%s (%u bytes)", dir.c_str(), name.c_str(), static_cast<unsigned>(total));
 
   writeTarget = out;
   writeFailed = false;
   writingMs = 0;
-  size_t remaining = req->content_len;
-  bool ok = true;
+  size_t received = 0;
+  int timeouts = 0;
+  bool connectionOk = true;
   const uint32_t started = millis();
-  while (remaining > 0 && ok && !writeFailed) {
+  while (received < total && connectionOk && !writeFailed) {
     int i;
     xQueueReceive(emptyBlocks, &i, portMAX_DELAY);
     size_t filled = 0;
-    const size_t want = min(remaining, kBlock);
+    const size_t want = min(total - received, kBlock);
     while (filled < want) {
       const int n = httpd_req_recv(req, reinterpret_cast<char *>(blocks[i] + filled), want - filled);
-      if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+        // Nothing for recv_wait_timeout seconds: the phone went away (locked, closed, out
+        // of range). Give up rather than wait forever with the transfer screen up.
+        if (++timeouts >= kMaxRecvTimeouts) {
+          connectionOk = false;
+          break;
+        }
+        continue;
+      }
       if (n <= 0) {
-        ok = false;
+        connectionOk = false;
         break;
       }
+      timeouts = 0;
       filled += n;
-      currentDone = req->content_len - remaining + filled;
+      currentDone = received + filled;
       lastActivity = millis();
     }
     blockLen[i] = filled;
-    remaining -= filled;
+    received += filled;
     xQueueSend(fullBlocks, &i, portMAX_DELAY);
   }
   const int flush = kFlush;
   xQueueSend(fullBlocks, &flush, portMAX_DELAY);
   xSemaphoreTake(writerIdle, portMAX_DELAY);  // every block of this file is on the card
-  ok = ok && !writeFailed;
   out.close();
   writeTarget = File();
-  const uint32_t elapsed = max<uint32_t>(1, millis() - started);
-  LOGI("transfer", "%u KB in %.1f s (%u KB/s), %.1f s of it writing the card",
-       static_cast<unsigned>(req->content_len / 1024), elapsed / 1000.0f,
-       static_cast<unsigned>(req->content_len / elapsed), writingMs / 1000.0f);  // writing overlaps receiving
+  const bool complete = connectionOk && !writeFailed && received == total;
 
-  portENTER_CRITICAL(&lock);
-  currentFile[0] = '\0';
-  portEXIT_CRITICAL(&lock);
-  if (!ok) {
+  const uint32_t elapsed = max<uint32_t>(1, millis() - started);
+  LOGI("transfer", "%s: %u of %u KB in %.1f s (%u KB/s), card writes %.1f s", complete ? "done" : "FAILED",
+       static_cast<unsigned>(received / 1024), static_cast<unsigned>(total / 1024), elapsed / 1000.0f,
+       static_cast<unsigned>(received / elapsed), writingMs / 1000.0f);
+  setCurrentFile("");
+  currentTotal = 0;
+  currentDone = 0;
+  lastActivity = millis();
+
+  if (!complete) {
+    filesFailed = filesFailed + 1;
     SD_MMC.remove(path + ".part");
-    return reply(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"upload interrupted\"}");
+    return reply(req, "500 Internal Server Error",
+                 writeFailed ? "{\"ok\":false,\"error\":\"writing to the card failed\"}"
+                             : "{\"ok\":false,\"error\":\"upload interrupted\"}");
   }
   SD_MMC.remove(path);
-  SD_MMC.rename(path + ".part", path);
+  if (!SD_MMC.rename(path + ".part", path)) {
+    LOGE("transfer", "cannot rename %s.part", path.c_str());
+    SD_MMC.remove(path + ".part");
+    return reply(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"cannot write to the card\"}");
+  }
   portENTER_CRITICAL(&lock);
   strlcpy(lastDir, dir.c_str(), sizeof(lastDir));
   strlcpy(lastName, name.c_str(), sizeof(lastName));
-  lastSize = req->content_len;
+  lastSize = total;
   portEXIT_CRITICAL(&lock);
   filesReceived = filesReceived + 1;
-  lastActivity = millis();
-  return reply(req, "200 OK", "{\"ok\":true}");
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["name"] = name;
+  String json;
+  serializeJson(doc, json);
+  return reply(req, "200 OK", json.c_str());
 }
 
 // POST /done: the phone has sent everything (BLE is paused, so this comes over HTTP).
 esp_err_t handleDone(httpd_req_t *req) {
-  char given[sizeof(token)] = {};
-  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Token", given, sizeof(given)) != ESP_OK ||
-      strcmp(given, token) != 0) {
-    return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
-  }
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
   stopRequested = true;  // handled by poll(), after this reply has gone out
   char json[48];
   snprintf(json, sizeof(json), "{\"ok\":true,\"files\":%d}", static_cast<int>(filesReceived));
   return reply(req, "200 OK", json);
 }
 
+// Uploads cut short by a reboot leave <name>.part files behind.
+void removePartFiles(const String &folder) {
+  File dir = SD_MMC.open(folder);
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    const String path = folder + "/" + f.name();
+    const bool isDir = f.isDirectory();
+    f.close();
+    if (isDir) removePartFiles(path);
+    else if (path.endsWith(".part")) SD_MMC.remove(path);
+  }
+}
+
 bool startServer(String &error) {
+  removePartFiles(storage::myDataDir());
   if (!startWriter()) {
     stopWriter();
     error = "not enough memory for the transfer";
@@ -235,7 +293,7 @@ bool startServer(String &error) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   config.stack_size = 8192;
-  config.recv_wait_timeout = 15;
+  config.recv_wait_timeout = kRecvWaitSeconds;
   config.lru_purge_enable = true;
   if (httpd_start(&server, &config) != ESP_OK) {
     stopWriter();
@@ -244,8 +302,10 @@ bool startServer(String &error) {
   }
   httpd_uri_t upload = {};
   upload.uri = "/upload";
-  upload.method = HTTP_PUT;
   upload.handler = handleUpload;
+  upload.method = HTTP_POST;
+  httpd_register_uri_handler(server, &upload);
+  upload.method = HTTP_PUT;  // older apps
   httpd_register_uri_handler(server, &upload);
   httpd_uri_t done = {};
   done.uri = "/done";
@@ -255,7 +315,7 @@ bool startServer(String &error) {
   return true;
 }
 
-void stop() {
+void stop(bool appFinished) {
   if (!server) return;
   httpd_stop(server);
   server = nullptr;
@@ -265,13 +325,21 @@ void stop() {
   if (blePaused && !shell::locked()) ble::start();  // locked: the shell restarts it on unlock
   blePaused = false;
   power::setWakeLock(power::kWakeLockNetwork, false);
-  LOGI("transfer", "stopped after %d files", static_cast<int>(filesReceived));
-  if (finishedCallback) finishedCallback();
+  Summary summary;
+  summary.received = filesReceived;
+  summary.failed = filesFailed;
+  summary.appFinished = appFinished;
+  LOGI("transfer", "stopped (%s): %d files, %d failed", appFinished ? "by the app" : "idle",
+       summary.received, summary.failed);
+  filesReceived = 0;
+  filesFailed = 0;
+  filesReported = 0;
+  if (finishedCallback) finishedCallback(summary);
 }
 
 }  // namespace
 
-void registerCommands(std::function<void()> onFinished) {
+void registerCommands(std::function<void(const Summary &)> onFinished) {
   finishedCallback = std::move(onFinished);
 
   ble::on("transfer.start", [](JsonObjectConst, JsonObject reply) {
@@ -329,10 +397,9 @@ void poll() {
   }
   const bool idle = currentTotal == 0 || currentDone >= currentTotal;
   if (stopRequested || (idle && millis() - lastActivity > kIdleTimeoutMs)) {
+    const bool byApp = stopRequested;
     stopRequested = false;
-    filesReceived = 0;
-    filesReported = 0;
-    stop();
+    stop(byApp);
   }
 }
 

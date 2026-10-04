@@ -78,7 +78,7 @@ private struct MusicContent: View {
             }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.mp3], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { model.queue(urls) }
+            if case .success(let urls) = result { model.outbox.add(urls) }
         }
         .alert("New playlist", isPresented: $naming) {
             TextField("Name", text: $newPlaylist)
@@ -179,30 +179,38 @@ private struct MusicContent: View {
 
     private var sendCard: some View {
         GlassCard(title: "Send songs") {
-            if model.uploads.isEmpty {
+            if let notice = model.outbox.notice {
+                NoticeCard(kind: .success, text: notice).padding(.horizontal, Spacing.s).padding(.bottom, Spacing.s)
+            }
+            if let error = model.outbox.error {
+                NoticeCard(kind: .error, text: error).padding(.horizontal, Spacing.s).padding(.bottom, Spacing.s)
+            }
+            if model.outbox.uploads.isEmpty {
                 LightRow(title: "Choose songs", subtitle: "MP3 files from the Files app", systemImage: "plus",
                          action: { picking = true })
             } else {
-                ForEach(model.uploads) { upload in
+                ForEach(model.outbox.uploads) { upload in
                     LightRow(title: upload.name, subtitle: subtitle(upload), systemImage: symbol(upload)) {
-                        if !model.syncing && upload.state != .sending {
-                            Button { model.unqueue(upload) } label: { Image(systemName: "xmark") }
+                        if !model.outbox.syncing && upload.state != .sending {
+                            Button { model.outbox.remove(upload) } label: { Image(systemName: "xmark") }
                                 .buttonStyle(.quiet(DottyLight.ember.color))
                         }
                     }
                 }
-                if model.syncing {
+                if model.outbox.syncing {
                     VStack(alignment: .leading, spacing: Spacing.s) {
-                        LightProgress(value: model.syncProgress)
-                        Text(model.syncStage ?? "").font(.lpCaption).foregroundStyle(Color.inkMuted)
-                        if let detail = model.syncDetail {
+                        LightProgress(value: model.outbox.progress)
+                        Text(model.outbox.syncStage ?? "").font(.lpCaption).foregroundStyle(Color.inkMuted)
+                        if let detail = model.outbox.detail {
                             Text(detail).font(.lpCaption.monospacedDigit()).foregroundStyle(Color.inkMuted)
                         }
+                        Text("Keep this app open until it's done; your screen stays on.")
+                            .font(.lpCaption).foregroundStyle(Color.inkFaint)
                     }
                     .padding(Spacing.m)
                 } else {
                     HStack(spacing: Spacing.m) {
-                        Button("Sync \(model.waitingCount) to Dotty") { Task { await model.sync() } }
+                        Button("Sync \(model.outbox.waitingCount) to Dotty") { Task { await model.outbox.sync() } }
                             .buttonStyle(.light())
                         Button("Add more") { picking = true }
                             .buttonStyle(.quiet())
@@ -213,7 +221,7 @@ private struct MusicContent: View {
         }
     }
 
-    private func subtitle(_ upload: MusicModel.Upload) -> String {
+    private func subtitle(_ upload: SongOutbox.Upload) -> String {
         let size = ByteCountFormatter.string(fromByteCount: upload.size, countStyle: .file)
         switch upload.state {
         case .waiting: return size
@@ -226,7 +234,7 @@ private struct MusicContent: View {
         }
     }
 
-    private func symbol(_ upload: MusicModel.Upload) -> String {
+    private func symbol(_ upload: SongOutbox.Upload) -> String {
         switch upload.state {
         case .waiting: "music.note"
         case .sending: "arrow.up.circle"

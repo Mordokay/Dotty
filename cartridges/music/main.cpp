@@ -27,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.8.1");
+DOTTY_CARTRIDGE("music", "Music", "0.8.2");
 
 namespace {
 
@@ -69,6 +69,11 @@ int orderPos = 0;
 enum class Screen { Player, Playlists };
 Screen screen = Screen::Player;
 int menuPage = 0;
+
+// After a Wi-Fi transfer: its result shows for a few seconds, then the player is back.
+constexpr uint32_t kResultMs = 4000;
+transfer::Summary lastTransfer;
+uint32_t resultUntil = 0;
 
 bool musicPlaying() {
   return player.isPlaying() && !player.isPaused();
@@ -335,6 +340,26 @@ void drawTransfer() {
   ui::drawCentered(epd, String(s.filesReceived) + (s.filesReceived == 1 ? " song received" : " songs received"), 186);
 }
 
+void drawTransferResult() {
+  const transfer::Summary &t = lastTransfer;
+  epd.fillScreen(kWhite);
+  ui::drawHeader(epd, t.ok() ? "Songs received" : "Transfer failed");
+  epd.setTextColor(kBlack);
+  epd.setFont(&FreeSansBold9pt7b);
+  const String count = String(t.received) + (t.received == 1 ? " song added" : " songs added");
+  ui::drawCentered(epd, count, t.ok() ? 100 : 70);
+  epd.setFont(&FreeSans9pt7b);
+  if (t.ok()) return;
+  if (t.failed > 0) {
+    ui::drawCentered(epd, String(t.failed) + (t.failed == 1 ? " upload broke off" : " uploads broke off"), 105);
+  } else {
+    ui::drawCentered(epd, "The app stopped", 105);
+    ui::drawCentered(epd, "sending", 125);
+  }
+  ui::drawCentered(epd, "Open the Dotty app", 160);
+  ui::drawCentered(epd, "to send the rest", 180);
+}
+
 // The menu's items: "" = Play all (the library), then every playlist.
 std::vector<String> menuItems() {
   std::vector<String> items{""};
@@ -382,6 +407,7 @@ void drawPlaylists() {
 
 void drawApp() {
   if (transfer::active()) drawTransfer();
+  else if (resultUntil) drawTransferResult();
   else if (screen == Screen::Playlists) drawPlaylists();
   else drawPlayer();
 }
@@ -579,10 +605,12 @@ void registerCommands() {
   });
 
   // Uploads go into the library folder; rescan when a transfer session ends.
-  transfer::registerCommands([] {
+  transfer::registerCommands([](const transfer::Summary &summary) {
     music::rescan();
     refreshQueue();
     notifyLibraryChanged();
+    lastTransfer = summary;
+    resultUntil = millis() + kResultMs;
     shell::showApp();
   });
 }
@@ -599,7 +627,7 @@ void loopPlayer(bool redraw, bool fullRequested) {
   const bool playing = player.isPlaying(), paused = player.isPaused();
   const uint32_t positionS = player.positionMs() / 1000;
   const bool changed = playing != lastPlaying || paused != lastPaused || currentSong() != lastSong;
-  const bool tick = screen == Screen::Player && playing && !paused && positionS != lastPositionS &&
+  const bool tick = screen == Screen::Player && !resultUntil && playing && !paused && positionS != lastPositionS &&
                     millis() - lastDraw >= kPlayerRefreshMs;
   if (fullRequested || redraw || changed || tick) {
     lastPlaying = playing;
@@ -680,6 +708,12 @@ void loop() {
 
   static bool redraw = false;
   static bool fullRequested = false;
+  // The transfer result goes away by itself, or with a tap.
+  if (resultUntil && (millis() > resultUntil || input.gesture == Touch::Gesture::Tap)) {
+    resultUntil = 0;
+    redraw = true;
+    input.gesture = Touch::Gesture::None;
+  }
   if (input.gesture == Touch::Gesture::Tap) redraw |= onTap(shell::touch.x(), shell::touch.y());
   if (input.gesture == Touch::Gesture::LongPress) fullRequested = true;  // clears ghosting
   if (input.boot && !queue.empty()) next();

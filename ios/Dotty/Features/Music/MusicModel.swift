@@ -42,41 +42,32 @@ final class MusicModel {
         }
     }
 
-    struct Upload: Identifiable {
-        enum State: Equatable { case waiting, sending, sent, failed(String) }
-        let id = UUID()
-        /// The app's own copy, so the file stays readable after the picker closes.
-        let file: URL
-        let name: String
-        let size: Int64
-        var sent: Int64 = 0
-        var state = State.waiting
-    }
-
     private(set) var songs: [Song] = []
     private(set) var playlists: [Playlist] = []
     private(set) var now = NowPlaying()
     /// Bumped whenever the library or a playlist changes, so playlist screens reload.
     private(set) var libraryVersion = 0
     private(set) var loaded = false
-    private(set) var uploads: [Upload] = []
-    private(set) var syncing = false
-    private(set) var syncStage: String?
-    /// When the current sync started sending, for its speed.
-    private(set) var syncStarted: Date?
+    /// Songs waiting to go to Dotty over Wi-Fi.
+    let outbox: SongOutbox
     var error: String?
     var notice: String?
 
     private let link: DottyLink
-    private static let outbox = FileManager.default.temporaryDirectory.appending(path: "Outbox", directoryHint: .isDirectory)
 
     init(link: DottyLink) {
         self.link = link
+        outbox = SongOutbox(link: link)
+        outbox.onSynced = { [weak self] in
+            try? await self?.loadLibrary()
+            try? await self?.reloadState()
+        }
     }
 
     // MARK: - Loading and events
 
     func load() async {
+        await outbox.endInterruptedSession()
         do {
             try await loadLibrary()
             apply(state: try await link.send("music.status"))
@@ -97,6 +88,8 @@ final class MusicModel {
             return Playlist(name: name, count: item["count"] as? Int ?? 0)
         }
         libraryVersion += 1
+        let skipped = outbox.dropSongsOnDotty(songs)
+        if skipped > 0 { notice = skipped == 1 ? "1 waiting song was already on Dotty." : "\(skipped) waiting songs were already on Dotty." }
     }
 
     func handle(_ message: DottyMessage) {
@@ -214,180 +207,15 @@ final class MusicModel {
         }
     }
 
-    // MARK: - Sending songs over Wi-Fi
-
-    /// Copies picked files into the app, ready for the next sync.
-    func queue(_ urls: [URL]) {
-        try? FileManager.default.createDirectory(at: Self.outbox, withIntermediateDirectories: true)
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let name = url.lastPathComponent
-            guard !uploads.contains(where: { $0.name == name && $0.state != .sent }) else { continue }
-            let copy = Self.outbox.appending(path: UUID().uuidString + "-" + name)
-            do {
-                try FileManager.default.copyItem(at: url, to: copy)
-                let size = (try? copy.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                uploads.append(Upload(file: copy, name: name, size: size))
-            } catch {
-                self.error = "Couldn't read \(name)."
-            }
-        }
-    }
-
-    func unqueue(_ upload: Upload) {
-        try? FileManager.default.removeItem(at: upload.file)
-        uploads.removeAll { $0.id == upload.id }
-    }
-
-    var waitingCount: Int { uploads.filter { $0.state != .sent }.count }
-
-    var syncTotalBytes: Int64 { uploads.reduce(0) { $0 + $1.size } }
-    var syncSentBytes: Int64 { uploads.reduce(0) { $0 + ($1.state == .sent ? $1.size : $1.sent) } }
-
-    var syncProgress: Double {
-        syncTotalBytes > 0 ? Double(syncSentBytes) / Double(syncTotalBytes) : 0
-    }
-
-    /// "Song 2 of 5 · 6.1 MB of 18 MB · 240 KB/s"
-    var syncDetail: String? {
-        guard syncing, let started = syncStarted else { return nil }
-        let current = (uploads.firstIndex { $0.state == .sending } ?? uploads.count - 1) + 1
-        let sent = ByteCountFormatter.string(fromByteCount: syncSentBytes, countStyle: .file)
-        let total = ByteCountFormatter.string(fromByteCount: syncTotalBytes, countStyle: .file)
-        var line = "Song \(current) of \(uploads.count) · \(sent) of \(total)"
-        let seconds = Date().timeIntervalSince(started)
-        if seconds > 1, syncSentBytes > 0 { line += " · \(Int(Double(syncSentBytes) / 1024 / seconds)) KB/s" }
-        return line
-    }
-
-    /// Dotty joins Wi-Fi and opens a one-time upload server; each song goes over HTTP.
-    func sync() async {
-        guard !syncing, waitingCount > 0 else { return }
-        syncing = true
-        error = nil
-        notice = nil
-        syncStage = "Dotty is joining Wi-Fi"
-        defer {
-            syncing = false
-            syncStage = nil
-            syncStarted = nil
-        }
-
-        let server: URL, token: String, ssid: String, pausesBluetooth: Bool
-        do {
-            let reply = try await link.send("transfer.start", timeout: 45)
-            guard let url = (reply["url"] as? String).flatMap(URL.init(string:)), let key = reply["token"] as? String else {
-                throw DottyError.refused("Dotty didn't open its upload server.")
-            }
-            server = url
-            token = key
-            ssid = reply["ssid"] as? String ?? "Dotty's Wi-Fi"
-            // Newer firmware turns Bluetooth off while it receives (uploads run ~2x faster)
-            // and expects POST /done instead of transfer.stop.
-            pausesBluetooth = reply["bluetooth"] as? String == "paused"
-        } catch {
-            self.error = describe(error)
-            return
-        }
-
-        var sentCount = 0
-        syncStarted = Date()
-        for index in uploads.indices where uploads[index].state != .sent {
-            syncStage = "Sending \(uploads[index].name)"
-            uploads[index].state = .sending
-            uploads[index].sent = 0
-            do {
-                try await send(index: index, to: server, token: token)
-                uploads[index].state = .sent
-                try? FileManager.default.removeItem(at: uploads[index].file)
-                sentCount += 1
-            } catch {
-                uploads[index].state = .failed(error.localizedDescription)
-                self.error = "Couldn't reach Dotty over Wi-Fi. Is this iPhone on \(ssid)? Allow Local Network for Dotty in Settings if iOS asked."
-                break
-            }
-        }
-
-        syncStage = "Finishing"
-        if pausesBluetooth {
-            await finish(server: server, token: token)
-            syncStage = "Reconnecting to Dotty"
-            try? await link.waitForReconnect(timeout: 30)
-        } else {
-            _ = try? await link.send("transfer.stop")
-        }
-        uploads.removeAll { $0.state == .sent }
-        try? await loadLibrary()
-        try? await reloadState()
-        if sentCount > 0 {
-            notice = sentCount == 1 ? "1 song is on Dotty." : "\(sentCount) songs are on Dotty."
-        }
-    }
-
-    /// Ends the session over Wi-Fi (Bluetooth is paused); Dotty also gives up after 2 minutes.
-    private func finish(server: URL, token: String) async {
-        var request = URLRequest(url: server.appending(path: "done"))
-        request.httpMethod = "POST"
-        request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
-        request.timeoutInterval = 10
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
     private func reloadState() async throws {
         apply(state: try await link.send("music.status"))
     }
 
     /// Dotty came back (after a sync, sleep or going out of range): clear stale errors, reload.
     func reconnected() async {
-        guard !syncing else { return }
+        guard !outbox.syncing else { return }
         error = nil
         await load()
-    }
-
-    /// The first request can fail while iOS asks for Local Network access, so retry a little.
-    private func send(index: Int, to server: URL, token: String) async throws {
-        let upload = uploads[index]
-        var components = URLComponents(url: server.appending(path: "upload"), resolvingAgainstBaseURL: false)!
-        components.percentEncodedQuery = "dir=library&name=" + Self.queryEscape(upload.name)
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "PUT"
-        request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-
-        let id = upload.id
-        let delegate = UploadProgress { [weak self] sent in
-            Task { @MainActor in
-                guard let self, let i = self.uploads.firstIndex(where: { $0.id == id }) else { return }
-                self.uploads[i].sent = sent
-            }
-        }
-        var lastError: Error = DottyError.timeout
-        for attempt in 0..<4 {
-            if attempt > 0 { try await Task.sleep(for: .seconds(2)) }
-            do {
-                let (data, response) = try await URLSession.shared.upload(for: request, fromFile: upload.file, delegate: delegate)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard status == 200 else {
-                    let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-                    throw DottyError.refused(message ?? "Dotty answered \(status).")
-                }
-                return
-            } catch let error as DottyError {
-                throw error
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError
-    }
-
-    /// Strict escaping: Dotty reads "+" as a space, so only unreserved ASCII goes as-is.
-    private static let unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-
-    private static func queryEscape(_ text: String) -> String {
-        text.addingPercentEncoding(withAllowedCharacters: unreserved) ?? text
     }
 
     private func describe(_ error: Error) -> String {
@@ -395,16 +223,3 @@ final class MusicModel {
     }
 }
 
-/// Bytes sent so far for one upload (URLSession calls this off the main actor).
-nonisolated final class UploadProgress: NSObject, URLSessionTaskDelegate, Sendable {
-    private let onSent: @Sendable (Int64) -> Void
-
-    init(onSent: @escaping @Sendable (Int64) -> Void) {
-        self.onSent = onSent
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
-                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-        onSent(totalBytesSent)
-    }
-}

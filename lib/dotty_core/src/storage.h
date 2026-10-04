@@ -22,7 +22,8 @@ String myDataDir();
 void makeDirs(const String &path);  // like mkdir -p
 bool removeTree(const String &path);
 
-// "Road trip/../x" → "Road trip/x"-style cleaning: one path segment, no slashes or dots.
+// One path segment: no slashes, colons or control characters, no leading dots; names
+// longer than 120 bytes are shortened, keeping the extension and whole UTF-8 characters.
 String safeName(const String &name);
 
 }  // namespace storage

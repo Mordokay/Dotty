@@ -203,7 +203,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   the launcher) and `data/` (the cartridge's own files; `storage::myDataDir()`).
 - `storage::begin()` mounts the card and migrates older layouts once (firmware files at
   the top of `/cartridges/<id>/` → `firmware/`, `/music/*` → music `data/library/`).
-- Names from the phone go through `storage::safeName` (one path segment, no dots first).
+- Names from the phone go through `storage::safeName` (one path segment, no dots first,
+  ≤ 120 bytes keeping the extension and whole UTF-8 characters — cutting `.mp3` off hid
+  long-named songs from the library). The app mirrors it in `SongOutbox.storedName`.
 
 ## Wi-Fi file upload (`lib/dotty_core/src/transfer.*`)
 
@@ -215,12 +217,17 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   ~240 KB/s without; a 200 ms BLE interval, `esp_coex_preference_set(WIFI)` and
   `WIFI_PS_NONE` made no difference). The rest of the limit is the prebuilt core's 5.7 KB
   TCP window (`CONFIG_LWIP_TCP_WND_DEFAULT`): a custom core build could raise it. Phone:
-  `PUT <url>/upload?dir=<folder>&name=<file>` with header `X-Dotty-Token`; the file lands in
+  `POST <url>/upload?dir=<folder>&name=<file>` with header `X-Dotty-Token` → `{ok, name}`
+  (**POST, not PUT**: iOS silently re-sends a PUT whose connection drops — one song went
+  four times in a stress test); an upload with no data for 30 s is abandoned; the file lands in
   `<myDataDir>/<dir>/<name>` (via `.part`, renamed when complete). Query values are
   url-decoded with `+` = space, so the app percent-encodes everything but unreserved ASCII.
 - `POST <url>/done` (token header; the app's normal ending since BLE is paused),
-  `transfer.stop`, or 2 min idle stops the server and Wi-Fi and restarts BLE (unless locked);
-  the phone's pending connection reconnects by itself. Card writes run on a separate task
+  `transfer.stop`, or 1 min idle stops the server and Wi-Fi and restarts BLE (unless locked);
+  the phone's pending connection reconnects by itself. The cartridge's `onFinished` gets a
+  `transfer::Summary` (received, failed, appFinished); Music shows "Songs received" or
+  "Transfer failed" for 4 s, then the player. `.part` leftovers are deleted when a session
+  starts. Wi-Fi signal matters most: at −85 dBm a stress test ran at 95–166 KB/s. Card writes run on a separate task
   (3 × 16 KB blocks) so they overlap receiving. Holds the Network wake lock meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
   `transfer::registerCommands(onFinished)` and call `transfer::poll()` in the loop.
 
@@ -295,8 +302,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   catalog, 1-bit icons → pixel-art Image), `Features/Pairing` (scan + pairing sheet),
   `Features/Dashboard` (status, cartridges via `library.fetch`, Wi-Fi via
   `wifi.scan/add/list/remove`), `Features/Music` (the Music cartridge's screen, opened from
-  the dashboard's "Running now" row: remote, Files → Wi-Fi upload queue with Sync,
-  playlists, library), `Features/Common/DottyBits.swift` (small shared views).
+  the dashboard: remote, playlists, library; `SongOutbox` = the upload queue, saved in
+  Application Support/Outbox with queue.json so it survives closing the app, drops songs
+  Dotty already has (stored name + size), keeps the screen awake while syncing, and ends
+  an interrupted session with POST /done on the next launch), `Features/Common/DottyBits.swift` (small shared views).
 - Per-cartridge screens: `DashboardView.route(for:)` maps a running cartridge id to its
   screen (only when the firmware has the commands the screen needs).
 - `ios/Dotty-Info.plist` (outside the synced folder) adds `UIBackgroundModes:

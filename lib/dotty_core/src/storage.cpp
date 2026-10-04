@@ -10,6 +10,7 @@ namespace storage {
 namespace {
 
 bool mounted = false;
+constexpr size_t kMaxNameBytes = 120;
 
 bool isFirmwareFile(const String &name) {
   return name.endsWith(".bin") || name.endsWith(".json") || name.endsWith(".icon") || name.endsWith(".part");
@@ -119,7 +120,16 @@ String safeName(const String &name) {
   }
   out.trim();
   while (out.startsWith(".")) out.remove(0, 1);  // no "..", no hidden files
-  if (out.length() > 120) out.remove(120);
+  if (out.length() > kMaxNameBytes) {
+    // Shorten the stem, keep the extension (".mp3" decides what's a song), and never cut a
+    // multi-byte UTF-8 character in half (FAT rejects invalid names).
+    const int dot = out.lastIndexOf('.');
+    const String ext = dot > 0 && out.length() - dot <= 8 ? out.substring(dot) : String();
+    size_t keep = kMaxNameBytes - ext.length();
+    while (keep > 0 && (static_cast<uint8_t>(out[keep]) & 0xC0) == 0x80) keep--;  // continuation byte
+    out = out.substring(0, keep) + ext;
+    out.trim();
+  }
   return out;
 }
 
