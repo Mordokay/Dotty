@@ -73,6 +73,7 @@ lib/dotty_core/src/   Shared code: display driver, power, logger, touch, RTC, UI
 lib/dotty_core/src/board_pins.h   Every GPIO on the board
 cartridges/<name>/images/        Generated 1-bit bitmaps (see tools/img2epd.py)
 tools/img2epd.py      Converts a picture into a dithered e-paper bitmap header
+tools/ble_dotty.py    Talks to Dotty over Bluetooth from the Mac (info, commands)
 ios/                  Dotty iOS app (SwiftUI) and its design system docs
 docs/HARDWARE.md      Hardware reference
 ```

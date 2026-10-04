@@ -6,9 +6,10 @@
 #include "rtc_clock.h"
 #include "touch.h"
 
-// The behaviour every Dotty firmware shares: PWR (short press lock/unlock, 2 s power
-// off), BOOT + PWR held 1 s (back to the launcher), auto-lock, the lock screen with
-// light sleep between minute updates, and the power-off picture. A firmware supplies
+// The behaviour every Dotty firmware shares: the Dotty Core BLE service, PWR (short
+// press lock/unlock, 2 s power off), BOOT + PWR held 1 s (back to the launcher),
+// auto-lock, the lock screen with light sleep between minute updates, and the
+// power-off picture. A firmware supplies
 // its own screen through Config and runs its logic only while update() returns true.
 namespace shell {
 

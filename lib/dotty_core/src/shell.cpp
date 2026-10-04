@@ -6,6 +6,7 @@
 #include "battery.h"
 #include "board_pins.h"
 #include "cartridge.h"
+#include "core_ble.h"
 #include "lock_screen.h"
 #include "log.h"
 #include "power.h"
@@ -83,6 +84,7 @@ void wakePeripherals() {
 void unlock() {
   if (!isLocked) return;
   wakePeripherals();
+  ble::start();
   isLocked = false;
   lastInteraction = millis();
   LOGI("ui", "unlocked");
@@ -168,6 +170,7 @@ void loopLock() {
 
   epd.waitBusy();
   sleepPeripherals();
+  ble::stop();  // the BLE controller can't light-sleep on this board (no 32 kHz crystal)
   tm now;
   rtc.read(now);
   if (now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
@@ -225,11 +228,14 @@ void begin(const Config &config) {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
   LOGI("boot", "touch %s", touch.begin() ? "ok" : "FAILED");
   LOGI("boot", "rtc %s", rtc.begin(Wire) ? "ok" : "FAILED");
+  ble::begin();
   lastInteraction = millis();
 }
 
 bool update(Input &input) {
   logBattery();
+  ble::poll();
+  power::setWakeLock(power::kWakeLockBle, ble::connected());
   const bool bootClick = handleButtons();
   const Touch::Gesture gesture = touch.poll();
 

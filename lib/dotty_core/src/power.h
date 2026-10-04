@@ -10,6 +10,7 @@ namespace power {
 // transfers and OTA later).
 enum WakeLock : uint32_t {
   kWakeLockAudio = 1 << 0,
+  kWakeLockBle = 1 << 1,  // an app is connected
 };
 
 // Latches system power on (call first thing in setup).

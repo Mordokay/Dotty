@@ -11,6 +11,7 @@
 #include "audio_player.h"
 #include "board_pins.h"
 #include "cartridge.h"
+#include "core_ble.h"
 #include "images/sleep_panda.h"
 #include "images/sleep_portrait.h"
 #include "log.h"
@@ -43,6 +44,7 @@ bool sdReady = false;
 String songPath;
 String songTitle;
 uint32_t lastRefreshMs = 0;
+bool redrawRequested = false;  // set by BLE commands that change what the player shows
 
 // "/music/NAPA-Deslocado.mp3" -> "NAPA - Deslocado"
 String titleFromPath(const String &path) {
@@ -183,6 +185,41 @@ void loopPlayer(bool redraw, bool fullRequested) {
   }
 }
 
+// ---------- BLE commands ----------
+
+void addStatus(JsonObject reply) {
+  reply["title"] = songTitle;
+  reply["playing"] = musicPlaying();
+  reply["paused"] = player.isPaused();
+  reply["position"] = player.isPlaying() ? player.positionMs() / 1000 : 0;
+  reply["duration"] = player.durationMs() / 1000;
+  reply["volume"] = player.volume();
+}
+
+void registerCommands() {
+  ble::on("music.status", [](JsonObjectConst, JsonObject reply) { addStatus(reply); });
+  ble::on("music.toggle", [](JsonObjectConst, JsonObject reply) {
+    if (!sdReady || songPath.isEmpty()) {
+      reply["ok"] = false;
+      reply["error"] = "no song";
+      return;
+    }
+    player.isPlaying() ? player.togglePause() : (void)player.play(songPath.c_str());
+    addStatus(reply);
+  });
+  ble::on("music.volume", [](JsonObjectConst args, JsonObject reply) {
+    const int value = args["value"] | -1;
+    if (value < 0 || value > 100) {
+      reply["ok"] = false;
+      reply["error"] = "value must be 0-100";
+      return;
+    }
+    player.setVolume(value);
+    redrawRequested = true;
+    addStatus(reply);
+  });
+}
+
 // ---------- shell hooks ----------
 
 void drawApp() {
@@ -247,6 +284,7 @@ void setup() {
   initStorage();
   LOGI("boot", "audio %s", player.begin() ? "ok" : "FAILED");
   player.setVolume(kVolumePercent);
+  registerCommands();
   shell::showApp();
 }
 
@@ -275,6 +313,8 @@ void loop() {
   static bool redraw = false;
   static bool fullRequested = false;
   if (tapped) redraw |= onPlayerTap(shell::touch.x(), shell::touch.y());
+  redraw |= redrawRequested;
+  redrawRequested = false;
   if (longPress) fullRequested = true;  // long press: full refresh to clear ghosting
 
   // Input is handled above immediately; drawing waits until the panel is free.

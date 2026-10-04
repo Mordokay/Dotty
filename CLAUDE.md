@@ -125,6 +125,25 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - e-paper datasheet: rated "panel life 5 years", refresh at least once per 24 h, no
   refresh-count rating. Keep full refreshes rare and periodic.
 
+## Dotty Core BLE service (`lib/dotty_core/src/core_ble.*`)
+
+- NimBLE-Arduino 2.x + ArduinoJson 7. Device name `Dotty-XXXX` (MAC suffix), the same
+  in every firmware, so the app sees one device across cartridge swaps.
+- Service `b9c10000-fbaa-4525-8400-055f7a543231`; characteristics `…0001` Info (read,
+  JSON, refreshed every 10 s), `…0002` Command (write, JSON `{"cmd": …}`), `…0003` Event
+  (notify, JSON replies `{"cmd": …, "ok": …}`), `…0004` Data (write-no-response, for
+  installs).
+- Register commands with `ble::on("<cartridge>.<verb>", handler)`; handlers run on the
+  main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. A
+  handler that reboots must defer it until after its reply has been notified.
+- Core commands: `core.ping`, `core.info`, `core.toLauncher` (cartridges only);
+  launcher: `launcher.start`; music: `music.status`, `music.toggle`, `music.volume`.
+- Power: wake lock `kWakeLockBle` while connected. Before light sleep the shell calls
+  `ble::stop()` (NimBLE deinit; the controller can't sleep without a 32 kHz crystal) and
+  `ble::start()` on unlock — so Dotty is only reachable while unlocked or awake.
+- Test from the Mac: `.venv/bin/python tools/ble_dotty.py scan|info|listen|cmd <name> k=v`
+  (venv setup in the script's docstring; bleak; Bluetooth permission already granted).
+
 ## Power management (`lib/dotty_core/src/power.*`)
 
 - Wake locks (`power::setWakeLock`) = "do not interrupt": while any is held the CPU

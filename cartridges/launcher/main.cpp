@@ -8,6 +8,7 @@
 
 #include "battery.h"
 #include "cartridge.h"
+#include "core_ble.h"
 #include "images/firefly.h"
 #include "log.h"
 #include "shell.h"
@@ -25,6 +26,7 @@ constexpr uint16_t kWhite = EpdDisplay::kWhite;
 
 CartridgeInfo installed;
 bool hasCartridge = false;
+bool startRequested = false;  // set by the launcher.start command
 
 void drawHome(const char *hint = nullptr) {
   epd.fillScreen(kWhite);
@@ -47,6 +49,17 @@ void drawHome(const char *hint = nullptr) {
   } else if (hasCartridge) {
     ui::drawCentered(epd, "BOOT: start", 192);
   }
+}
+
+void startCartridge() {
+  startRequested = false;
+  const String hint = String("Starting ") + installed.name + "...";
+  drawHome(hint.c_str());
+  shell::refresh(false);
+  epd.waitBusy();
+  cartridge::startInstalled();  // restarts the chip on success
+  drawHome("Could not start it");
+  shell::refresh(false);
 }
 
 void drawApp() {
@@ -72,6 +85,24 @@ void setup() {
   } else {
     LOGI("launcher", "no cartridge installed");
   }
+  ble::extendInfo([](JsonObject info) {
+    if (!hasCartridge) {
+      info["installed"] = nullptr;
+      return;
+    }
+    JsonObject cart = info["installed"].to<JsonObject>();
+    cart["id"] = installed.id;
+    cart["name"] = installed.name;
+    cart["version"] = installed.version;
+  });
+  ble::on("launcher.start", [](JsonObjectConst, JsonObject reply) {
+    if (!hasCartridge) {
+      reply["ok"] = false;
+      reply["error"] = "no cartridge installed";
+      return;
+    }
+    startRequested = true;  // started from loop() once this reply has gone out
+  });
   shell::showApp();
 }
 
@@ -79,12 +110,6 @@ void loop() {
   shell::Input input;
   if (!shell::update(input)) return;
 
-  if (input.boot && hasCartridge) {
-    const String hint = String("Starting ") + installed.name + "...";
-    drawHome(hint.c_str());
-    shell::refresh(false);
-    epd.waitBusy();
-    cartridge::startInstalled();
-  }
+  if ((input.boot || startRequested) && hasCartridge) startCartridge();
   delay(10);
 }

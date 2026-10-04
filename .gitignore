@@ -10,3 +10,6 @@ xcuserdata/
 *.xcuserstate
 DerivedData/
 build/
+
+# Python tools
+.venv/
