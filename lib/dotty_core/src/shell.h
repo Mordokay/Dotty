@@ -62,4 +62,8 @@ int partialsSinceFull();
 bool locked();
 void lock();
 
+// Unlocks if locked and restarts the auto-lock timer. Call while something the user
+// is watching is in progress (e.g. a cartridge install).
+void wake();
+
 }  // namespace shell

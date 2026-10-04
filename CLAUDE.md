@@ -137,11 +137,26 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. A
   handler that reboots must defer it until after its reply has been notified.
 - Core commands: `core.ping`, `core.info`, `core.toLauncher` (cartridges only);
-  launcher: `launcher.start`; music: `music.status`, `music.toggle`, `music.volume`.
+  launcher: `launcher.start`, `install.begin/end/abort`; music: `music.status`,
+  `music.toggle`, `music.volume`.
+- Identity: advertisement = flags + service UUID + manufacturer data `0xFFFF` + 6-byte
+  chip serial (factory MAC, e.g. 70:04:1D:D7:B1:00); name in the scan response. Info
+  also has `"serial"`. iOS hides real MACs, so apps must use this serial.
+- **Install protocol** (launcher only, `cartridges/launcher/installer.*`): see the
+  header comment. Data writes are unacknowledged with a 4-byte offset prefix; the
+  launcher drops out-of-order data and asks `install.resend {from}`; `install.end`
+  may answer `missingFrom`; SHA-256 + `esp_ota_end` verify before the boot partition
+  changes. Disconnect for 5 s aborts. Payload = 64×64 1-bit icon (512 B) + image.
+  Clients **must wait for CoreBluetooth's `canSendWriteWithoutResponse`** before each
+  write — writes sent while its queue is full are silently dropped (bleak doesn't
+  check it; ble_dotty.py reads it from bleak's CBPeripheral).
+- Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
+  occasionally much slower right after another transfer). Expect better from iOS.
 - Power: wake lock `kWakeLockBle` while connected. Before light sleep the shell calls
   `ble::stop()` (NimBLE deinit; the controller can't sleep without a 32 kHz crystal) and
   `ble::start()` on unlock — so Dotty is only reachable while unlocked or awake.
-- Test from the Mac: `.venv/bin/python tools/ble_dotty.py scan|info|listen|cmd <name> k=v`
+- Test from the Mac: `.venv/bin/python tools/ble_dotty.py scan|info|listen|cmd <name> k=v|install <bin>`
+  (`install --corrupt` checks the SHA-256 rejection). Cartridge icons: `cartridges/<id>/icon.png`.
   (venv setup in the script's docstring; bleak; Bluetooth permission already granted).
 
 ## Power management (`lib/dotty_core/src/power.*`)

@@ -286,6 +286,11 @@ bool locked() {
   return isLocked;
 }
 
+void wake() {
+  lastInteraction = millis();
+  unlock();
+}
+
 void lock() {
   if (isLocked) return;
   isLocked = true;

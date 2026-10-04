@@ -24,6 +24,9 @@ constexpr uint32_t kInfoRefreshMs = 10000;
 
 std::map<std::string, Handler> handlers;
 InfoExtender infoExtender;
+DataHandler dataHandler;
+uint8_t serialBytes[6];
+String serialText;
 QueueHandle_t queue = nullptr;
 NimBLECharacteristic *infoChar = nullptr;
 NimBLECharacteristic *eventChar = nullptr;
@@ -36,9 +39,14 @@ struct QueuedCommand {
 };
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &info) override {
+  void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     isConnected = true;
-    LOGI("ble", "connected %s", info.getAddress().toString().c_str());
+    LOGI("ble", "connected %s, interval %.2f ms", info.getAddress().toString().c_str(),
+         info.getConnInterval() * 1.25f);
+    // Faster transfers: 15-30 ms interval (Apple's accessory guidelines: min >= 15 ms,
+    // max >= min + 15 ms) and 251-byte link-layer packets.
+    server->updateConnParams(info.getConnHandle(), 12, 24, 0, 400);
+    server->setDataLen(info.getConnHandle(), 251);
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
     isConnected = false;
@@ -46,6 +54,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onMTUChange(uint16_t mtu, NimBLEConnInfo &) override {
     LOGI("ble", "MTU %u", mtu);
+  }
+  void onConnParamsUpdate(NimBLEConnInfo &info) override {
+    LOGI("ble", "interval %.2f ms, latency %u", info.getConnInterval() * 1.25f, info.getConnLatency());
+  }
+  void onPhyUpdate(NimBLEConnInfo &, uint8_t txPhy, uint8_t rxPhy) override {
+    LOGI("ble", "PHY tx %u rx %u (2 = 2M)", txPhy, rxPhy);
   }
 };
 
@@ -63,8 +77,17 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+class DataCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+    if (!dataHandler) return;
+    const NimBLEAttValue &value = c->getValue();
+    dataHandler(value.data(), value.size());
+  }
+};
+
 ServerCallbacks serverCallbacks;
 CommandCallbacks commandCallbacks;
+DataCallbacks dataCallbacks;
 
 void buildInfo(JsonDocument &doc) {
   const CartridgeInfo &me = cartridge::self();
@@ -72,6 +95,7 @@ void buildInfo(JsonDocument &doc) {
   doc["id"] = me.id;
   doc["name"] = me.name;
   doc["version"] = me.version;
+  doc["serial"] = serialText;
   doc["battery"] = batteryPercent(batteryMillivolts());
   JsonArray cmds = doc["commands"].to<JsonArray>();
   for (const auto &entry : handlers) cmds.add(entry.first.c_str());
@@ -135,9 +159,13 @@ void registerCoreCommands() {
 void begin() {
   queue = xQueueCreate(kQueueDepth, sizeof(QueuedCommand));
   const uint64_t mac = ESP.getEfuseMac();
+  for (int i = 0; i < 6; i++) serialBytes[i] = static_cast<uint8_t>(mac >> (8 * i));
+  char text[18];
+  snprintf(text, sizeof(text), "%02X:%02X:%02X:%02X:%02X:%02X", serialBytes[0], serialBytes[1],
+           serialBytes[2], serialBytes[3], serialBytes[4], serialBytes[5]);
+  serialText = text;
   char name[16];
-  snprintf(name, sizeof(name), "Dotty-%02X%02X", static_cast<uint8_t>(mac >> 32),
-           static_cast<uint8_t>(mac >> 40));
+  snprintf(name, sizeof(name), "Dotty-%02X%02X", serialBytes[4], serialBytes[5]);
   deviceName = name;
   registerCoreCommands();
   start();
@@ -147,6 +175,8 @@ void start() {
   if (isRunning) return;
   NimBLEDevice::init(deviceName.c_str());
   NimBLEDevice::setMTU(517);
+  // Prefer the 2M PHY (double bitrate) when the phone/Mac supports it.
+  NimBLEDevice::setDefaultPhy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
 
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(&serverCallbacks, false);
@@ -158,13 +188,26 @@ void start() {
       service->createCharacteristic(kCommandUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   command->setCallbacks(&commandCallbacks);
   eventChar = service->createCharacteristic(kEventUuid, NIMBLE_PROPERTY::NOTIFY);
-  service->createCharacteristic(kDataUuid, NIMBLE_PROPERTY::WRITE_NR);
+  // Data accepts acknowledged writes (reliable: unacknowledged ones get dropped under
+  // load) and unacknowledged ones.
+  service->createCharacteristic(kDataUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR)
+      ->setCallbacks(&dataCallbacks);
   refreshInfo();
 
+  // Advertisement (31 bytes, full): flags + service UUID + manufacturer data with the
+  // serial. The name goes in the scan response.
+  NimBLEAdvertisementData advData;
+  advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+  advData.addServiceUUID(kServiceUuid);
+  uint8_t manufacturer[8] = {0xFF, 0xFF};  // 0xFFFF: no registered company id
+  memcpy(manufacturer + 2, serialBytes, sizeof(serialBytes));
+  advData.setManufacturerData(manufacturer, sizeof(manufacturer));
+  NimBLEAdvertisementData scanData;
+  scanData.setName(deviceName.c_str());
+
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->setName(deviceName.c_str());
-  adv->addServiceUUID(kServiceUuid);
-  adv->enableScanResponse(true);
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanData);
   adv->start();
   isRunning = true;
   LOGI("ble", "advertising as %s", deviceName.c_str());
@@ -190,6 +233,14 @@ void on(const char *cmd, Handler handler) {
 
 void extendInfo(InfoExtender extender) {
   infoExtender = std::move(extender);
+}
+
+void onData(DataHandler handler) {
+  dataHandler = std::move(handler);
+}
+
+const String &serial() {
+  return serialText;
 }
 
 void poll() {
