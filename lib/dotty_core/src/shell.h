@@ -28,6 +28,12 @@ struct Config {
   String (*nowPlaying)() = nullptr;
   // Last chance to stop things before the power-off picture is drawn.
   void (*beforePowerOff)() = nullptr;
+  // Periodic work while locked (e.g. fetch the weather). Every lockedWakeSeconds the
+  // shell wakes the firmware (even from sleep) and calls onLockedWake on the main loop;
+  // return true if the lock screen should be redrawn. 0 = no extra wake-ups (the lock
+  // screen itself still updates its clock once a minute).
+  uint32_t lockedWakeSeconds = 0;
+  bool (*onLockedWake)() = nullptr;
   // Bluetooth while locked. false (default): locking turns Bluetooth off (the phone
   // disconnects) so Dotty can sleep between minute wake-ups; unlocking turns it back on.
   // true: a connected phone stays connected while locked (e.g. a cartridge receiving

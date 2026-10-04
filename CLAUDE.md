@@ -166,6 +166,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `cartridges/<id>/cartridge.json` = description + requires.
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
+- The lock screen (clock once a minute) is drawn by whichever firmware is running — each
+  has the shell — not by the launcher in the background. Periodic locked work is per
+  firmware: `shell::Config::lockedWakeSeconds` + `onLockedWake` (return true to redraw the
+  lock screen); the shell sleeps until the next minute or the next app wake, whichever
+  comes first (e.g. Weather fetching every 10 min).
 - Bluetooth while locked is per firmware: `shell::Config::bluetoothWhileLocked`.
   false (default; launcher, music, weather): locking stops BLE so Dotty sleeps; unlock
   restarts it. true (e.g. a future ANCS notifications cartridge): a connected phone stays
@@ -220,6 +225,18 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Build check without signing:
   `xcodebuild -project ios/Dotty.xcodeproj -scheme Dotty -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
 - Signing uses the user's **personal** team (picked in Xcode); never the company team.
+- Structure: `Bluetooth/DottyLink.swift` (@Observable, MainActor; CBCentralManager on the
+  main queue with `@preconcurrency` delegate conformances; scan with serial from the
+  manufacturer data, `pair` → `remember`, `reconnect` on foreground, pending reconnect
+  after any disconnect while paired, `send(cmd, args) async throws` matching replies by
+  "cmd", `ensureLauncher`, `waitForReconnect`), `Bluetooth/DottyProtocol.swift` (UUIDs,
+  DottyInfo, DottyMessage, PairedDotty in UserDefaults), `Catalog/Catalog.swift` (GitHub
+  catalog, 1-bit icons → pixel-art Image), `Features/Pairing` (scan + pairing sheet),
+  `Features/Dashboard` (status, cartridges via `library.fetch`, Wi-Fi via
+  `wifi.scan/add/list/remove`), `Features/Common/DottyBits.swift` (small shared views).
+- `ios/Dotty-Info.plist` (outside the synced folder) adds `UIBackgroundModes:
+  bluetooth-central`, merged with the generated Info.plist (`INFOPLIST_FILE`).
+- CoreBluetooth doesn't run in the Simulator: test on a real iPhone from Xcode.
 - Personal project: no references to the user's employer or its products (the app came
   from a prototype that used a company BLE package, removed on purpose — don't re-add it).
 - `ios/LICENSE` is GPL-3.0.

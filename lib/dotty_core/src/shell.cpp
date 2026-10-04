@@ -45,6 +45,17 @@ volatile bool bootWentDown = false;
 uint32_t comboStartedAt = 0;
 bool comboUsed = false;  // BOOT + PWR were held together: neither counts as a click
 
+// Next time onLockedWake is due (millis keeps counting through light sleep).
+uint32_t nextLockedWake = 0;
+
+// Runs the firmware's periodic locked work when due. True if the lock screen changed.
+bool runLockedWake() {
+  if (!cfg.onLockedWake || cfg.lockedWakeSeconds == 0) return false;
+  if (static_cast<int32_t>(millis() - nextLockedWake) < 0) return false;
+  nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
+  return cfg.onLockedWake();
+}
+
 // What the lock screen currently shows, to know when it needs a redraw.
 int lockShownMinute = -1;
 String lockShownText;
@@ -163,7 +174,8 @@ void loopLock() {
     lastCheck = millis();
     tm now;
     rtc.read(now);
-    if (now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
+    const bool appChanged = runLockedWake();
+    if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
       drawLock();
       refresh(false);
     }
@@ -175,16 +187,22 @@ void loopLock() {
   ble::stop();  // the BLE controller can't light-sleep on this board (no 32 kHz crystal)
   tm now;
   rtc.read(now);
-  if (now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
+  const bool appChanged = runLockedWake();
+  if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
     drawLock();
     refresh(false);
     epd.waitBusy();
     rtc.read(now);
   }
 
-  // Wake just after the next minute starts. The audio rail goes off while asleep and
-  // comes back on at wake so the RTC is reachable over I2C again.
-  const uint32_t sleepMs = (60 - now.tm_sec) * 1000 + 200;
+  // Wake just after the next minute starts, or earlier when the firmware's own locked
+  // work is due. The audio rail goes off while asleep and comes back on at wake so the
+  // RTC is reachable over I2C again.
+  uint32_t sleepMs = (60 - now.tm_sec) * 1000 + 200;
+  if (cfg.onLockedWake && cfg.lockedWakeSeconds) {
+    const int32_t untilApp = static_cast<int32_t>(nextLockedWake - millis());
+    sleepMs = min<uint32_t>(sleepMs, max<int32_t>(untilApp, 100));
+  }
   power::setAudioRail(false);
   const bool byButton = power::lightSleep(sleepMs);
   power::setAudioRail(true);
@@ -346,6 +364,7 @@ void wake() {
 void lock() {
   if (isLocked) return;
   isLocked = true;
+  nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
   if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock
   const String playing = nowPlaying();
   LOGI("ui", "locked%s", playing.length() ? " (keeps playing)" : "");

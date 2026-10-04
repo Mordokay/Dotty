@@ -1,22 +1,25 @@
 import SwiftUI
 
+/// Pairing first; the dashboard once a Dotty is paired. Every time the app comes to the
+/// foreground it reconnects to the paired Dotty (it links up as soon as Dotty advertises).
 struct ContentView: View {
+    @State private var link = DottyLink()
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         Group {
-            if ProcessInfo.processInfo.arguments.contains("-emptyField") {
-                // Debug: the light field alone, to check how the fireflies are spread.
-                LightField { Color.clear }
+            if link.paired == nil {
+                WelcomeView()
             } else {
-                ShowcaseView()
+                DashboardView()
             }
         }
-        #if DEBUG
-        .overlay(alignment: .topTrailing) {
-            FrameRateBadge()
-                .padding(.trailing, 20)
-                .padding(.top, 2)
+        .environment(link)
+        .preferredColorScheme(.dark)
+        .animation(.settle, value: link.paired)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { link.reconnect() }
         }
-        #endif
     }
 }
 
