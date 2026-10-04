@@ -1,0 +1,16 @@
+<!-- @dsCard group="Surfaces" height=300 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ListRow — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo-col"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h(L.Glass, null,
+      h(L.ListRow, { light: 'lagoon', title: 'DOTTY', subtitle: 'Signal −58 dBm', onClick: function () {} }),
+      h(L.ListRow, { light: 'bloom', title: 'Mia', subtitle: 'Touched you 2 min ago', onClick: function () {} }),
+      h(L.ListRow, { leading: h(L.Icon, { name: 'wave' }), title: 'Vibration', trailing: '80%' })));
+</script>
+</body>
+</html>

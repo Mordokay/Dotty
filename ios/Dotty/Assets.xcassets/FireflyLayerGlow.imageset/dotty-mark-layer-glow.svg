@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"><defs>
+<radialGradient id="haloG" cx="512" cy="700" r="310" gradientUnits="userSpaceOnUse">
+  <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/><stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0.2"/>
+  <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+<linearGradient id="abdomenG" x1="0" y1="420" x2="0" y2="880" gradientUnits="userSpaceOnUse">
+  <stop offset="0" stop-color="#2E2E2E"/><stop offset="0.38" stop-color="#8A8A8A"/>
+  <stop offset="0.6" stop-color="#E6E6E6"/><stop offset="1" stop-color="#FFFFFF"/></linearGradient>
+<filter id="bloom" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="28"/></filter>
+</defs>
+<circle cx="512" cy="700" r="310" fill="url(#haloG)"/>
+<ellipse cx="512" cy="790" rx="120" ry="90" fill="#FFFFFF" opacity="0.8" filter="url(#bloom)"/>
+<path d="M512 400 C 610 400, 640 560, 632 700 C 626 800, 580 880, 512 880 C 444 880, 398 800, 392 700 C 384 560, 414 400, 512 400 Z" fill="url(#abdomenG)"/>
+<g fill="none" stroke="#6E6E6E" stroke-opacity="0.45" stroke-width="7" stroke-linecap="round">
+  <path d="M404 640 Q 512 668 620 640"/><path d="M410 718 Q 512 746 614 718"/><path d="M428 792 Q 512 816 596 792"/>
+</g>
+</svg>

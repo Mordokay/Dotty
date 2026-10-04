@@ -1,0 +1,79 @@
+{
+  "v": 3,
+  "layout": "files",
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-02T20:10:00Z"
+  },
+  "title": "Dotty",
+  "namespace": "Dotty",
+  "libraries": [
+    {
+      "name": "react",
+      "version": "18"
+    },
+    {
+      "name": "react-dom",
+      "version": "18"
+    }
+  ],
+  "sections": {},
+  "groups": [
+    "Logos"
+  ],
+  "assetGroups": {
+    "Logos": {
+      "name": "Logos",
+      "tile": "l",
+      "order": [
+        "dotty-mark.svg",
+        "dotty-mark-flat.svg",
+        "dotty-mark-one-color-starlight.svg",
+        "dotty-mark-one-color-heartwood.svg",
+        "dotty-app-icon.svg"
+      ],
+      "files": {
+        "dotty-mark.svg": {
+          "name": "dotty-mark.svg",
+          "blob": "9ad44ee3663a95b836a86a843d1dd6f9",
+          "size": 5277,
+          "type": "image/svg+xml"
+        },
+        "dotty-mark-flat.svg": {
+          "name": "dotty-mark-flat.svg",
+          "blob": "a11f5171a0602f91e733e3d1d66aab6b",
+          "size": 1089,
+          "type": "image/svg+xml"
+        },
+        "dotty-mark-one-color-starlight.svg": {
+          "name": "dotty-mark-one-color-starlight.svg",
+          "blob": "88e8e491f7665903a3685ddd5e0a9f88",
+          "size": 27706,
+          "type": "image/svg+xml"
+        },
+        "dotty-mark-one-color-heartwood.svg": {
+          "name": "dotty-mark-one-color-heartwood.svg",
+          "blob": "35eba5693afb9b9a16974586f124d706",
+          "size": 27706,
+          "type": "image/svg+xml"
+        },
+        "dotty-app-icon.svg": {
+          "name": "dotty-app-icon.svg",
+          "blob": "c53d73a2092853d69a10a3843d15f288",
+          "size": 6778,
+          "type": "image/svg+xml"
+        }
+      }
+    }
+  },
+  "blobs": {},
+  "docs": {
+    "sections": []
+  },
+  "lastChange": {
+    "by": "Pedro Saldanha",
+    "at": "2026-10-02T22:40:00Z",
+    "via": "Claude Code",
+    "note": "Firefly glow kept inside the mark's frame; slider colours by level; fireflies drift through colours"
+  }
+}

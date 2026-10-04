@@ -1,0 +1,17 @@
+<!-- @dsCard group="Actions" height=160 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>IconButton — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(L.IconButton, { icon: 'play', label: 'Play pattern', variant: 'light' }),
+    h(L.IconButton, { icon: 'play', label: 'Play in lagoon', variant: 'light', light: 'lagoon' }),
+    h(L.IconButton, { icon: 'stop', label: 'Stop' }),
+    h(L.IconButton, { icon: 'plus', label: 'New pattern' }),
+    h(L.IconButton, { icon: 'close', label: 'Close' })));
+</script>
+</body>
+</html>

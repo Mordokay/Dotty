@@ -1,0 +1,15 @@
+<!-- @dsCard group="Brand" height=260 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Logo — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(L.Logo, { size: 120 }),
+    h(L.Logo, { size: 64, layout: 'row' }),
+    h(L.Logo, { size: 56, wordmark: false })));
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+<!-- @dsCard group="Light" height=400 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>LightField — preview</title></head>
+<body>
+<div id="root" class="lp-demo-col" style="max-width:none;padding:24px"></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h(L.LightField, { lights: ['lagoon', 'bloom', 'firefly'], seed: 9, style: { height: 340, borderRadius: 40 } },
+      h('div', { style: { height: 340, display: 'grid', placeItems: 'center' } },
+        h(L.Logo, { size: 110 }))));
+</script>
+</body>
+</html>

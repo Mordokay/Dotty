@@ -1,0 +1,153 @@
+@import url("https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&family=Nunito:wght@400;500;600;700&display=swap");
+
+body { margin: 0; background: var(--void); color: var(--ink); font-family: var(--font-text); font-size: 17px; line-height: 24px; }
+.lp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.lp-icon { flex: none; display: block; }
+
+/* A light's three parts, from any colour in --lp-light. */
+:root { --lp-light: var(--light-firefly); }
+
+/* ---- LightField: layered light sources with parallax ------------------------------------------ */
+.lp-field { position: relative; overflow: hidden; background: var(--void); color: var(--ink); isolation: isolate; --lp-tilt-x: 0; --lp-tilt-y: 0; }
+.lp-layer { position: absolute; inset: -12%; pointer-events: none; transition: transform 600ms var(--ease-settle); }
+.lp-layer-far { transform: translate(calc(var(--lp-tilt-x) * (1 - var(--depth-far)) * var(--tilt-reach) * -1), calc(var(--lp-tilt-y) * (1 - var(--depth-far)) * var(--tilt-reach) * -1)); }
+.lp-layer-back { transform: translate(calc(var(--lp-tilt-x) * (1 - var(--depth-back)) * var(--tilt-reach) * -1), calc(var(--lp-tilt-y) * (1 - var(--depth-back)) * var(--tilt-reach) * -1)); }
+.lp-layer-ui { position: relative; z-index: 1; }
+.lp-source { position: absolute; aspect-ratio: 1; border-radius: 50%; transform: translate(-50%, -50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--lp-light) 70%, transparent) 0%, color-mix(in srgb, var(--lp-light) 30%, transparent) 32%, transparent 66%);
+  mix-blend-mode: plus-lighter; opacity: 0.42; animation: lp-drift-0 var(--duration-drift) var(--ease-breathe) infinite; }
+.lp-source-1 { animation-name: lp-drift-1; animation-duration: 17s; }
+.lp-source-2 { animation-name: lp-drift-2; animation-duration: 21s; }
+.lp-source-3 { animation-name: lp-drift-1; animation-duration: 25s; animation-direction: reverse; }
+.lp-mote { position: absolute; width: 5px; height: 5px; filter: hue-rotate(0deg); border-radius: 50%; background: color-mix(in srgb, var(--lp-light) 40%, white);
+  box-shadow: 0 0 10px 3px color-mix(in srgb, var(--lp-light) 70%, transparent); mix-blend-mode: screen; animation: lp-mote 9s var(--ease-breathe) infinite, lp-hue 40s linear infinite; }
+@keyframes lp-hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
+@keyframes lp-drift-0 { 0%, 100% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-38%, -60%) scale(1.15); } }
+@keyframes lp-drift-1 { 0%, 100% { transform: translate(-50%, -50%) scale(1.1); } 50% { transform: translate(-62%, -42%) scale(0.92); } }
+@keyframes lp-drift-2 { 0%, 100% { transform: translate(-50%, -50%) scale(0.95); } 50% { transform: translate(-45%, -38%) scale(1.2); } }
+@keyframes lp-mote { 0%, 100% { transform: translate(0, 0); opacity: 0.2; } 50% { transform: translate(14px, -22px); opacity: 1; } }
+
+/* ---- LightOrb ----------------------------------------------------------------------------------- */
+.lp-orb { display: inline-block; flex: none; border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #fff 0%, color-mix(in srgb, var(--lp-light) 55%, white) 18%, var(--lp-light) 48%, color-mix(in oklab, var(--lp-light) 55%, black) 100%);
+  box-shadow: 0 0 18px 4px color-mix(in srgb, var(--lp-light) 55%, transparent), 0 0 64px 18px color-mix(in srgb, var(--lp-light) 22%, transparent); }
+.lp-orb-pulse { animation: lp-orb-pulse var(--duration-pulse) var(--ease-breathe) infinite; }
+@keyframes lp-orb-pulse {
+  0%, 100% { transform: scale(0.94); box-shadow: 0 0 12px 2px color-mix(in srgb, var(--lp-light) 45%, transparent), 0 0 40px 10px color-mix(in srgb, var(--lp-light) 16%, transparent); }
+  50% { transform: scale(1.04); box-shadow: 0 0 26px 7px color-mix(in srgb, var(--lp-light) 65%, transparent), 0 0 90px 30px color-mix(in srgb, var(--lp-light) 26%, transparent); }
+}
+
+/* ---- Glass ------------------------------------------------------------------------------------------ */
+.lp-glass { position: relative; border-radius: var(--radius-card); padding: var(--space-s);
+  background: linear-gradient(165deg, var(--glass-strong), var(--glass) 40%, transparent), var(--glass-veil);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(170%); backdrop-filter: blur(var(--blur-glass)) saturate(170%);
+  box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.05), var(--depth); display: flex; flex-direction: column; }
+.lp-glass-lit::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; mix-blend-mode: screen;
+  background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--lp-light) 28%, transparent), transparent 60%); }
+.lp-glass-lit { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lp-light) 60%, white), inset 0 0 0 1px color-mix(in srgb, var(--lp-light) 25%, transparent), 0 0 40px 2px color-mix(in srgb, var(--lp-light) 18%, transparent), var(--depth); }
+.lp-glass-title { position: relative; margin: var(--space-s) var(--space-m) var(--space-xs); font-family: var(--font-display); font-size: 24px; line-height: 30px; font-weight: 700; }
+
+/* ---- Button / IconButton -------------------------------------------------------------------------------- */
+.lp-btn, .lp-iconbtn { font: inherit; font-family: var(--font-text); font-size: 17px; font-weight: 600; line-height: 22px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-s); border: 0; border-radius: var(--radius-pill); cursor: pointer; color: var(--ink); -webkit-tap-highlight-color: transparent;
+  transition: transform var(--duration-tap) linear, box-shadow var(--duration-settle) var(--ease-settle), background var(--duration-tap) linear; }
+.lp-btn { min-height: 52px; padding: 0 var(--space-xl); }
+.lp-btn-s { min-height: 44px; padding: 0 var(--space-l); font-size: 15px; line-height: 20px; }
+.lp-btn-block { display: flex; width: 100%; }
+.lp-iconbtn { width: 52px; height: 52px; padding: 0; border-radius: 50%; }
+.lp-btn:active, .lp-iconbtn:active { transform: scale(0.95); }
+.lp-btn-light { color: var(--on-light);
+  background: radial-gradient(130% 160% at 30% 0%, color-mix(in srgb, var(--lp-light) 45%, white) 0%, var(--lp-light) 45%, color-mix(in oklab, var(--lp-light) 75%, black) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 0 22px 4px color-mix(in srgb, var(--lp-light) 50%, transparent), 0 0 60px 18px color-mix(in srgb, var(--lp-light) 22%, transparent); }
+.lp-btn-light:active { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 0 34px 8px color-mix(in srgb, var(--lp-light) 65%, transparent), 0 0 90px 30px color-mix(in srgb, var(--lp-light) 30%, transparent); }
+.lp-btn-glass { background: linear-gradient(165deg, var(--glass-strong), var(--glass)), var(--glass-veil); -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(170%); backdrop-filter: blur(var(--blur-glass)) saturate(170%); box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.05); }
+.lp-btn-glass:hover { background: linear-gradient(165deg, rgba(255, 255, 255, 0.18), var(--glass-strong)), var(--glass-veil); }
+.lp-btn-quiet { background: transparent; color: var(--lp-light); }
+.lp-btn-quiet:hover { background: var(--glass); }
+.lp-btn:disabled, .lp-iconbtn:disabled { opacity: var(--opacity-disabled); cursor: default; transform: none; }
+.lp-btn:focus-visible, .lp-iconbtn:focus-visible, .lp-row-button:focus-visible, .lp-toggle:focus-visible, .lp-color:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+
+/* ---- ListRow ---------------------------------------------------------------------------------------------- */
+.lp-row { position: relative; display: flex; align-items: center; gap: var(--space-m); width: 100%; box-sizing: border-box; min-height: 56px; padding: var(--space-s) var(--space-m); border-radius: 20px; text-align: left; font: inherit; color: var(--ink); background: transparent; border: 0; }
+.lp-row-button { cursor: pointer; transition: background var(--duration-tap) linear; }
+.lp-row-button:hover, .lp-row-button:active { background: var(--glass); }
+.lp-row-leading { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--glass-strong); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.lp-row-light { flex: none; width: 22px; height: 22px; margin: 9px; border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #fff 0%, var(--lp-light) 50%, color-mix(in oklab, var(--lp-light) 60%, black) 100%);
+  box-shadow: 0 0 12px 3px color-mix(in srgb, var(--lp-light) 55%, transparent); }
+.lp-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.lp-row-title { font-size: 17px; line-height: 22px; font-weight: 600; }
+.lp-row-subtitle { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink-muted); }
+.lp-row-trailing { flex: none; font-size: 15px; line-height: 20px; font-weight: 500; color: var(--ink-muted); }
+.lp-row-chevron { color: var(--ink-muted); }
+
+/* ---- Toggle ------------------------------------------------------------------------------------------------- */
+.lp-toggle { position: relative; flex: none; width: 58px; height: 34px; padding: 0; border: 0; border-radius: var(--radius-pill); cursor: pointer;
+  background: var(--glass-strong); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 -1px 0 rgba(255, 255, 255, 0.06); transition: background var(--duration-settle) var(--ease-settle), box-shadow var(--duration-settle) var(--ease-settle); }
+.lp-toggle-knob { position: absolute; top: 4px; left: 4px; width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff, #c9ccd6 70%, #9aa0b0);
+  transition: transform var(--duration-settle) var(--ease-settle), background var(--duration-settle) linear, box-shadow var(--duration-settle) var(--ease-settle); }
+.lp-toggle-on { background: color-mix(in srgb, var(--lp-light) 32%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lp-light) 45%, transparent), 0 0 18px 2px color-mix(in srgb, var(--lp-light) 25%, transparent); }
+.lp-toggle-on .lp-toggle-knob { transform: translateX(24px); background: radial-gradient(circle at 40% 35%, #fff 0%, var(--lp-light) 55%, color-mix(in oklab, var(--lp-light) 70%, black) 100%);
+  box-shadow: 0 0 12px 3px color-mix(in srgb, var(--lp-light) 70%, transparent); }
+.lp-toggle:disabled { opacity: var(--opacity-disabled); cursor: default; }
+.lp-toggle-field { display: flex; align-items: center; justify-content: space-between; gap: var(--space-m); font-weight: 600; }
+
+/* ---- Slider: colour by level ------------------------------------------------------------------
+   The fill is a gradient around the colour wheel from --lp-empty (empty) to --lp-light (full), so
+   the colour tells the level; the thumb takes the colour of where it is and glows more toward full. */
+.lp-slider { --lp-empty: hsl(from var(--lp-light) calc(h + 150) s l); display: flex; flex-direction: column; gap: var(--space-s); }
+.lp-slider-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; }
+.lp-slider-head output { font-size: 15px; font-weight: 500; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.lp-slider input { --lp-now: color-mix(in hsl shorter hue, var(--lp-light) var(--lp-pct), var(--lp-empty));
+  -webkit-appearance: none; appearance: none; width: 100%; height: 40px; margin: 0; background: transparent; cursor: pointer; }
+.lp-slider input::-webkit-slider-runnable-track { height: 10px; border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, transparent var(--lp-pct), rgba(13, 16, 26, 0.84) var(--lp-pct)), linear-gradient(90deg in hsl shorter hue, var(--lp-empty), var(--lp-light)); }
+.lp-slider input::-moz-range-track { height: 10px; border-radius: var(--radius-pill); background: linear-gradient(90deg in hsl shorter hue, var(--lp-empty), var(--lp-light)); opacity: 0.9; }
+.lp-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 30px; height: 30px; margin-top: -10px; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fff 0%, color-mix(in srgb, var(--lp-now) 55%, white) 45%, var(--lp-now) 100%);
+  box-shadow: 0 0 calc(8px + 14px * var(--lp-fill, 0.5)) 4px color-mix(in srgb, var(--lp-now) 60%, transparent), 0 0 40px 10px color-mix(in srgb, var(--lp-now) 22%, transparent); }
+.lp-slider input::-moz-range-thumb { width: 30px; height: 30px; border: 0; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff 0%, var(--lp-now) 100%); box-shadow: 0 0 14px 4px color-mix(in srgb, var(--lp-now) 60%, transparent); }
+.lp-slider input:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: var(--radius-pill); }
+
+/* ---- ColorPicker ------------------------------------------------------------------------------------------------ */
+.lp-colors { display: flex; flex-wrap: wrap; gap: var(--space-m); }
+.lp-color { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  background: radial-gradient(circle at 38% 34%, #fff 0%, color-mix(in srgb, var(--lp-light) 60%, white) 14%, var(--lp-light) 48%, color-mix(in oklab, var(--lp-light) 55%, black) 100%);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--lp-light) 35%, transparent); transition: transform var(--duration-settle) var(--ease-settle), box-shadow var(--duration-settle) var(--ease-settle); }
+.lp-color-on { transform: scale(1.12); box-shadow: 0 0 0 3px var(--void), 0 0 0 5px color-mix(in srgb, var(--lp-light) 70%, white), 0 0 26px 8px color-mix(in srgb, var(--lp-light) 60%, transparent), 0 0 70px 20px color-mix(in srgb, var(--lp-light) 25%, transparent); }
+
+/* ---- StatusPill -------------------------------------------------------------------------------------------------- */
+.lp-status { display: inline-flex; align-items: center; gap: var(--space-s); min-height: 32px; padding: 0 var(--space-m); border-radius: var(--radius-pill); font-size: 15px; line-height: 20px; font-weight: 600; color: var(--ink);
+  background: linear-gradient(165deg, var(--glass-strong), var(--glass)), var(--glass-veil); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.lp-status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-faint); }
+.lp-status-connected .lp-status-dot, .lp-status-searching .lp-status-dot, .lp-status-connecting .lp-status-dot, .lp-status-error .lp-status-dot {
+  background: var(--lp-light); box-shadow: 0 0 10px 2px color-mix(in srgb, var(--lp-light) 70%, transparent); }
+.lp-status-connected .lp-status-dot { animation: lp-dot var(--duration-pulse) var(--ease-breathe) infinite; }
+.lp-status-searching .lp-status-dot, .lp-status-connecting .lp-status-dot { animation: lp-dot calc(var(--duration-pulse) / 2) var(--ease-breathe) infinite; }
+.lp-status-error { color: var(--light-ember); }
+@keyframes lp-dot { 0%, 100% { opacity: 0.45; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
+
+/* ---- FireflyLoader and Logo ---------------------------------------------------------------------------------------- */
+.lp-loader { position: relative; display: inline-block; }
+.lp-loader-mark { position: relative; display: block; width: 100%; height: 100%; animation: lp-float var(--duration-float) var(--ease-breathe) infinite; }
+.lp-loader-halo { position: absolute; left: 22%; top: 50%; width: 56%; height: 56%; border-radius: 50%; mix-blend-mode: screen;
+  background: radial-gradient(circle, #fff 0%, color-mix(in srgb, var(--lp-light) 75%, white) 18%, color-mix(in srgb, var(--lp-light) 45%, transparent) 40%, transparent 72%);
+  animation: lp-pulse var(--duration-pulse) var(--ease-breathe) infinite; }
+@keyframes lp-pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.3); } }
+@keyframes lp-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6%); } }
+.lp-logo { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-xs); }
+.lp-logo-row { flex-direction: row; gap: var(--space-m); }
+.lp-wordmark { font-family: var(--font-display); font-weight: 700; line-height: 1; color: var(--ink); letter-spacing: 0.01em; }
+
+/* ---- Reduce Motion: lights hold still and keep glowing ----------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .lp-source, .lp-mote, .lp-orb-pulse, .lp-loader-mark, .lp-loader-halo, .lp-status-dot { animation: none !important; }
+  .lp-loader-halo { opacity: 0.8; }
+}
+
+/* ---- Preview helpers: a lit stage so glass and blending show ------------------------------------------------------------- */
+.lp-stage { position: relative; box-sizing: border-box; padding: var(--space-3xl); background:
+  radial-gradient(40% 70% at 15% 30%, color-mix(in srgb, var(--light-lagoon) 45%, transparent), transparent 70%),
+  radial-gradient(40% 70% at 85% 70%, color-mix(in srgb, var(--light-bloom) 40%, transparent), transparent 70%),
+  radial-gradient(30% 60% at 55% 10%, color-mix(in srgb, var(--light-firefly) 25%, transparent), transparent 70%), var(--void); }
+.lp-demo { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-l); }
+.lp-demo-col { display: flex; flex-direction: column; gap: var(--space-l); max-width: 440px; }

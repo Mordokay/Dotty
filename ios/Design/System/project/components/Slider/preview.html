@@ -1,0 +1,18 @@
+<!-- @dsCard group="Controls" height=230 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Slider — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo-col"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  function Demo() {
+    var v = React.useState(80), b = React.useState(45);
+    return h(React.Fragment, null,
+      h(L.Slider, { label: 'Vibration', light: 'ember', emptyLight: 'lagoon', value: v[0], onChange: v[1], format: function (x) { return x + '%'; } }),
+      h(L.Slider, { label: 'Brightness', light: 'firefly', emptyLight: 'dusk', value: b[0], onChange: b[1], format: function (x) { return x + '%'; } }));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

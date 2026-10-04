@@ -1,0 +1,16 @@
+<!-- @dsCard group="Light" height=220 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>LightOrb — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    h(L.LightOrb, { light: 'firefly', size: 96, pulse: true, label: 'Bracelet glowing firefly' }),
+    h(L.LightOrb, { light: 'lagoon', size: 64 }),
+    h(L.LightOrb, { light: 'bloom', size: 44 }),
+    h(L.LightOrb, { light: '#FF3B30', size: 28 })));
+</script>
+</body>
+</html>

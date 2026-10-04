@@ -1,0 +1,14 @@
+<!-- @dsCard group="Brand" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Icon — preview</title></head>
+<body>
+<div class="lp-stage"><div id="root" class="lp-demo"></div></div>
+<script>
+  var L = window.Dotty, h = React.createElement;
+  var names = ['play', 'stop', 'plus', 'close', 'chevron', 'bluetooth', 'sliders', 'ripple', 'wave'];
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    names.map(function (n) { return h('span', { key: n, title: n, className: 'lp-btn-glass', style: { display: 'grid', placeItems: 'center', width: 48, height: 48, borderRadius: '50%' } }, h(L.Icon, { name: n })); })));
+</script>
+</body>
+</html>
