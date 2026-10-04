@@ -10,6 +10,7 @@
 #include "battery.h"
 #include "board_pins.h"
 #include "epd_display.h"
+#include "images/sleep_panda.h"
 #include "images/sleep_portrait.h"
 #include "lock_screen.h"
 #include "log.h"
@@ -247,12 +248,24 @@ void unlock() {
 
 // ---------- power button ----------
 
+// Pictures for the power-off screen; one is picked at random each time.
+struct OffPicture {
+  const uint8_t *bitmap;
+  int16_t width, height;
+};
+const OffPicture kOffPictures[] = {
+    {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
+    {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
+};
+
 [[noreturn]] void powerOff() {
   LOGI("power", "power off");
   player.stop();
+  const OffPicture &pic = kOffPictures[esp_random() % (sizeof(kOffPictures) / sizeof(kOffPictures[0]))];
   epd.fillScreen(kWhite);
-  epd.drawBitmap((kW - kSleepPortraitWidth) / 2, 12, kSleepPortrait, kSleepPortraitWidth,
-                 kSleepPortraitHeight, kBlack);
+  // Centred in the area above the "press PWR" line.
+  epd.drawBitmap((kW - pic.width) / 2, (170 - pic.height) / 2, pic.bitmap, pic.width, pic.height,
+                 kBlack);
   epd.setFont(&FreeSans9pt7b);
   ui::drawCentered(epd, "press PWR to wake", 190);
   epd.refreshFull();

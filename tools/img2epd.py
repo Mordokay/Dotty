@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Convert an image into a 1-bit bitmap header for Dotty's e-paper.
 
-Crops a square, resizes, boosts contrast and dithers to black/white, then writes a
+Crops a square (or rectangle), resizes, boosts contrast and dithers to black/white, then writes a
 C++ header with an Adafruit_GFX::drawBitmap() compatible array (rows MSB-first,
 padded to whole bytes, set bit = black) plus a PNG preview of the result.
 
-Example:
+Examples:
   python3 tools/img2epd.py ~/Downloads/profile.png include/images/sleep_portrait.h \\
-      --name kSleepPortrait --size 150 --crop 160 300 1000 --dither atkinson
+      --name kSleepPortrait --size 150 --crop 160 160 1000 --dither atkinson
+  python3 tools/img2epd.py panda.png include/images/sleep_panda.h \\
+      --name kSleepPanda --size 190x135 --crop 50 228 1150 817
 """
 
 import argparse
@@ -37,11 +39,12 @@ def atkinson(img):
 def convert(src, size, crop, dither, contrast, brightness):
     img = Image.open(src).convert("L")
     if crop:
-        left, top, side = crop
-        img = img.crop((left, top, left + side, top + side))
+        left, top, width = crop[:3]
+        height = crop[3] if len(crop) == 4 else width
+        img = img.crop((left, top, left + width, top + height))
     else:
-        img = ImageOps.fit(img, (min(img.size),) * 2)
-    img = img.resize((size, size), Image.LANCZOS)
+        img = ImageOps.fit(img, size)
+    img = img.resize(size, Image.LANCZOS)
     img = ImageOps.autocontrast(img, cutoff=1)
     img = ImageEnhance.Brightness(img).enhance(brightness)
     img = ImageEnhance.Contrast(img).enhance(contrast)
@@ -82,21 +85,26 @@ def main():
     p.add_argument("src")
     p.add_argument("header")
     p.add_argument("--name", required=True, help="C++ identifier for the array")
-    p.add_argument("--size", type=int, default=150)
-    p.add_argument("--crop", type=int, nargs=3, metavar=("LEFT", "TOP", "SIDE"),
-                   help="square crop in source pixels (default: centred square)")
+    p.add_argument("--size", default="150", help="output size: N (square) or WxH")
+    p.add_argument("--crop", type=int, nargs="+", metavar="PX",
+                   help="crop in source pixels: LEFT TOP SIDE (square) or LEFT TOP WIDTH HEIGHT "
+                        "(default: centred, matching the output aspect)")
     p.add_argument("--dither", choices=["atkinson", "floyd", "threshold"], default="atkinson")
     p.add_argument("--contrast", type=float, default=1.2)
     p.add_argument("--brightness", type=float, default=1.05)
     p.add_argument("--preview", help="PNG preview path (default: next to the header)")
     args = p.parse_args()
+    w, _, h = args.size.partition("x")
+    size = (int(w), int(h or w))
+    if args.crop and len(args.crop) not in (3, 4):
+        p.error("--crop takes 3 (square) or 4 (rectangle) values")
 
-    bw = convert(args.src, args.size, args.crop, args.dither, args.contrast, args.brightness)
+    bw = convert(args.src, size, args.crop, args.dither, args.contrast, args.brightness)
     header = Path(args.header)
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text(to_header(bw, args.name, Path(args.src).name))
     preview = Path(args.preview) if args.preview else header.with_suffix(".preview.png")
-    bw.resize((args.size * 4, args.size * 4), Image.NEAREST).save(preview)
+    bw.resize((size[0] * 4, size[1] * 4), Image.NEAREST).save(preview)
     print(f"wrote {header} and {preview}")
 
 

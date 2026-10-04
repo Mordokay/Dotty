@@ -51,7 +51,7 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 - **Power saving:** while locked and nothing needs the CPU (e.g. no music playing), Dotty
   sleeps between the once-a-minute clock updates. It stays awake while a computer is
   connected over USB, so flashing and logs keep working.
-- **PWR hold 2 s:** power off. Shows the portrait; on battery the board switches off
+- **PWR hold 2 s:** power off. Shows a random picture (portrait or sleeping red panda); on battery the board switches off
   (~10 µA, the RTC keeps time), on USB it deep-sleeps. Press PWR to start again.
 - **Player:** tap the middle to play/pause, the − / + circles for volume.
   Long-press anywhere for a full refresh (clears ghosting).
