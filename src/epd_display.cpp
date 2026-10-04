@@ -3,6 +3,7 @@
 #include <SPI.h>
 
 #include "board_pins.h"
+#include "log.h"
 
 namespace {
 
@@ -210,7 +211,7 @@ void EpdDisplay::waitBusy() {
   const uint32_t start = millis();
   while (isBusy()) {
     if (millis() - start > kBusyTimeoutMs) {
-      log_e("e-paper busy timeout");
+      LOGE("epd", "e-paper busy timeout");
       return;
     }
     delay(5);

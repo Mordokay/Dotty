@@ -3,6 +3,7 @@
 #include <Wire.h>
 
 #include "board_pins.h"
+#include "log.h"
 
 namespace {
 
@@ -26,14 +27,26 @@ uint8_t readRegs(uint8_t reg, uint8_t *buf, uint8_t len) {
 }  // namespace
 
 bool Touch::begin() {
+  pinMode(PIN_TP_INT, INPUT_PULLUP);
+  attachInterrupt(PIN_TP_INT, onTouchInterrupt, FALLING);
+  return wake();
+}
+
+void Touch::sleep() {
+  Wire.beginTransmission(I2C_ADDR_FT6336);
+  Wire.write(0xA5);  // power mode
+  Wire.write(0x03);  // hibernate
+  Wire.endTransmission();
+  down_ = false;
+}
+
+bool Touch::wake() {
   pinMode(PIN_TP_RST, OUTPUT);
   digitalWrite(PIN_TP_RST, LOW);
   delay(20);
   digitalWrite(PIN_TP_RST, HIGH);
   delay(300);
-
-  pinMode(PIN_TP_INT, INPUT_PULLUP);
-  attachInterrupt(PIN_TP_INT, onTouchInterrupt, FALLING);
+  interruptSeen = false;
 
   // Probe the touch-status register; this board's controller NACKs the ID registers (0xA8).
   uint8_t status = 0;
@@ -41,7 +54,7 @@ bool Touch::begin() {
     if (readRegs(0x02, &status, 1) == 1) return true;
     delay(50);
   }
-  log_e("FT6336 not responding");
+  LOGE("touch", "FT6336 not responding");
   return false;
 }
 

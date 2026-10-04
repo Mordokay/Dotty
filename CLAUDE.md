@@ -16,15 +16,23 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   for slow, discrete frame changes — not smooth animation.
 - Power: on battery the board stays on only while **GPIO17 is high** (soft latch). Set it
   first thing in `setup()`. GPIO6 LOW = e-paper power on, GPIO42 LOW = audio power on.
-- **GPIO42 (audio power) also powers the FT6336 touch controller** — undocumented by
-  Waveshare. Switch it on before talking to touch, or the FT6336 NACKs every read.
-  The FT6336 also NACKs its ID register 0xA8; probe it via 0x02 (touch status).
+- **GPIO42 switches the audio rail (ES8311, mic, amp). While it is off, the unpowered
+  ES8311 clamps the shared I2C bus**, so touch, RTC and SHTC3 all NACK. Turn the rail on
+  before any I2C access (the power-saving code toggles it around each sleep).
+  Touch, RTC, SHTC3, SD card and I2C pull-ups are all on the always-on 3V3.
+  The FT6336 NACKs its ID register 0xA8; probe it via 0x02 (touch status).
+- Schematic: `04_Hardware/Schematics/` in the Waveshare repo (render the PDF with
+  `qlmanage -t -s 4000` and crop with `sips`). Charger STAT only drives the orange LED,
+  so firmware cannot detect charging. No 32 kHz crystal: the ESP32 sleep clock drifts,
+  so re-read the PCF85063 after every wake instead of trusting system time.
 - Touch coordinates map 1:1 onto the display (no rotation/mirroring).
 - Audio pins (from Waveshare's codec_board config): I2S MCLK 14, BCLK 15, WS 38,
   DOUT 45, DIN 16; amplifier enable GPIO46 (HIGH). ES8311 at I2C 0x18.
 - Buttons are active-low with pull-ups. The PWR button is still held down right after a
   battery power-on, so ignore it until it has been released once.
 - Battery: `analogReadMilliVolts(4) * 2`.
+- RTC PCF85063 at I2C 0x51 holds local time. Until Wi-Fi/BLE time sync exists, firmware
+  sets it to the build time (`__DATE__`/`__TIME__`) when it is invalid or older.
 - SD card is **SDMMC 1-bit** (CLK 39, CMD 41, D0 40), not SPI.
 
 ## Toolchain decisions
@@ -46,8 +54,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 ~/.platformio/penv/bin/esptool --port /dev/cu.usbmodem1101 flash-id    # chip info
 ```
 
-- Serial monitor is interactive; to capture output non-interactively, open the port with
-  pyserial from `~/.platformio/penv/bin/python`, pulse RTS to reset, and read lines.
+- **Never use `Serial.print` directly — use `LOGI/LOGW/LOGE(tag, fmt, ...)` from
+  `src/log.h`.** With the cable plugged in but no monitor reading, `Serial.print` blocks
+  up to 2 s once the 256-byte USB TX buffer fills (this made taps lag 2-3 s).
+  The logger writes to a 16 KB RAM ring and streams it only when there is room.
+- Lines streamed while no monitor is open are lost by macOS, but the ring keeps the last
+  16 KB: send `d` over serial to replay the history. To read logs non-interactively,
+  open the port with pyserial from `~/.platformio/penv/bin/python`, write `d`, read
+  lines (no reset needed). To catch boot from scratch, pulse RTS to reset instead.
+- Don't call `Serial.setTxTimeoutMs(0)`: it stopped all USB serial output.
 - "Port is busy" on upload means the user's VS Code serial monitor is open — ask them to
   close it rather than killing their process.
 - Destructive disk operations (e.g. `diskutil eraseDisk`) are blocked for Claude: give the
@@ -63,10 +78,35 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Init sequence and LUTs come from Waveshare's example driver. Draw with Adafruit GFX,
   then call `refreshFull()` or `refreshPartial()`. Do a full refresh every ~30 partials
   to clear ghosting.
+- Pictures: convert with `tools/img2epd.py` (system `python3` has Pillow) into
+  `include/images/*.h`, draw with `drawBitmap(..., kBlack)` on a white background.
+  Atkinson dithering with brightness ~1.15 / contrast ~1.4 suits photos on this panel;
+  generate a few variants and compare the previews before picking.
 - Pins live only in `include/board_pins.h`; source them from Waveshare's
   `02_Example/Arduino/*/user_config.h` when adding peripherals.
 - LVGL (8.3.11 / 9.3.0) is supported by Waveshare but not used yet; Adafruit GFX is enough
   for now on a 1-bit 200×200 screen.
+
+## UX decisions
+
+- Kindle-style lock: PWR short press locks/unlocks; lock screen redraws once a minute
+  (panel wear + battery), music keeps playing; auto-lock after 2 min idle. While
+  unlocked, 1 refresh/s is fine only when something is actively changing.
+- e-paper datasheet: rated "panel life 5 years", refresh at least once per 24 h, no
+  refresh-count rating. Keep full refreshes rare and periodic.
+
+## Power management (`src/power.*`)
+
+- Wake locks (`power::setWakeLock`) = "do not interrupt": while any is held the CPU
+  never sleeps. Audio holds one while playing; Wi-Fi/BLE/OTA should add their own.
+- Locked + no wake lock + no USB host: touch hibernates, codec/amp power down, audio
+  rail off, CPU light-sleeps until the next minute (or PWR). Unlock wakes peripherals.
+- Never sleeps while a computer is connected over USB (`HWCDC::isPlugged()`), so
+  flashing and logs keep working; sleep can only be tested on battery or a wall charger.
+- GPIO17 (power latch) is `gpio_hold_en`'d for life; GPIO6/42/46 are held during sleep.
+- Power off on USB power: the latch can't cut power, so it deep-sleeps with PWR (ext0)
+  as the wake source; waking is a fresh boot.
+- Battery voltage is logged every 10 minutes (`power: battery ... mV`) to measure drain.
 
 ## Long-term goal
 

@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "log.h"
+
 namespace {
 
 constexpr uint8_t kRegReset = 0x00;
@@ -27,7 +29,7 @@ bool Es8311::begin(TwoWire &wire, uint8_t address, uint32_t sampleRate) {
 
   const uint8_t id = read(kRegChipId);
   if (id != 0x83) {
-    log_e("ES8311 not found (chip id 0x%02X)", id);
+    LOGE("es8311", "ES8311 not found (chip id 0x%02X)", id);
     return false;
   }
 

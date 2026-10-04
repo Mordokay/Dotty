@@ -10,6 +10,10 @@ class Touch {
 
   bool begin();
 
+  // Hibernate (~µA) while the screen is locked; wake() resets the controller.
+  void sleep();
+  bool wake();
+
   // Call often. Tap fires on release; LongPress fires once while still held.
   Gesture poll();
 

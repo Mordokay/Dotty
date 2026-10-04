@@ -8,6 +8,7 @@
 
 #include "board_pins.h"
 #include "es8311.h"
+#include "log.h"
 
 namespace {
 
@@ -42,8 +43,6 @@ size_t id3v2Size(File &f) {
 }  // namespace
 
 bool AudioPlayer::begin() {
-  pinMode(PIN_AUDIO_PWR, OUTPUT);
-  digitalWrite(PIN_AUDIO_PWR, LOW);
   pinMode(PIN_PA_EN, OUTPUT);
   digitalWrite(PIN_PA_EN, LOW);
   delay(50);
@@ -51,7 +50,7 @@ bool AudioPlayer::begin() {
   // Start I2S first so the codec sees MCLK while it is configured.
   i2s.setPins(PIN_I2S_BCLK, PIN_I2S_WS, PIN_I2S_DOUT, PIN_I2S_DIN, PIN_I2S_MCLK);
   if (!i2s.begin(I2S_MODE_STD, kDefaultSampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) {
-    log_e("I2S init failed");
+    LOGE("audio", "I2S init failed");
     return false;
   }
   if (!codec.begin(Wire, I2C_ADDR_ES8311, kDefaultSampleRate)) return false;
@@ -60,7 +59,7 @@ bool AudioPlayer::begin() {
 
   decoder = MP3InitDecoder();
   if (!decoder) {
-    log_e("MP3 decoder alloc failed");
+    LOGE("audio", "MP3 decoder alloc failed");
     return false;
   }
   xTaskCreatePinnedToCore(taskEntry, "audio", 8192, this, configMAX_PRIORITIES - 2, &task_, 0);
@@ -71,7 +70,7 @@ bool AudioPlayer::play(const char *path) {
   stop();
   file = SD_MMC.open(path);
   if (!file) {
-    log_e("Cannot open %s", path);
+    LOGE("audio", "Cannot open %s", path);
     return false;
   }
   const size_t audioBytes = file.size() - id3v2Size(file);
@@ -83,12 +82,12 @@ bool AudioPlayer::play(const char *path) {
   MP3FrameInfo info = {};
   const int sync = MP3FindSyncWord(inputBuffer, bytesLeft);
   if (sync < 0 || MP3GetNextFrameInfo(decoder, &info, inputBuffer + sync) != 0) {
-    log_e("No MP3 frames in %s", path);
+    LOGE("audio", "No MP3 frames in %s", path);
     file.close();
     return false;
   }
   durationMs_ = info.bitrate > 0 ? static_cast<uint64_t>(audioBytes) * 8000 / info.bitrate : 0;
-  log_i("%s: %d Hz, %d ch, %d kbps, ~%lu s", path, info.samprate, info.nChans,
+  LOGI("audio", "%s: %d Hz, %d ch, %d kbps, ~%lu s", path, info.samprate, info.nChans,
         info.bitrate / 1000, durationMs_ / 1000);
 
   samplesPlayed_ = 0;
@@ -103,6 +102,23 @@ void AudioPlayer::stop() {
   if (!playing_) return;
   stopRequested_ = true;
   while (playing_) delay(5);
+}
+
+void AudioPlayer::powerDown() {
+  if (suspended_) return;
+  suspended_ = true;
+  delay(20);  // let the task finish its current write
+  digitalWrite(PIN_PA_EN, LOW);
+}
+
+bool AudioPlayer::powerUp() {
+  if (!suspended_) return true;
+  if (!codec.begin(Wire, I2C_ADDR_ES8311, sampleRate_)) return false;
+  codec.setVolume(volume_);
+  codec.setMute(paused_);
+  digitalWrite(PIN_PA_EN, HIGH);
+  suspended_ = false;
+  return true;
 }
 
 void AudioPlayer::togglePause() {
@@ -130,6 +146,10 @@ void AudioPlayer::run() {
       file.close();
       paused_ = false;
       playing_ = false;
+      continue;
+    }
+    if (suspended_) {
+      delay(50);
       continue;
     }
     if (!playing_ || paused_) {

@@ -39,11 +39,25 @@ pio device monitor       # serial output (Ctrl+C to quit)
 The first build downloads the ESP32 toolchain (a few minutes). Only one program can hold
 the serial port at a time — close the monitor before uploading from a terminal.
 
+**Logs:** the firmware keeps the last 16 KB of log in memory. In the serial monitor,
+type `d` to replay everything since boot, e.g. after plugging in later.
+
 ## Using the device
 
-- **USB power:** boots straight away.
-- **Battery:** hold **PWR** until the screen redraws, then release. Hold **PWR** for 2 s to
-  power off; the last image stays on screen with no power.
+- **PWR short press:** lock / unlock, like a Kindle. The lock screen shows the clock,
+  date, battery and a sleeping Dotty, and redraws only once a minute. Music keeps
+  playing while locked. Touch and BOOT are ignored while locked.
+- **Auto-lock:** after 2 minutes without interaction.
+- **Power saving:** while locked and nothing needs the CPU (e.g. no music playing), Dotty
+  sleeps between the once-a-minute clock updates. It stays awake while a computer is
+  connected over USB, so flashing and logs keep working.
+- **PWR hold 2 s:** power off. Shows a dithered portrait; on battery the board switches
+  off, on USB it deep-sleeps. Press PWR to start again.
+- **Player:** tap the middle to play/pause, the − / + circles for volume.
+  Long-press anywhere for a full refresh (clears ghosting).
+- **BOOT button:** switches between the player and the e-paper refresh test.
+- **Power on:** USB power boots straight away; on battery hold **PWR** until the screen
+  redraws.
 
 ## Project layout
 
@@ -53,6 +67,8 @@ partitions.csv        8 MB flash layout with two OTA app slots
 include/board_pins.h  Every GPIO on the board
 src/epd_display.*     e-paper driver (draw with the Adafruit GFX API)
 src/main.cpp          Firmware entry point
+include/images/       Generated 1-bit bitmaps (see tools/img2epd.py)
+tools/img2epd.py      Converts a picture into a dithered e-paper bitmap header
 docs/HARDWARE.md      Hardware reference
 ```
 

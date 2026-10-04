@@ -7,8 +7,15 @@
 // main loop never interrupt playback.
 class AudioPlayer {
  public:
-  // Powers the codec + amplifier and starts I2S. Wire must already be running.
+  // Sets up the codec + amplifier and starts I2S. The audio rail must be on
+  // and Wire running.
   bool begin();
+
+  // Codec + amplifier off/on around cutting the audio rail (codec registers are
+  // lost without power). Playback position is kept; call while paused or stopped.
+  void powerDown();
+  bool powerUp();
+  bool isPoweredUp() const { return !suspended_; }
 
   bool play(const char *path);
   void stop();
@@ -31,6 +38,7 @@ class AudioPlayer {
   volatile bool playing_ = false;
   volatile bool paused_ = false;
   volatile bool stopRequested_ = false;
+  volatile bool suspended_ = false;
   volatile uint64_t samplesPlayed_ = 0;
   volatile uint32_t sampleRate_ = 44100;
   volatile uint32_t durationMs_ = 0;

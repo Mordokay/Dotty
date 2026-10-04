@@ -13,14 +13,14 @@
 
 // Power switches
 #define PIN_EPD_PWR   6   // LOW = e-paper powered
-#define PIN_AUDIO_PWR 42  // LOW = audio codec/amp AND touch controller powered
+#define PIN_AUDIO_PWR 42  // LOW = audio rail on (codec, mic, amp). Off: codec clamps I2C!
 #define PIN_VBAT_PWR  17  // HIGH = hold system power on battery (soft power latch)
 
 // Buttons (pull-up, LOW = pressed)
 #define PIN_BTN_BOOT  0
 #define PIN_BTN_PWR   18
 
-// Status LED
+// Green status LED (active low). The orange LED is the charger's, not firmware-controlled.
 #define PIN_LED       3
 
 // Battery voltage: ADC1 channel 3, 1:2 divider
@@ -34,6 +34,7 @@
 
 #define I2C_ADDR_ES8311 0x18
 #define I2C_ADDR_FT6336 0x38
+#define I2C_ADDR_PCF85063 0x51
 
 // Audio: ES8311 codec over I2S, NS4150-class amplifier enable
 // Source: 08_Audio_Test/src/codec_board/board_cfg.h ("S3_ePaper_1_54")

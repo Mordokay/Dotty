@@ -34,7 +34,11 @@ Full pin map: [`include/board_pins.h`](../include/board_pins.h).
 ## Power
 - On battery, the board stays on only while firmware holds **GPIO17 high** (soft power latch).
   Long-press PWR to power on; current firmware releases the latch after a 2 s PWR hold.
-- GPIO6 LOW powers the e-paper, GPIO42 LOW powers the audio codec/amp **and the touch controller**.
+- GPIO6 LOW powers the e-paper (EPD3V3 via a P-MOSFET), GPIO42 LOW powers the audio rail
+  (ES8311, mic, NS4150B amp). With the audio rail off the unpowered codec clamps the I2C bus.
+- Always on (3V3): touch, RTC, SHTC3, SD card, I2C pull-ups (4.7 kΩ), battery divider
+  (2 × 200 kΩ, ~10 µA).
+- Charger: ETA6098, 0.2 A charge current (R35 = 820 kΩ). Its STAT pin only drives the orange LED.
 
 ## Flash layout (`partitions.csv`)
 Two 3 MB app slots (`app0`/`app1`) for BLE OTA updates from the iOS app, 1.9 MB `spiffs`
