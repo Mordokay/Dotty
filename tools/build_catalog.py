@@ -9,11 +9,15 @@ dist/ gets <id>-<version>.bin per cartridge plus catalog.json. A release is mark
   https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json
 The launcher is not in the catalog: it lives in the factory partition (USB only).
 
-Each cartridges/<id>/ may have cartridge.json ({"description": ..., "requires": [...]})
-and icon.png (64x64 1-bit after conversion, shown while installing).
+Each cartridges/<id>/ may have cartridge.json ({"description": ..., "requires": [...]}),
+icon.png (64x64 1-bit after conversion: Dotty's install screen) and artwork.png (square,
+full colour, 512x512 or larger: the app's picture of the cartridge, published as
+<id>-<version>.png). artwork.svg, when present, is its editable source; re-render with
+  qlmanage -t -s 512 -o /tmp cartridges/<id>/artwork.svg && mv /tmp/artwork.svg.png cartridges/<id>/artwork.png
 """
 
 import argparse
+import io
 import base64
 import datetime
 import hashlib
@@ -57,6 +61,23 @@ def build(cartridge_id):
     return image, info
 
 
+ARTWORK_SIDE = 512
+
+
+def write_artwork(source, target):
+    """Square PNG, scaled to ARTWORK_SIDE so the app never downloads more than it shows."""
+    from PIL import Image
+    with Image.open(source) as art:
+        if art.width != art.height:
+            sys.exit(f"{source}: artwork must be square (is {art.width}x{art.height})")
+        art = art.convert("RGBA")
+        if art.width > ARTWORK_SIDE:
+            art = art.resize((ARTWORK_SIDE, ARTWORK_SIDE), Image.LANCZOS)
+        buffer = io.BytesIO()
+        art.save(buffer, "PNG", optimize=True)
+        target.write_bytes(buffer.getvalue())
+
+
 def catalog_entry(cartridge_id, image, info, base_url):
     folder = REPO / "cartridges" / cartridge_id
     manifest_path = folder / "cartridge.json"
@@ -64,6 +85,10 @@ def catalog_entry(cartridge_id, image, info, base_url):
     icon_path = cartridge_icon_path(cartridge_id)
     filename = f"{info['id']}-{info['version']}.bin"
     (DIST / filename).write_bytes(image)
+    artwork = None
+    if (folder / "artwork.png").exists():
+        artwork = f"{info['id']}-{info['version']}.png"
+        write_artwork(folder / "artwork.png", DIST / artwork)
     return {
         **info,
         "description": manifest.get("description", ""),
@@ -72,6 +97,7 @@ def catalog_entry(cartridge_id, image, info, base_url):
         "sha256": hashlib.sha256(image).hexdigest(),
         "firmware": f"{base_url}/{filename}" if base_url else filename,
         "icon": base64.b64encode(icon_bytes(icon_path)).decode() if icon_path.exists() else None,
+        "artwork": (f"{base_url}/{artwork}" if base_url else artwork) if artwork else None,
     }
 
 
@@ -117,6 +143,7 @@ def main():
     if args.release:
         notes = "\n".join(f"- **{e['name']}** {e['version']} ({e['size'] // 1024} KB)" for e in entries)
         files = [str(DIST / "catalog.json")] + [str(DIST / Path(e["firmware"]).name) for e in entries]
+        files += [str(DIST / Path(e["artwork"]).name) for e in entries if e["artwork"]]
         run(["gh", "release", "create", tag, *files, "--repo", GITHUB_REPO, "--target", commit,
              "--title", f"Cartridges {now:%Y-%m-%d %H:%M} UTC", "--notes", notes, "--latest"])
         print(f"published {tag}: https://github.com/{GITHUB_REPO}/releases/tag/{tag}")

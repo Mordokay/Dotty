@@ -94,3 +94,34 @@ struct PageHeader: View {
         }
     }
 }
+
+/// A cartridge's picture: the full-colour artwork from the catalog, or its e-paper icon
+/// (pixel art) while that loads or when the cartridge has none.
+struct CartridgeArtwork: View {
+    let cartridge: CatalogCartridge
+    var size: CGFloat = 72
+
+    var body: some View {
+        AsyncImage(url: cartridge.artworkURL, transaction: Transaction(animation: .settle)) { phase in
+            if let image = phase.image {
+                image.resizable().scaledToFill()
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).strokeBorder(Color.glassEdge, lineWidth: 1))
+    }
+
+    private var fallback: some View {
+        ZStack {
+            Color.glassStrong
+            if let icon = cartridge.iconImage() {
+                icon.resizable().padding(size * 0.11)
+            } else {
+                Image(systemName: "square.stack.3d.up").font(.system(size: size * 0.4))
+            }
+        }
+    }
+}

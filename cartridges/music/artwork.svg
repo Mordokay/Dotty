@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Music cartridge artwork for the iOS app (the e-paper icon is icon.png). The note heads
+     are two fireflies; palette from the Dotty app icon. Render: see tools/build_catalog.py. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.75"/><stop offset="0.35" stop-color="#B8E04E" stop-opacity="0.28"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="head" cx="0.42" cy="0.38" r="0.7">
+    <stop offset="0" stop-color="#FFFDE6"/><stop offset="0.45" stop-color="#F1F27C"/><stop offset="1" stop-color="#B9C93E"/>
+  </radialGradient>
+  <linearGradient id="wood" x1="0" y1="200" x2="0" y2="720" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#F4EBD0"/><stop offset="1" stop-color="#C9BE9C"/>
+  </linearGradient>
+  <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="26"/></filter>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="160" cy="180" r="5" opacity="0.9"/><circle cx="300" cy="110" r="3" opacity="0.6"/>
+  <circle cx="850" cy="140" r="4" opacity="0.8"/><circle cx="910" cy="330" r="3" opacity="0.5"/>
+  <circle cx="110" cy="430" r="3" opacity="0.5"/><circle cx="560" cy="90" r="2.5" opacity="0.5"/>
+  <circle cx="920" cy="560" r="4" opacity="0.7"/><circle cx="90" cy="680" r="2.5" opacity="0.4"/>
+  <circle cx="200" cy="900" r="3" opacity="0.5"/><circle cx="880" cy="880" r="3.5" opacity="0.6"/>
+</g>
+<!-- glow behind the heads -->
+<circle cx="380" cy="730" r="300" fill="url(#halo)"/>
+<circle cx="680" cy="660" r="280" fill="url(#halo)"/>
+<!-- stems + beam -->
+<g fill="url(#wood)">
+  <rect x="452" y="300" width="38" height="420" rx="12"/>
+  <rect x="752" y="232" width="38" height="420" rx="12"/>
+  <path d="M452 300 L790 228 L790 318 L452 390 Z"/>
+</g>
+<!-- firefly note heads -->
+<g transform="rotate(-22 380 730)">
+  <ellipse cx="380" cy="730" rx="112" ry="82" fill="#F3F27A" filter="url(#bloom)" opacity="0.9"/>
+  <ellipse cx="380" cy="730" rx="104" ry="76" fill="url(#head)"/>
+</g>
+<g transform="rotate(-22 680 660)">
+  <ellipse cx="680" cy="660" rx="112" ry="82" fill="#F3F27A" filter="url(#bloom)" opacity="0.9"/>
+  <ellipse cx="680" cy="660" rx="104" ry="76" fill="url(#head)"/>
+</g>
+<!-- a few drifting fireflies -->
+<circle cx="250" cy="330" r="70" fill="url(#halo)"/><circle cx="250" cy="330" r="7" fill="#FFFBD2"/>
+<circle cx="850" cy="440" r="60" fill="url(#halo)"/><circle cx="850" cy="440" r="6" fill="#FFFBD2"/>
+<circle cx="600" cy="880" r="54" fill="url(#halo)"/><circle cx="600" cy="880" r="5" fill="#FFFBD2"/>
+</svg>

@@ -40,7 +40,10 @@ struct CatalogCartridge: Decodable, Identifiable, Sendable {
     let firmware: String
     /// 64×64, 1 bit per pixel, rows MSB-first, set bit = black on e-paper (base64).
     let icon: String?
+    /// Full-colour square picture for the app (a URL; older catalogs don't have it).
+    let artwork: String?
 
+    var artworkURL: URL? { artwork.flatMap(URL.init(string:)) }
     var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file) }
 }
 

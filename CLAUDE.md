@@ -170,6 +170,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.venv/bin/python tools/build_catalog.py --release` (needs Pillow); every cartridge change
   ends with commit → push → catalog release, without waiting for the user to ask. Optional per-cartridge
   `cartridges/<id>/cartridge.json` = description + requires.
+- Two pictures per cartridge: `icon.png` → 64×64 1-bit for Dotty's install screen (base64
+  in the catalog), and `artwork.png` → square full-colour picture for the app (published
+  as `<id>-<version>.png`, scaled to 512, catalog field `artwork` = URL; the app falls back
+  to the pixel icon). Keep the editable `artwork.svg` next to it, in the app icon's
+  night-sky/firefly style; render with `qlmanage -t -s 512` (no rsvg/magick on this Mac).
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
 - The lock screen (clock once a minute) is drawn by whichever firmware is running — each

@@ -87,15 +87,7 @@ struct CartridgesView: View {
         let relation = relation(to: cartridge)
         return GlassCard {
             HStack(alignment: .top, spacing: Spacing.l) {
-                Group {
-                    if let icon = cartridge.iconImage() {
-                        icon.resizable().frame(width: 56, height: 56)
-                    } else {
-                        Image(systemName: "square.stack.3d.up").font(.system(size: 28))
-                    }
-                }
-                .frame(width: 72, height: 72)
-                .background(RoundedRectangle(cornerRadius: Radius.soft).fill(Color.glassStrong))
+                CartridgeArtwork(cartridge: cartridge)
 
                 VStack(alignment: .leading, spacing: Spacing.xs) {
                     Text(cartridge.name).font(.lpTitle).foregroundStyle(Color.ink)
