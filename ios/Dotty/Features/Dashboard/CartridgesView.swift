@@ -8,6 +8,7 @@ struct CartridgesView: View {
     @State private var loadError: String?
     @State private var install: InstallState?
     @State private var confirmOlder: CatalogCartridge?
+    @State private var success: String?
 
     /// How a catalog entry relates to what's on Dotty.
     enum Relation {
@@ -22,7 +23,6 @@ struct CartridgesView: View {
         var stage = "Getting ready"
         var progress: Double?
         var error: String?
-        var done = false
     }
 
     var body: some View {
@@ -35,7 +35,10 @@ struct CartridgesView: View {
                     if let install { installCard(install) }
                     if let loadError { NoticeCard(kind: .error, text: loadError) }
                     if let catalog {
-                        ForEach(catalog.cartridges) { cartridge in cartridgeCard(cartridge) }
+                        // The cartridge being installed is shown by the progress card instead.
+                        ForEach(catalog.cartridges.filter { $0.id != install?.cartridge.id }) { cartridge in
+                            cartridgeCard(cartridge)
+                        }
                     } else if loadError == nil {
                         HStack { Spacer(); FireflyLoader(size: 96, label: "Loading the catalog"); Spacer() }
                             .padding(.top, Spacing.xxl)
@@ -47,6 +50,16 @@ struct CartridgesView: View {
             .refreshable { await load() }
         }
         .navigationTitle("")
+        .overlay(alignment: .top) {
+            if let success {
+                NoticeCard(kind: .success, text: success)
+                    .padding(.horizontal, Spacing.l)
+                    .padding(.top, Spacing.s)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.settle, value: success)
+        .sensoryFeedback(.success, trigger: success) { _, new in new != nil }
         .task { await load() }
         .confirmationDialog("Install an older version?", isPresented: Binding(
             get: { confirmOlder != nil }, set: { if !$0 { confirmOlder = nil } }), titleVisibility: .visible,
@@ -99,7 +112,7 @@ struct CartridgesView: View {
 
     @ViewBuilder
     private func actions(for cartridge: CatalogCartridge, relation: Relation) -> some View {
-        let busy = install != nil && install?.done == false && install?.error == nil
+        let busy = install != nil && install?.error == nil
         switch relation {
         case .current(let running):
             StatusPill(state: .connected, text: running ? "Running" : "Installed")
@@ -142,10 +155,6 @@ struct CartridgesView: View {
                 if let error = state.error {
                     Text(error).font(.lpCallout).foregroundStyle(DottyLight.ember.color)
                     Button("Close") { install = nil }.buttonStyle(.quiet())
-                } else if state.done {
-                    Text("Installed. Dotty restarted into \(state.cartridge.name).")
-                        .font(.lpCallout).foregroundStyle(Color.ink)
-                    Button("Done") { install = nil }.buttonStyle(.light(DottyLight.leaf.color))
                 } else {
                     Text(state.stage).font(.lpCallout).foregroundStyle(Color.ink)
                     if let progress = state.progress {
@@ -189,7 +198,11 @@ struct CartridgesView: View {
             install?.stage = "Restarting"
             install?.progress = nil
             try await link.waitForReconnect()
-            install?.done = true
+            // Short confirmation that goes away by itself.
+            install = nil
+            success = "\(cartridge.name) \(cartridge.version) is installed."
+            try? await Task.sleep(for: .seconds(2.5))
+            success = nil
         } catch {
             install?.error = error.localizedDescription
         }
