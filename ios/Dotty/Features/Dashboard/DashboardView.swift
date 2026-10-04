@@ -7,7 +7,19 @@ struct DashboardView: View {
     @State private var confirmForget = false
     @State private var showDesignSystem = false
 
-    enum Route: Hashable { case cartridges, wifi, music }
+    enum Route: Hashable {
+        case cartridges, wifi, music
+
+        /// The screen of the cartridge Dotty is running, if it has one (and its firmware
+        /// has the commands that screen needs).
+        static func screen(for info: DottyInfo?) -> Route? {
+            guard let info, !info.isLauncher else { return nil }
+            switch info.id {
+            case "music" where info.commands.contains("music.library"): return .music
+            default: return nil
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -16,6 +28,13 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: Spacing.xl) {
                         header
                         dottyCard
+                        if let route = Route.screen(for: link.connection == .connected ? link.info : nil),
+                           let info = link.info {
+                            GlassCard(title: info.name, light: DottyLight.firefly.color) {
+                                LightRow(title: "Open \(info.name)", subtitle: screenSubtitle(route),
+                                         systemImage: screenSymbol(route), action: { path.append(route) })
+                            }
+                        }
                         GlassCard(title: "Cartridges") {
                             LightRow(title: "Browse cartridges", subtitle: "Install one over Wi-Fi",
                                      systemImage: "square.stack.3d.up", action: { path.append(.cartridges) })
@@ -82,9 +101,9 @@ struct DashboardView: View {
             if let info = link.info, link.connection == .connected {
                 // Cartridges with their own screen open it from here.
                 LightRow(title: info.cartridgeName ?? "No cartridge",
-                         subtitle: info.isLauncher ? "In the launcher" : (route(for: info) != nil ? "Running now · open" : "Running now"),
+                         subtitle: info.isLauncher ? "In the launcher" : "Running now",
                          systemImage: "square.stack.3d.up",
-                         action: route(for: info).map { route in { path.append(route) } })
+                         action: Route.screen(for: info).map { route in { path.append(route) } })
                 LightRow(title: "Battery", systemImage: batterySymbol(info.battery)) {
                     Text("\(info.battery)%")
                 }
@@ -107,12 +126,12 @@ struct DashboardView: View {
         }
     }
 
-    private func route(for info: DottyInfo) -> Route? {
-        guard !info.isLauncher else { return nil }
-        switch info.id {
-        case "music" where info.commands.contains("music.library"): return .music
-        default: return nil
-        }
+    private func screenSubtitle(_ route: Route) -> String {
+        route == .music ? "Playing, playlists and sending songs" : ""
+    }
+
+    private func screenSymbol(_ route: Route) -> String {
+        route == .music ? "music.note.list" : "square.stack.3d.up"
     }
 
     private func batterySymbol(_ percent: Int) -> String {

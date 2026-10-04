@@ -1,4 +1,4 @@
 {
-  "description": "Plays the MP3s on the SD card's /music folder, with play/pause and volume on screen.",
+  "description": "A little music player: library and playlists on the SD card, next/previous and volume on screen. Send songs from the iPhone over Wi-Fi.",
   "requires": ["sd"]
 }

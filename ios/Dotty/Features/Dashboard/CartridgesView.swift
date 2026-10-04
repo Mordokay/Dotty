@@ -120,7 +120,12 @@ struct CartridgesView: View {
         let busy = install != nil && install?.error == nil
         switch relation {
         case .current(let running):
-            StatusPill(state: .connected, text: running ? "Running" : "Installed")
+            HStack(spacing: Spacing.m) {
+                StatusPill(state: .connected, text: running ? "Running" : "Installed")
+                if running, let route = DashboardView.Route.screen(for: link.info) {
+                    NavigationLink("Open", value: route).buttonStyle(.light())
+                }
+            }
         case .update(let from):
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 Button("Update to \(cartridge.version)") { Task { await installCartridge(cartridge) } }
