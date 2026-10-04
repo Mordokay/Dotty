@@ -131,13 +131,8 @@ private struct MusicContent: View {
                         .foregroundStyle(Color.inkMuted)
                     }
                 }
-                HStack(spacing: Spacing.xl) {
-                    Button { Task { await model.setShuffle(!model.now.shuffle) } } label: {
-                        Image(systemName: model.now.shuffle ? "shuffle" : "arrow.right")
-                    }
-                    .buttonStyle(.quiet(model.now.shuffle ? DottyLight.firefly.color : .inkMuted))
-                    .accessibilityLabel(model.now.shuffle ? "Shuffle on" : "Shuffle off")
-                    Spacer()
+                // Transport centred; shuffle sits on the leading edge without widening the row.
+                HStack(spacing: Spacing.l) {
                     Button { Task { await model.previous() } } label: { Image(systemName: "backward.fill") }
                         .buttonStyle(.frostedCircle)
                     Button { Task { await model.toggle() } } label: {
@@ -148,9 +143,18 @@ private struct MusicContent: View {
                     .buttonStyle(.light(circle: true))
                     Button { Task { await model.next() } } label: { Image(systemName: "forward.fill") }
                         .buttonStyle(.frostedCircle)
-                    Spacer()
-                    // Balances the shuffle button so the transport stays centred.
-                    Image(systemName: "shuffle").hidden().padding(.horizontal, Spacing.m)
+                }
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    Button { Task { await model.setShuffle(!model.now.shuffle) } } label: {
+                        Image(systemName: model.now.shuffle ? "shuffle" : "arrow.right")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(model.now.shuffle ? DottyLight.firefly.color : Color.inkMuted)
+                    .accessibilityLabel(model.now.shuffle ? "Shuffle on" : "Shuffle off")
                 }
                 .disabled(model.songs.isEmpty)
                 LightSlider(title: "Volume", value: $volume)
