@@ -166,7 +166,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json`. Bump the
   version in `DOTTY_CARTRIDGE()` when a cartridge changes **and publish a new catalog**:
   the app installs whatever the latest release has, so a stale catalog silently
-  downgrades devices (happened: Music 0.5.1 replaced a USB-flashed 0.6.0). Optional per-cartridge
+  downgrades devices (happened: Music 0.5.1 replaced a USB-flashed 0.6.0). Run it with
+  `.venv/bin/python tools/build_catalog.py --release` (needs Pillow); every cartridge change
+  ends with commit → push → catalog release, without waiting for the user to ask. Optional per-cartridge
   `cartridges/<id>/cartridge.json` = description + requires.
 - Measured from the Mac: 2M PHY, ~30 ms interval, 7-9.5 KB/s (856 KB music ≈ 90 s;
   occasionally much slower right after another transfer). Expect better from iOS.
