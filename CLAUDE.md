@@ -111,6 +111,19 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   as the wake source; waking is a fresh boot.
 - Battery voltage is logged every 10 minutes (`power: battery ... mV`) to measure drain.
 
+## iOS app (`ios/`)
+
+- SwiftUI app `ios/Dotty.xcodeproj` (target/scheme `Dotty`, bundle id
+  `com.pedrosaldanha.dotty`, iOS 26.6+, Swift 6). Look and feel = the firefly design
+  system in `ios/Dotty/DesignSystem/`, documented in `ios/Design/System/project/README.md`
+  (tokens in `tokens.json`; rebuild the JS preview bundle with `python3 ios/Design/System/src/build.py`).
+- Build check without signing:
+  `xcodebuild -project ios/Dotty.xcodeproj -scheme Dotty -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build`
+- Signing uses the user's **personal** team (picked in Xcode); never the company team.
+- Personal project: no references to the user's employer or its products (the app came
+  from a prototype that used a company BLE package, removed on purpose — don't re-add it).
+- `ios/LICENSE` is GPL-3.0.
+
 ## Long-term goal
 
 An iOS app as Dotty's control panel over a custom BLE GATT command stack: Wi-Fi

@@ -69,6 +69,7 @@ src/epd_display.*     e-paper driver (draw with the Adafruit GFX API)
 src/main.cpp          Firmware entry point
 include/images/       Generated 1-bit bitmaps (see tools/img2epd.py)
 tools/img2epd.py      Converts a picture into a dithered e-paper bitmap header
+ios/                  Dotty iOS app (SwiftUI) and its design system docs
 docs/HARDWARE.md      Hardware reference
 ```
 
