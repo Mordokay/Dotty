@@ -45,14 +45,14 @@ type `d` to replay everything since boot, e.g. after plugging in later.
 ## Using the device
 
 - **PWR short press:** lock / unlock, like a Kindle. The lock screen shows the clock,
-  date, battery and a sleeping Dotty, and redraws only once a minute. Music keeps
+  date, battery and a padlock, and redraws only once a minute. Music keeps
   playing while locked. Touch and BOOT are ignored while locked.
 - **Auto-lock:** after 2 minutes without interaction.
 - **Power saving:** while locked and nothing needs the CPU (e.g. no music playing), Dotty
   sleeps between the once-a-minute clock updates. It stays awake while a computer is
   connected over USB, so flashing and logs keep working.
-- **PWR hold 2 s:** power off. Shows a dithered portrait; on battery the board switches
-  off, on USB it deep-sleeps. Press PWR to start again.
+- **PWR hold 2 s:** power off. Shows the portrait; on battery the board switches off
+  (~10 µA, the RTC keeps time), on USB it deep-sleeps. Press PWR to start again.
 - **Player:** tap the middle to play/pause, the − / + circles for volume.
   Long-press anywhere for a full refresh (clears ghosting).
 - **BOOT button:** switches between the player and the e-paper refresh test.

@@ -92,6 +92,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Kindle-style lock: PWR short press locks/unlocks; lock screen redraws once a minute
   (panel wear + battery), music keeps playing; auto-lock after 2 min idle. While
   unlocked, 1 refresh/s is fine only when something is actively changing.
+- Screens: lock = clock + padlock icon; power off = the user's dithered portrait
+  (`include/images/sleep_portrait.h`), not a drawn illustration.
 - e-paper datasheet: rated "panel life 5 years", refresh at least once per 24 h, no
   refresh-count rating. Keep full refreshes rare and periodic.
 

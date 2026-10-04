@@ -11,6 +11,6 @@ struct LockScreenInfo {
   String nowPlaying;  // empty when no music is playing
 };
 
-// Kindle-style lock screen: clock, date, battery and a sleeping Dotty.
+// Kindle-style lock screen: clock, date, battery and a padlock.
 // Meant to be redrawn once a minute.
 void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info);
