@@ -1,1 +1,75 @@
 # Dotty
+
+A battery-powered desk companion built on a 1.54" e-paper ESP32-S3 board. Dotty shows a
+little face and status info on e-ink, and will grow into a Tamagotchi-style character
+with moods driven by real sensors, controlled from a companion iOS app over Bluetooth LE.
+
+## Hardware
+
+- **Board:** Waveshare ESP32-S3-Touch-ePaper-1.54-EN (SKU 34212), V2
+  - ESP32-S3-PICO-1-N8R8: 8 MB flash, 8 MB PSRAM, Wi-Fi + BLE 5
+  - 200×200 black/white e-paper with FT6336 capacitive touch
+  - SHTC3 temperature/humidity, PCF85063 RTC, ES8311 audio codec + mic + speaker, microSD slot
+- **Battery:** Waveshare 3.7 V 400 mAh LiPo (SKU 32066), MX1.25 connector
+- **microSD:** SanDisk Ultra 32 GB, FAT32 / MBR, label `DOTTY`, folders `/ui`, `/audio`, `/system`
+
+Details, pin map and power notes: [docs/HARDWARE.md](docs/HARDWARE.md).
+
+## Setup (macOS)
+
+1. Install [VS Code](https://code.visualstudio.com/) and the **pioarduino IDE** extension.
+   Don't install the official PlatformIO IDE extension alongside it — they conflict.
+2. Let the extension install its core (first launch). The `pio` CLI then lives in
+   `~/.platformio/penv/bin/pio`; symlink it into `~/.local/bin` to use it from a terminal.
+3. Plug the board in with a data-capable USB-C cable. It shows up as `/dev/cu.usbmodem*`
+   (native USB, no driver needed).
+
+## Build, flash, monitor
+
+From VS Code: the ✓ (build), → (upload) and 🔌 (serial monitor) buttons in the status bar.
+
+From a terminal:
+
+```bash
+pio run                  # build
+pio run -t upload        # build + flash
+pio device monitor       # serial output (Ctrl+C to quit)
+```
+
+The first build downloads the ESP32 toolchain (a few minutes). Only one program can hold
+the serial port at a time — close the monitor before uploading from a terminal.
+
+## Using the device
+
+- **USB power:** boots straight away.
+- **Battery:** hold **PWR** until the screen redraws, then release. Hold **PWR** for 2 s to
+  power off; the last image stays on screen with no power.
+
+## Project layout
+
+```
+platformio.ini        Build config — replaces the Arduino IDE "Tools" menu
+partitions.csv        8 MB flash layout with two OTA app slots
+include/board_pins.h  Every GPIO on the board
+src/epd_display.*     e-paper driver (draw with the Adafruit GFX API)
+src/main.cpp          Firmware entry point
+docs/HARDWARE.md      Hardware reference
+```
+
+## Roadmap
+
+- [x] Toolchain, SD card, "Hello, Dotty" on e-paper with full + partial refresh
+- [ ] Dotty's face and expressions
+- [ ] Sensors: SHTC3 room temperature/humidity, RTC clock, battery level
+- [ ] Touch input
+- [ ] BLE command service (testable with nRF Connect)
+- [ ] iOS companion app: settings, Wi-Fi setup, firmware updates over BLE (OTA)
+
+## Restoring the factory demo
+
+```bash
+esptool --port /dev/cu.usbmodem1101 write-flash 0x0 V2-FactoryProgram.bin
+```
+
+`V2-FactoryProgram.bin` is in `03_Firmware/` of
+[waveshareteam/ESP32-S3-ePaper-1.54](https://github.com/waveshareteam/ESP32-S3-ePaper-1.54).
