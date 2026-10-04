@@ -227,7 +227,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   the phone's pending connection reconnects by itself. The cartridge's `onFinished` gets a
   `transfer::Summary` (received, failed, appFinished); Music shows "Songs received" or
   "Transfer failed" for 4 s, then the player. `.part` leftovers are deleted when a session
-  starts. Wi-Fi signal matters most: at −85 dBm a stress test ran at 95–166 KB/s. Card writes run on a separate task
+  starts. Wi-Fi signal matters most (small antenna): at −85 dBm a stress test ran at 95–166
+  KB/s; next to an iPhone hotspot the user measured > 500 KB/s. Card writes run on a separate task
   (3 × 16 KB blocks) so they overlap receiving. Holds the Network wake lock meanwhile. Events `transfer.received {dir, name, size}`. Cartridges opt in with
   `transfer::registerCommands(onFinished)` and call `transfer::poll()` in the loop.
 
