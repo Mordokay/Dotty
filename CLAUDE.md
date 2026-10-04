@@ -124,7 +124,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 ## iOS app (`ios/`)
 
 - SwiftUI app `ios/Dotty.xcodeproj` (target/scheme `Dotty`, bundle id
-  `com.pedrosaldanha.dotty`, iOS 26.6+, Swift 6). Look and feel = the firefly design
+  `com.greenspherestudios.dotty`, personal team `DL6N525G5K`, iOS 26.6+, Swift 6). Look and feel = the firefly design
   system in `ios/Dotty/DesignSystem/`, documented in `ios/Design/System/project/README.md`
   (tokens in `tokens.json`; rebuild the JS preview bundle with `python3 ios/Design/System/src/build.py`).
 - Build check without signing:
