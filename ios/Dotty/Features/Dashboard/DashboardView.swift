@@ -15,7 +15,7 @@ struct DashboardView: View {
         static func screen(for info: DottyInfo?) -> Route? {
             guard let info, !info.isLauncher else { return nil }
             switch info.id {
-            case "music" where info.commands.contains("music.library"): return .music
+            case "music" where info.isAtLeast("0.7.0"): return .music  // library + playlists
             default: return nil
             }
         }

@@ -81,7 +81,7 @@ struct WiFiView: View {
     }
 
     private func refresh() async {
-        if let info = link.info, !info.commands.contains("wifi.scan") {
+        if let info = link.info, !info.supports("wifi") {
             error = "\(info.name) \(info.version) is too old to set up Wi-Fi. Update it under Cartridges first."
             return
         }

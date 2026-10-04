@@ -62,6 +62,8 @@ final class MusicModel {
     private(set) var uploads: [Upload] = []
     private(set) var syncing = false
     private(set) var syncStage: String?
+    /// When the current sync started sending, for its speed.
+    private(set) var syncStarted: Date?
     var error: String?
     var notice: String?
 
@@ -240,10 +242,23 @@ final class MusicModel {
 
     var waitingCount: Int { uploads.filter { $0.state != .sent }.count }
 
+    var syncTotalBytes: Int64 { uploads.reduce(0) { $0 + $1.size } }
+    var syncSentBytes: Int64 { uploads.reduce(0) { $0 + ($1.state == .sent ? $1.size : $1.sent) } }
+
     var syncProgress: Double {
-        let total = uploads.reduce(Int64(0)) { $0 + $1.size }
-        guard total > 0 else { return 0 }
-        return Double(uploads.reduce(Int64(0)) { $0 + ($1.state == .sent ? $1.size : $1.sent) }) / Double(total)
+        syncTotalBytes > 0 ? Double(syncSentBytes) / Double(syncTotalBytes) : 0
+    }
+
+    /// "Song 2 of 5 · 6.1 MB of 18 MB · 240 KB/s"
+    var syncDetail: String? {
+        guard syncing, let started = syncStarted else { return nil }
+        let current = (uploads.firstIndex { $0.state == .sending } ?? uploads.count - 1) + 1
+        let sent = ByteCountFormatter.string(fromByteCount: syncSentBytes, countStyle: .file)
+        let total = ByteCountFormatter.string(fromByteCount: syncTotalBytes, countStyle: .file)
+        var line = "Song \(current) of \(uploads.count) · \(sent) of \(total)"
+        let seconds = Date().timeIntervalSince(started)
+        if seconds > 1, syncSentBytes > 0 { line += " · \(Int(Double(syncSentBytes) / 1024 / seconds)) KB/s" }
+        return line
     }
 
     /// Dotty joins Wi-Fi and opens a one-time upload server; each song goes over HTTP.
@@ -256,6 +271,7 @@ final class MusicModel {
         defer {
             syncing = false
             syncStage = nil
+            syncStarted = nil
         }
 
         let server: URL, token: String, ssid: String, pausesBluetooth: Bool
@@ -276,6 +292,7 @@ final class MusicModel {
         }
 
         var sentCount = 0
+        syncStarted = Date()
         for index in uploads.indices where uploads[index].state != .sent {
             syncStage = "Sending \(uploads[index].name)"
             uploads[index].state = .sending

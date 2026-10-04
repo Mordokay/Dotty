@@ -119,7 +119,10 @@ ServerCallbacks serverCallbacks;
 CommandCallbacks commandCallbacks;
 DataCallbacks dataCallbacks;
 
-void buildInfo(JsonDocument &doc) {
+// The Info characteristic holds at most 512 bytes (a longer value is cut, and the app can't
+// parse it), so it lists command namespaces ("features"); the core.info reply, which may be
+// any length, also lists every command.
+void buildInfo(JsonDocument &doc, bool withCommands) {
   const CartridgeInfo &me = cartridge::self();
   doc["role"] = cartridge::isLauncher() ? "launcher" : "cartridge";
   doc["id"] = me.id;
@@ -127,17 +130,28 @@ void buildInfo(JsonDocument &doc) {
   doc["version"] = me.version;
   doc["serial"] = serialText;
   doc["battery"] = batteryPercent(batteryMillivolts());
-  JsonArray cmds = doc["commands"].to<JsonArray>();
-  for (const auto &entry : handlers) cmds.add(entry.first.c_str());
+  JsonArray features = doc["features"].to<JsonArray>();
+  String last;
+  for (const auto &entry : handlers) {  // std::map: sorted, so namespaces come grouped
+    const std::string &cmd = entry.first;
+    const String ns = cmd.substr(0, cmd.find('.')).c_str();
+    if (ns != last) features.add(ns);
+    last = ns;
+  }
+  if (withCommands) {
+    JsonArray cmds = doc["commands"].to<JsonArray>();
+    for (const auto &entry : handlers) cmds.add(entry.first.c_str());
+  }
   if (infoExtender) infoExtender(doc.as<JsonObject>());
 }
 
 void refreshInfo() {
   if (!infoChar) return;
   JsonDocument doc;
-  buildInfo(doc);
+  buildInfo(doc, false);
   String json;
   serializeJson(doc, json);
+  if (json.length() > 500) LOGW("ble", "Info is %u bytes; the limit is 512", static_cast<unsigned>(json.length()));
   infoChar->setValue(json.c_str());
 }
 
@@ -170,7 +184,7 @@ void registerCoreCommands() {
   on("core.ping", [](JsonObjectConst, JsonObject) {});
   on("core.info", [](JsonObjectConst, JsonObject reply) {
     JsonDocument info;
-    buildInfo(info);
+    buildInfo(info, true);
     reply["info"] = info;
   });
   // Forgets every bonded phone (after replying). The phone must also "Forget This

@@ -27,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.8.0");
+DOTTY_CARTRIDGE("music", "Music", "0.8.1");
 
 namespace {
 
@@ -316,8 +316,23 @@ void drawTransfer() {
     epd.fillRect(barX + 2, barY + 2, static_cast<int64_t>(barW - 4) * s.done / s.total, barH - 4, kBlack);
   }
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, String(s.filesReceived) + (s.filesReceived == 1 ? " song received" : " songs received"), 150);
-  ui::drawCentered(epd, "over Wi-Fi", 172);
+  if (s.total > 0 && s.file.length()) {
+    // "1.6 / 4.0 MB" and the speed since the previous screen update.
+    static size_t lastDone = 0;
+    static uint32_t lastAt = 0;
+    const uint32_t now = millis();
+    const float rate = s.done > lastDone && lastAt ? (s.done - lastDone) / 1.024f / (now - lastAt) : 0;
+    lastDone = s.done;
+    lastAt = now;
+    char line[40];
+    snprintf(line, sizeof(line), "%.1f / %.1f MB", s.done / 1048576.0f, s.total / 1048576.0f);
+    ui::drawCentered(epd, line, 138);
+    if (rate > 0) {
+      snprintf(line, sizeof(line), "%.0f KB/s", rate);
+      ui::drawCentered(epd, line, 158);
+    }
+  }
+  ui::drawCentered(epd, String(s.filesReceived) + (s.filesReceived == 1 ? " song received" : " songs received"), 186);
 }
 
 // The menu's items: "" = Play all (the library), then every playlist.

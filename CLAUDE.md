@@ -131,7 +131,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - NimBLE-Arduino 2.x + ArduinoJson 7. Device name `Dotty-XXXX` (MAC suffix), the same
   in every firmware, so the app sees one device across cartridge swaps.
 - Service `b9c10000-fbaa-4525-8400-055f7a543231`; characteristics `…0001` Info (read,
-  JSON, refreshed every 10 s), `…0002` Command (write, JSON `{"cmd": …}`), `…0003` Event
+  JSON, refreshed every 10 s; **max 512 bytes** — a longer value is cut and the app can't
+  parse it, which hid the Music screen in 0.8.0 at 525 bytes. Info lists command
+  namespaces as `features`; `core.info` returns the full `commands` list. The app checks
+  `DottyInfo.supports("wifi")` / `isAtLeast("0.7.0")`, never individual commands in Info), `…0002` Command (write, JSON `{"cmd": …}`), `…0003` Event
   (notify, JSON replies `{"cmd": …, "ok": …}`), `…0004` Data (write-no-response, for
   installs).
 - Events longer than one notification (MTU − 3, ~290 B on iPhone) are split: every piece

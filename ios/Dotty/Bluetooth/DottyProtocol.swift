@@ -30,13 +30,27 @@ struct DottyInfo: Decodable, Equatable, Sendable {
     let version: String
     let battery: Int
     let serial: String?
-    let commands: [String]
+    /// Command namespaces ("wifi", "music", …). The Info value is capped at 512 bytes, so
+    /// newer firmware lists these instead of every command.
+    let features: [String]?
+    /// Every command (older firmware only; newer firmware returns it from core.info).
+    let commands: [String]?
     /// Launcher only: the cartridge in the slot.
     let installed: Installed?
     /// Launcher only: an SD card is in.
     let card: Bool?
 
     var isLauncher: Bool { role == "launcher" }
+
+    /// True if the firmware has commands in this namespace, e.g. "wifi".
+    func supports(_ feature: String) -> Bool {
+        features?.contains(feature) ?? commands?.contains { $0.hasPrefix(feature + ".") } ?? false
+    }
+
+    /// True if this firmware's version is at least `minimum` ("0.7.0").
+    func isAtLeast(_ minimum: String) -> Bool {
+        version.compare(minimum, options: .numeric) != .orderedAscending
+    }
 
     /// The cartridge Dotty runs (or has installed, when the launcher is up).
     var cartridgeName: String? { isLauncher ? installed.map { "\($0.name) \($0.version)" } : "\(name) \(version)" }

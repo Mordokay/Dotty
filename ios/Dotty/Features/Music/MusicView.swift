@@ -191,6 +191,9 @@ private struct MusicContent: View {
                     VStack(alignment: .leading, spacing: Spacing.s) {
                         LightProgress(value: model.syncProgress)
                         Text(model.syncStage ?? "").font(.lpCaption).foregroundStyle(Color.inkMuted)
+                        if let detail = model.syncDetail {
+                            Text(detail).font(.lpCaption.monospacedDigit()).foregroundStyle(Color.inkMuted)
+                        }
                     }
                     .padding(Spacing.m)
                 } else {
@@ -212,7 +215,8 @@ private struct MusicContent: View {
         case .waiting: return size
         case .sending:
             let percent = upload.size > 0 ? Int(Double(upload.sent) / Double(upload.size) * 100) : 0
-            return "Sending · \(percent)%"
+            let sent = ByteCountFormatter.string(fromByteCount: upload.sent, countStyle: .file)
+            return "\(sent) of \(size) · \(percent)%"
         case .sent: return "On Dotty"
         case .failed: return "Didn't arrive · \(size)"
         }
