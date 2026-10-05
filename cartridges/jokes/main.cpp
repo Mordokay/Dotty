@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.0");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.1");
 
 namespace {
 
@@ -155,7 +155,11 @@ void drawGrid() {
 
 void drawJoke() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, label(shown.category), nav::Icon::Back,
+  // From favourites: where in the list ("14/117"); otherwise the category.
+  const String title = shown.fromFavourites
+                           ? String(shown.favouriteIndex + 1) + "/" + String(jokes::favourites().size())
+                           : label(shown.category);
+  nav::draw(epd, title, nav::Icon::Back,
             jokes::isFavourite(shown.id) ? nav::Icon::StarFilled : nav::Icon::Star);
   const std::vector<Line> lines = jokeLines();
   scrollLine = constrain(scrollLine, 0, max(0, static_cast<int>(lines.size()) - kVisibleLines));
@@ -198,7 +202,7 @@ void drawFavourites() {
     if (i >= static_cast<int>(favs.size())) break;
     const int16_t top = nav::kHeight + 2 + row * kRowH;
     epd.setCursor(10, top + 19);
-    epd.print(ui::fitText(epd, favs[i].setup, kW - 20));
+    epd.print(ui::fitText(epd, String(i + 1) + ". " + favs[i].setup, kW - 20));
     epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   if (pages > 1) {
@@ -379,17 +383,17 @@ std::vector<Line> lockLines(const char *setup, const char *punchline, int maxLin
   return lines;
 }
 
-bool drawLockJoke(Adafruit_GFX &gfx, const tm &now, int16_t top, int16_t bottom) {
+// Lines from the top of the widget's canvas; returns the height used (the shell centres it
+// with the clock).
+int16_t drawLockJoke(Adafruit_GFX &gfx, const tm &now, int16_t maxHeight) {
   const jokes::Joke *j = jokes::lockJoke(now);
-  if (!j) return false;
+  if (!j) return 0;
   const std::vector<Line> lines = lockLines(j->setup, j->punchline, 4);
-  const int16_t height = lines.size() * kLineH;
-  const int16_t first = top + (bottom - top - height) / 2 + 14;
   for (size_t i = 0; i < lines.size(); i++) {
     gfx.setFont(lines[i].bold ? &FreeSansBold9pt7b : &FreeSans9pt7b);
-    ui::drawCentered(gfx, lines[i].text, first + i * kLineH);
+    ui::drawCentered(gfx, lines[i].text, 14 + i * kLineH);
   }
-  return true;
+  return min<int16_t>(maxHeight, lines.size() * kLineH - 1);
 }
 
 void measureLockFit() {

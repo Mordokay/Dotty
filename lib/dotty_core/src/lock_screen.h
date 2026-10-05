@@ -13,7 +13,7 @@ struct LockScreenInfo {
   bool batteryLow;
   String nowPlaying;  // empty when no music is playing
   // See shell::Config::drawLockWidget.
-  bool (*widget)(Adafruit_GFX &gfx, const tm &now, int16_t top, int16_t bottom);
+  int16_t (*widget)(Adafruit_GFX &gfx, const tm &now, int16_t maxHeight);
 };
 
 // Kindle-style lock screen: clock, date, battery and a padlock. On a charger the padlock

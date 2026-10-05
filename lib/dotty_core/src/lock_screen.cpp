@@ -44,22 +44,32 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   if (info.timeValid) snprintf(clock, sizeof(clock), "%02d:%02d", info.time.tm_hour, info.time.tm_min);
   gfx.setFont(&FreeSansBold24pt7b);
 
-  // With a widget (a joke, the forecast…): clock and a small padlock share one row near the
-  // top, and the widget gets the middle. The clock's row is cleared again if it draws nothing.
-  bool widgetShown = false;
+  // With a widget (a joke, the forecast…): it draws into its own canvas and says how tall it
+  // is; the clock row (clock + small padlock) and the widget are then centred together
+  // between the top row and the bottom line, so a 3-line joke doesn't leave a gap.
+  constexpr int16_t kWidgetMax = 80, kAreaTop = 26, kAreaBottom = 162, kGap = 12;
+  int16_t widgetH = 0;
+  static GFXcanvas1 area(kW, kWidgetMax);
   if (info.widget && info.timeValid) {
-    const int16_t clockW = ui::textWidth(gfx, clock), lockW = 18, gap = 12;
-    const int16_t x = (kW - (clockW + gap + lockW)) / 2;
+    area.fillScreen(kWhite);
+    area.setTextColor(kBlack);
+    area.setTextWrap(false);
+    area.setFont(&FreeSans9pt7b);
+    widgetH = constrain(info.widget(area, info.time, kWidgetMax), 0, kWidgetMax);
+  }
+  const bool widgetShown = widgetH > 0;
+  if (widgetShown) {
     int16_t x1, y1;
     uint16_t w, h;
-    gfx.getTextBounds(clock, 0, 60, &x1, &y1, &w, &h);
-    gfx.setCursor(x - x1, 60);
+    gfx.getTextBounds(clock, 0, 0, &x1, &y1, &w, &h);  // y1 < 0: the digits' top above the baseline
+    const int16_t lockW = 18, lockH = 26, gap = 12;
+    const int16_t top = kAreaTop + (kAreaBottom - kAreaTop - (h + kGap + widgetH)) / 2;
+    const int16_t x = (kW - (w + gap + lockW)) / 2;
+    gfx.setCursor(x - x1, top - y1);
     gfx.print(clock);
-    art::drawSmallPadlock(gfx, x + clockW + gap, 30);
-    gfx.setFont(&FreeSans9pt7b);
-    widgetShown = info.widget(gfx, info.time, 72, 162);
-    if (!widgetShown) gfx.fillRect(0, 26, kW, 140, kWhite);
-    gfx.setFont(&FreeSansBold24pt7b);
+    art::drawSmallPadlock(gfx, x + w + gap, top + (h - lockH) / 2);
+    // Canvas bits: 1 = white, like the display's.
+    gfx.drawBitmap(0, top + h + kGap, area.getBuffer(), kW, widgetH, kWhite, kBlack);
   }
 
   if (widgetShown) {

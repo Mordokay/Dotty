@@ -39,10 +39,11 @@ struct Config {
   // true: a connected phone stays connected while locked (e.g. a cartridge receiving
   // iPhone notifications); Dotty then stays awake while connected. OFF always cuts it.
   bool bluetoothWhileLocked = false;
-  // Optional content for the middle of the lock screen (e.g. a joke, the forecast): draw it
-  // between y top and bottom (full width, ~4 lines of 9 pt text) and return true. The clock
-  // then moves up into one row with a small padlock. Return false for the usual layout.
-  bool (*drawLockWidget)(Adafruit_GFX &gfx, const tm &now, int16_t top, int16_t bottom) = nullptr;
+  // Optional content for the lock screen (e.g. a joke, the forecast): draw it from y = 0 on
+  // the full-width canvas given (at most maxHeight tall: 4 lines of 9 pt text) and return the
+  // height used, 0 for nothing. The clock and a small padlock then share one row, and the
+  // row plus this content are centred together. 0 keeps the usual layout.
+  int16_t (*drawLockWidget)(Adafruit_GFX &gfx, const tm &now, int16_t maxHeight) = nullptr;
   // Power-off pictures; one is picked at random each time.
   const Picture *offPictures = nullptr;
   size_t offPictureCount = 0;
