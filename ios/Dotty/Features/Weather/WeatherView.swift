@@ -2,8 +2,8 @@ import CoreLocation
 import SwiftUI
 
 /// The Weather Station cartridge's screen: what Dotty shows now, where the forecast is for
-/// (automatic, this iPhone's location, or a searched city), units, and a correction for the
-/// room sensor (firmware: cartridges/weather/).
+/// (automatic, this iPhone's location, or a searched city) and units (firmware:
+/// cartridges/weather/).
 struct WeatherView: View {
     @Environment(DottyLink.self) private var link
     @State private var status: Status?
@@ -16,11 +16,9 @@ struct WeatherView: View {
         var automatic = true
         var placeName = ""
         var imperial = false
-        var insideOffset = 0.0
-        var insideTemp: Double?
-        var insideHumidity: Int?
         var place = ""
         var temp: Double?
+        var feels: Double?
         var humidity: Int?
         var description = ""
         var fetchedAt: Date?
@@ -32,7 +30,7 @@ struct WeatherView: View {
         LightField {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.xl) {
-                    PageHeader(title: "Weather Station", subtitle: "Outside from Open-Meteo, inside from Dotty's own sensor.")
+                    PageHeader(title: "Weather Station", subtitle: "Today and the next 6 days, from Open-Meteo.")
                         .padding(.top, Spacing.l)
                     NotConnectedNotice()
                     if let error { NoticeCard(kind: .error, text: error) }
@@ -75,8 +73,8 @@ struct WeatherView: View {
             LightRow(title: "Outside", subtitle: s.description.isEmpty ? nil : s.description, systemImage: "cloud.sun") {
                 Text(reading(s.temp, s.humidity, imperial: s.imperial))
             }
-            LightRow(title: "Inside", subtitle: "Dotty's room sensor", systemImage: "house") {
-                Text(reading(s.insideTemp, s.insideHumidity, imperial: s.imperial))
+            LightRow(title: "Feels like", subtitle: "With wind and humidity", systemImage: "thermometer.medium") {
+                Text(reading(s.feels, nil, imperial: s.imperial))
             }
             LightRow(title: s.fetching ? "Updating…" : "Update now",
                      subtitle: s.fetchError.map { "Last try: \($0)" } ?? s.fetchedAt.map { "Updated \($0.formatted(.relative(presentation: .named))) · every hour" },
@@ -118,21 +116,6 @@ struct WeatherView: View {
                 .fixedSize()
             }
             .padding(Spacing.m)
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Room sensor").font(.lpHeadline).foregroundStyle(Color.ink)
-                    Text("Dotty warms its own sensor a little. Match a thermometer.")
-                        .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: Spacing.s)
-                Stepper(value: Binding(get: { s.insideOffset }, set: { new in Task { await setOffset(new) } }),
-                        in: -10...10, step: 0.5) {
-                    Text(String(format: "%+.1f°", s.insideOffset)).font(.lpCallout.monospacedDigit())
-                }
-                .fixedSize()
-            }
-            .padding(Spacing.m)
         }
     }
 
@@ -152,14 +135,10 @@ struct WeatherView: View {
             s.automatic = location["automatic"] as? Bool ?? true
             s.placeName = location["name"] as? String ?? ""
             s.imperial = (r["units"] as? String) == "imperial"
-            s.insideOffset = r["insideOffset"] as? Double ?? 0
-            if let inside = r["inside"] as? [String: Any] {
-                s.insideTemp = inside["temp"] as? Double
-                s.insideHumidity = inside["humidity"] as? Int
-            }
             if let now = r["now"] as? [String: Any] {
                 s.place = now["place"] as? String ?? ""
                 s.temp = now["temp"] as? Double
+                s.feels = now["feels"] as? Double
                 s.humidity = now["humidity"] as? Int
                 s.description = now["description"] as? String ?? ""
                 if let at = now["fetchedAt"] as? Double, at > 1_600_000_000 { s.fetchedAt = Self.localDate(at) }
@@ -192,7 +171,6 @@ struct WeatherView: View {
     private func setUnits(imperial: Bool) async {
         await command("weather.units", ["units": imperial ? "imperial" : "metric"])
     }
-    private func setOffset(_ offset: Double) async { await command("weather.inside.offset", ["offset": offset]) }
     private func setAutomatic() async { await command("weather.location", ["automatic": true]) }
     private func setLocation(_ city: City) async {
         await command("weather.location", ["automatic": false, "lat": city.latitude, "lon": city.longitude, "name": city.name])

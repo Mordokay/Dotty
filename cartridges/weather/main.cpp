@@ -1,10 +1,11 @@
-// Weather Station: outside weather from Open-Meteo (weather_data.h) next to the room's own
-// temperature and humidity (SHTC3, climate.h).
+// Weather Station: the weather from Open-Meteo (weather_data.h).
 //
-// Screens: Today (big icon, outside temperature and condition; inside | outside; UV, wind,
-// rain chance and the next sunset or sunrise) and Week (7 rows). Swipe, the nav arrows or
-// BOOT switch between them. Hourly downloads also run while locked, and each one sets
-// Dotty's clock from internet time. The lock screen shows a short summary.
+// Screens: Today (big icon, temperature and condition; today's low/high | feels like; UV,
+// wind, rain chance and the next sunset or sunrise), then the next 6 days as cards on two
+// pages. Swipe, the nav arrows or BOOT switch between them. Hourly downloads also run while
+// locked, and each one sets Dotty's clock from internet time. The lock screen shows a card.
+// (The board's SHTC3 read the room 5-8 °C high from Dotty's own heat, so there's no inside
+// reading.)
 
 #include <Arduino.h>
 #include <Fonts/FreeSans9pt7b.h>
@@ -12,7 +13,6 @@
 #include <Fonts/FreeSansBold9pt7b.h>
 
 #include "cartridge.h"
-#include "climate.h"
 #include "core_ble.h"
 #include "images/sleep_panda.h"
 #include "images/sleep_portrait.h"
@@ -26,7 +26,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.1.1");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.2.0");
 
 namespace {
 
@@ -35,7 +35,6 @@ using shell::epd;
 constexpr int16_t kW = EpdDisplay::kSize;
 constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
-constexpr uint32_t kInsideEveryMs = 60 * 1000;
 
 // Today, then the next 6 days in two pages of three.
 enum class Screen { Today, Days1, Days2 };
@@ -43,24 +42,7 @@ Screen screen = Screen::Today;
 bool sdReady = false;
 bool redraw = true;
 
-climate::Reading inside;
-bool insideValid = false;
-uint32_t insideAt = 0;
-
 // ---------- values ----------
-
-void readInside(bool force = false) {
-  if (!force && insideValid && millis() - insideAt < kInsideEveryMs) return;
-  climate::Reading r;
-  if (climate::read(r)) {
-    const bool changed = !insideValid || fabsf(r.celsius - inside.celsius) >= 0.1f ||
-                         fabsf(r.humidity - inside.humidity) >= 1.0f;
-    inside = r;
-    insideValid = true;
-    if (changed && screen == Screen::Today) redraw = true;
-  }
-  insideAt = millis();
-}
 
 bool imperial() {
   return weather::settings().imperial;
@@ -92,18 +74,15 @@ int16_t tempWidth(Adafruit_GFX &gfx, float v, int decimals, bool big = false) {
   return ui::textWidth(gfx, tempText(v, decimals)) + (big ? 14 : 8);
 }
 
-// The sensor sits on the board, which warms it a little: the app can set a correction.
-float insideCelsius() {
-  return inside.celsius + weather::settings().insideOffset;
-}
-
-float insideTemp() {
-  return imperial() ? insideCelsius() * 9 / 5 + 32 : insideCelsius();
-}
-
 const char *compass(int deg) {
   static const char *kPoints[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
   return kPoints[((deg + 22) % 360) / 45];
+}
+
+// "SW 14 km/h"
+String windText(float speed, int dir, bool imperial) {
+  if (isnan(speed)) return "--";
+  return String(compass(dir)) + " " + String(lroundf(speed)) + (imperial ? " mph" : " km/h");
 }
 
 const char *uvLabel(float uv) {
@@ -149,6 +128,15 @@ String age(const weather::Forecast &f) {
 
 // ---------- screens ----------
 
+// Width of text as drawn (ui::textWidth would also squash double spaces).
+int16_t rawWidth(Adafruit_GFX &gfx, const String &text) {
+  int16_t x1, y1;
+  uint16_t w, h;
+  gfx.getTextBounds(text.c_str(), 0, 0, &x1, &y1, &w, &h);
+  return w;
+}
+
+
 void drawToday() {
   const weather::Forecast &f = weather::forecast();
   epd.fillScreen(kWhite);
@@ -175,26 +163,27 @@ void drawToday() {
     }
   }
 
-  // Inside | outside.
+  // Today's low/high | feels like (right column wider: "FEELS LIKE" is the longest label).
+  constexpr int16_t kMidSplit = 92;
+  const int16_t leftMid = kMidSplit / 2, rightMid = (kMidSplit + kW) / 2;
   epd.drawFastHLine(6, 98, kW - 12, kBlack);
-  epd.drawFastVLine(kW / 2, 102, 38, kBlack);
+  epd.drawFastVLine(kMidSplit, 102, 38, kBlack);
   epd.setFont(&FreeSans9pt7b);
-  const char *labels[2] = {"INSIDE", "OUTSIDE"};
-  for (int col = 0; col < 2; col++) {
-    const int16_t left = col * kW / 2, mid = left + kW / 4;
-    epd.setCursor(mid - ui::textWidth(epd, labels[col]) / 2, 116);
-    epd.print(labels[col]);
-    const bool have = col == 0 ? insideValid : f.valid;
-    const float t = col == 0 ? insideTemp() : f.now.temp;
-    const int hum = col == 0 ? lroundf(inside.humidity) : f.now.humidity;
-    epd.setFont(&FreeSansBold9pt7b);
-    const String humText = have && hum >= 0 ? "  " + String(hum) + "%" : String();
-    const int16_t width = tempWidth(epd, have ? t : NAN, 1) + ui::textWidth(epd, humText);
-    const int16_t x = printTemp(epd, mid - width / 2, 136, have ? t : NAN, 1);
-    epd.setCursor(x, 136);
-    epd.print(humText);
-    epd.setFont(&FreeSans9pt7b);
-  }
+  epd.setCursor(leftMid - ui::textWidth(epd, "TODAY") / 2, 116);
+  epd.print("TODAY");
+  epd.setCursor(rightMid - ui::textWidth(epd, "FEELS LIKE") / 2, 116);
+  epd.print("FEELS LIKE");
+  epd.setFont(&FreeSansBold9pt7b);
+  const weather::Day &today = f.days[0];
+  const float low = f.valid ? today.tmin : NAN, high = f.valid ? today.tmax : NAN;
+  const int16_t rangeW = tempWidth(epd, low, 0) + rawWidth(epd, " / ") + tempWidth(epd, high, 0);
+  int16_t x = printTemp(epd, leftMid - rangeW / 2, 136, low, 0);
+  epd.setCursor(x, 136);
+  epd.print(" / ");
+  printTemp(epd, epd.getCursorX(), 136, high, 0);
+  const float feels = f.valid ? f.now.feels : NAN;
+  printTemp(epd, rightMid - tempWidth(epd, feels, 0) / 2, 136, feels, 0);
+  epd.setFont(&FreeSans9pt7b);
 
   // UV, wind, rain, sun.
   epd.drawFastHLine(6, 144, kW - 12, kBlack);
@@ -202,12 +191,9 @@ void drawToday() {
   constexpr int16_t kSplit = 84;
   epd.drawFastVLine(kSplit, 148, 46, kBlack);
   if (f.valid) {
-    const weather::Day &today = f.days[0];
     const String cells[4] = {
         isnan(f.now.uv) ? String("UV --") : "UV " + String(lroundf(f.now.uv)) + " " + uvLabel(f.now.uv),
-        isnan(f.now.wind) ? String("Wind --")
-                          : String(compass(f.now.windDir)) + " " + String(lroundf(f.now.wind)) +
-                                (f.imperial ? " mph" : " km/h"),
+        isnan(f.now.wind) ? String("Wind --") : windText(f.now.wind, f.now.windDir, f.imperial),
         today.rainChance < 0 ? String("Rain --") : "Rain " + String(today.rainChance) + "%",
         sunLine(f),
     };
@@ -221,18 +207,22 @@ void drawToday() {
   }
 }
 
-// Width of text as drawn (ui::textWidth would also squash double spaces).
-int16_t rawWidth(Adafruit_GFX &gfx, const String &text) {
-  int16_t x1, y1;
-  uint16_t w, h;
-  gfx.getTextBounds(text.c_str(), 0, 0, &x1, &y1, &w, &h);
-  return w;
-}
-
 // A small raindrop, about 6 x 9 px, its tip at (x, top).
 void drop(Adafruit_GFX &gfx, int16_t x, int16_t top) {
   gfx.fillTriangle(x, top, x - 3, top + 5, x + 3, top + 5, kBlack);
   gfx.fillCircle(x, top + 6, 3, kBlack);
+}
+
+// A small wind sign, about 12 x 9 px: three streaks, the top and bottom ones curling up.
+void windSign(Adafruit_GFX &gfx, int16_t x, int16_t top) {
+  gfx.drawFastHLine(x, top + 1, 8, kBlack);
+  gfx.drawFastHLine(x, top + 2, 8, kBlack);
+  gfx.drawFastHLine(x + 2, top + 5, 10, kBlack);
+  gfx.drawFastHLine(x + 2, top + 6, 10, kBlack);
+  gfx.drawFastHLine(x, top + 9, 7, kBlack);
+  gfx.drawFastHLine(x, top + 10, 7, kBlack);
+  gfx.fillCircle(x + 9, top + 1, 1, kBlack);
+  gfx.fillCircle(x + 8, top + 9, 1, kBlack);
 }
 
 // A day's total rain in words: people don't know what 1.6 mm looks like. Daily totals, so
@@ -249,6 +239,7 @@ const char *rainAmount(float amount, bool imperial) {
 // Three days per page, each a card: a big icon on the left, two lines on the right.
 //   Tue 6           19/23°
 //   (drop) 28% Light
+//   (wind) W 22 km/h
 void drawDays(int page) {
   const weather::Forecast &f = weather::forecast();
   epd.fillScreen(kWhite);
@@ -265,27 +256,32 @@ void drawDays(int page) {
     const int index = 1 + page * 3 + row;  // tomorrow onwards
     if (index >= weather::kDays) break;
     const weather::Day &d = f.days[index];
-    const int16_t top = nav::kHeight + 2 + row * kRowH;
+    const int16_t top = nav::kHeight + 1 + row * kRowH;
     icons::drawWeather(epd, d.code, true, 30, top + kRowH / 2, 44);
 
     // Line 1: day and date, low/high on the right.
     epd.setFont(&FreeSansBold9pt7b);
     const char *dayOfMonth = strlen(d.date) == 10 ? d.date + 8 : "";
-    epd.setCursor(kText, top + 22);
+    epd.setCursor(kText, top + 17);
     epd.print(dayName(d.date, index) + " " + String(atoi(dayOfMonth)));
     const String low = isnan(d.tmin) ? String("--") : String(lroundf(d.tmin));
     const String high = isnan(d.tmax) ? String("--") : String(lroundf(d.tmax));
     const String temps = low + "/" + high;
-    epd.setCursor(kW - 6 - 7 - ui::textWidth(epd, temps), top + 22);
+    epd.setCursor(kW - 6 - 7 - ui::textWidth(epd, temps), top + 17);
     epd.print(temps);
-    if (!isnan(d.tmax)) epd.drawCircle(epd.getCursorX() + 3, top + 11, 2, kBlack);
+    if (!isnan(d.tmax)) epd.drawCircle(epd.getCursorX() + 3, top + 6, 2, kBlack);
 
     // Line 2: chance of rain and how much, in words.
     epd.setFont(&FreeSans9pt7b);
-    drop(epd, kText + 3, top + 31);
-    epd.setCursor(kText + 10, top + 44);
+    drop(epd, kText + 3, top + 21);
+    epd.setCursor(kText + 10, top + 34);
     epd.print((d.rainChance < 0 ? String("--") : String(d.rainChance) + "%") + " " +
               rainAmount(d.rain, f.imperial));
+
+    // Line 3: the day's strongest wind.
+    windSign(epd, kText - 2, top + 40);
+    epd.setCursor(kText + 14, top + 51);
+    epd.print(windText(d.windMax, d.windDir, f.imperial));
 
     if (row < 2) {
       for (int16_t dx = 6; dx < kW - 6; dx += 4) epd.drawPixel(dx, top + kRowH - 1, kBlack);  // dotted line
@@ -294,7 +290,6 @@ void drawDays(int page) {
 }
 
 void drawApp() {
-  readInside();
   if (screen == Screen::Today) drawToday();
   else drawDays(screen == Screen::Days1 ? 0 : 1);
 }
@@ -302,54 +297,48 @@ void drawApp() {
 // ---------- lock screen ----------
 
 
-// A card like the forecast rows: the weather icon on the left, up to three lines beside it.
-//   23° out  29° in
-//   Rain 8%
+// A card like the forecast rows: the weather icon on the left, three lines beside it.
+//   23°  17/27°
+//   (drop) 8% Dry
 //   Sunset 19:13
 int16_t drawLockSummary(Adafruit_GFX &gfx, const tm &, int16_t maxHeight) {
   const weather::Forecast &f = weather::forecast();
-  readInside();
-  if (!f.valid && !insideValid) return 0;
-  constexpr int16_t kIcon = 48, kGap = 10, kDeg = 7, kSpace = 12, kLine = 19;
+  if (!f.valid) return 0;
+  constexpr int16_t kIcon = 48, kGap = 10, kDeg = 7, kLine = 19, kDropW = 10;
+  const weather::Day &today = f.days[0];
   gfx.setFont(&FreeSansBold9pt7b);
-  const String out = f.valid ? tempText(f.now.temp, 0) : String("--");
-  const String in = insideValid ? tempText(insideTemp(), 0) : String("--");
-  const int16_t line1 = rawWidth(gfx, out) + kDeg + rawWidth(gfx, " out") + kSpace + rawWidth(gfx, in) + kDeg +
-                        rawWidth(gfx, " in");
+  const String now = tempText(f.now.temp, 0);
+  const int16_t nowW = rawWidth(gfx, now) + kDeg;
   gfx.setFont(&FreeSans9pt7b);
-  const String rain = f.valid && f.days[0].rainChance >= 0 ? "Rain " + String(f.days[0].rainChance) + "%" : String();
-  const String sun = f.valid ? sunLine(f) : String();
-  const int16_t textW = max(line1, max(rawWidth(gfx, rain), rawWidth(gfx, sun)));
-  const int16_t lines = 1 + (rain.length() ? 1 : 0) + (sun.length() ? 1 : 0);
+  const String range = "  " + tempText(today.tmin, 0) + "/" + tempText(today.tmax, 0);
+  const String rain = (today.rainChance < 0 ? String("--") : String(today.rainChance) + "%") + " " +
+                      rainAmount(today.rain, f.imperial);
+  const String sun = sunLine(f);
+  const int16_t line1 = nowW + rawWidth(gfx, range) + kDeg;
+  const int16_t textW = max(line1, max<int16_t>(kDropW + rawWidth(gfx, rain), rawWidth(gfx, sun)));
+  const int16_t lines = sun.length() ? 3 : 2;
   const int16_t height = max<int16_t>(kIcon, lines * kLine);
   // Icon and text centred together, as one card.
-  int16_t x = (kW - (f.valid ? kIcon + kGap : 0) - textW) / 2;
-  if (f.valid) {
-    icons::drawWeather(gfx, f.now.code, f.now.isDay, x + kIcon / 2, height / 2, kIcon);
-    x += kIcon + kGap;
-  }
+  int16_t x = (kW - kIcon - kGap - textW) / 2;
+  icons::drawWeather(gfx, f.now.code, f.now.isDay, x + kIcon / 2, height / 2, kIcon);
+  x += kIcon + kGap;
   int16_t y = (height - lines * kLine) / 2 + 14;
   gfx.setFont(&FreeSansBold9pt7b);
-  int16_t cx = x;
-  auto part = [&](const String &value, const char *label) {
-    gfx.setCursor(cx, y);
-    gfx.print(value);
-    cx += rawWidth(gfx, value);
-    gfx.drawCircle(cx + 3, y - 11, 2, kBlack);  // degree sign
-    cx += kDeg;
-    gfx.setCursor(cx, y);
-    gfx.print(label);
-    cx += rawWidth(gfx, label);
-  };
-  part(out, " out");
-  cx += kSpace;
-  part(in, " in");
+  gfx.setCursor(x, y);
+  gfx.print(now);
+  gfx.drawCircle(x + nowW - 4, y - 11, 2, kBlack);  // degree sign
   gfx.setFont(&FreeSans9pt7b);
-  for (const String *text : {&rain, &sun}) {
-    if (text->isEmpty()) continue;
+  gfx.setCursor(x + nowW, y);
+  gfx.print(range);
+  if (!isnan(today.tmax)) gfx.drawCircle(gfx.getCursorX() + 3, y - 11, 2, kBlack);
+  y += kLine;
+  drop(gfx, x + 3, y - 13);
+  gfx.setCursor(x + kDropW, y);
+  gfx.print(rain);
+  if (sun.length()) {
     y += kLine;
     gfx.setCursor(x, y);
-    gfx.print(*text);
+    gfx.print(sun);
   }
   return min<int16_t>(maxHeight, height);
 }
@@ -387,12 +376,6 @@ void registerCommands() {
       loc["lon"] = s.lon;
     }
     reply["units"] = s.imperial ? "imperial" : "metric";
-    reply["insideOffset"] = s.insideOffset;
-    readInside(true);
-    if (insideValid) {
-      reply["inside"]["temp"] = roundf(insideTemp() * 10) / 10;
-      reply["inside"]["humidity"] = lroundf(inside.humidity);
-    }
     const weather::Forecast &f = weather::forecast();
     if (f.valid) {
       JsonObject now = reply["now"].to<JsonObject>();
@@ -420,11 +403,6 @@ void registerCommands() {
       return;
     }
     weather::setLocation(automatic, lat, lon, args["name"] | "");
-  });
-  // {offset}: °C added to the room sensor's reading (the board warms it a little).
-  ble::on("weather.inside.offset", [](JsonObjectConst args, JsonObject) {
-    weather::setInsideOffset(args["offset"] | 0.0f);
-    redraw = true;
   });
   ble::on("weather.units", [](JsonObjectConst args, JsonObject) {
     weather::setImperial(strcmp(args["units"] | "metric", "imperial") == 0);
@@ -457,7 +435,6 @@ void setup() {
 
   sdReady = storage::begin();
   if (sdReady) weather::begin();
-  readInside(true);
   registerCommands();
   shell::showApp();
 }
@@ -480,7 +457,6 @@ void loop() {
   if (const time_t local = weather::takeClock()) shell::setLocalTime(local);
   if (!unlocked) return;
 
-  readInside();
   if (input.key == 'r') weather::startFetch();  // developer aids: fetch now…
   if (input.key == 'n') input.boot = true;       // …switch screens, like BOOT…
   if (input.key == 'l') shell::lock();           // …and lock (to screenshot the lock screen)

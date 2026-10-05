@@ -139,7 +139,7 @@ struct DashboardView: View {
         switch route {
         case .music: "Playing, playlists and sending songs"
         case .jokes: "Favourites and the jokes on Dotty"
-        case .weather: "Location, units and the room sensor"
+        case .weather: "Location and units"
         default: ""
         }
     }

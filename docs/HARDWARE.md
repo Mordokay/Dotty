@@ -19,7 +19,7 @@ Verified on the device with `esptool flash-id` and the boot log:
 |---|---|---|
 | e-Paper | 1.54" 200×200 B/W, SSD1681-class | Full refresh ≈ 1.9 s (flashes), partial ≈ 0.6 s. Keeps image with power off. |
 | FT6336 | Capacitive touch (I2C) | INT GPIO21, RST GPIO7 |
-| SHTC3 | Temperature + humidity (I2C 0x70) | Real indoor readings |
+| SHTC3 | Temperature + humidity (I2C 0x70) | Reads the board's own heat (+8 °C measured), not the room |
 | PCF85063 | RTC (I2C 0x51) | Timekeeping, wake from deep sleep |
 | ES8311 | Audio codec | Onboard mic + onboard speaker, MX1.25 speaker header |
 | ETA6098 | LiPo charger | Battery voltage on GPIO4 via 1:2 divider |

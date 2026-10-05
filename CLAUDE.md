@@ -11,7 +11,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - `esptool flash-id`: ESP32-S3 rev 2, **8 MB flash (GD, quad), 8 MB OPI PSRAM**.
 - **BLE only** — no Bluetooth Classic, so no A2DP audio streaming. For phone media
   control use Apple Media Service (AMS); for iOS notifications, ANCS.
-- **No IMU** (no shake detection). Use SHTC3 for real temperature/humidity instead.
+- **No IMU** (no shake detection). The SHTC3 temperature/humidity sensor sits on the board
+  and reads the board's heat (+8 °C measured), not the room's.
 - e-paper timing measured: full refresh ≈ 1.9 s (flashes), partial ≈ 0.6 s. Design UI
   for slow, discrete frame changes — not smooth animation.
 - Power: on battery the board stays on only while **GPIO17 is high** (soft latch). Set it
@@ -324,31 +325,32 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ## Weather Station cartridge (`cartridges/weather/`)
 
-- Outside: Open-Meteo forecast (free, no key; `current` + 7 `daily`, `timezone=auto`,
-  imperial = `temperature_unit/wind_speed_unit/precipitation_unit` params) for a location
-  that is automatic (ipwho.is from Dotty's public IP — off by a city on a phone hotspot) or
-  set from the app (iPhone location via CoreLocation, or a city from Open-Meteo geocoding,
-  searched on the phone). Settings in NVS `weather` (auto, lat, lon, name, imperial,
-  insideOffset). Fetched hourly (retry 10 min) by a background task (core 0, 12 KB), also
+- Open-Meteo forecast (free, no key; `current` + 7 `daily` incl. max wind and its dominant
+  direction, `timezone=auto`, imperial = `temperature_unit/wind_speed_unit/precipitation_unit`
+  params) for a location that is automatic (ipwho.is from Dotty's public IP — off by a city on
+  a phone hotspot) or set from the app (iPhone location via CoreLocation, or a city from
+  Open-Meteo geocoding, searched on the phone). Settings in NVS `weather` (auto, lat, lon,
+  name, imperial). Fetched hourly (retry 10 min) by a background task (core 0, 12 KB), also
   while locked; the raw answer is cached as `data/forecast.json` + `forecast.meta`.
-- Inside: SHTC3 (`lib/dotty_core/src/climate.*`, I2C 0x70: wake 0x3517, measure 0x7866,
-  sleep 0xB098, CRC-8 0x31), read every 60 s. It reads ~5 °C high from the board's own heat;
-  the app sets `insideOffset` (°C) to match a thermometer.
+- **No inside reading**: the board's SHTC3 (I2C 0x70) read 29 °C in a 21 °C room — Dotty's
+  own heat, varying with Wi-Fi/charging/screen, so a fixed offset can't fix it. Removed in
+  0.2.0 with its driver (`climate.*`, in git history before that commit) and the app setting.
 - Every fetch also syncs the clock: `net::internetTime()` (SNTP, read the sync status once
   per check — reading clears it) + the forecast's `utc_offset_seconds` →
   `shell::setLocalTime()` (writes the RTC). The fetch task only hands results over
-  (`takeFetched`, `takeClock`); I2C and drawing stay on the main loop.
+  (`takeFetched`, `takeClock`); drawing stays on the main loop.
 - Screens: Today (place in the nav + "3h ago" when stale; 56 px icon, big temperature,
-  condition; INSIDE | OUTSIDE; UV, wind, rain chance, next sunset/sunrise), then two
-  "Next days" pages of 3 cards (tomorrow onward: 44 px icon, day + low/high, rain chance +
-  the day's total in words: Dry < 0.2 mm, Light < 4, Moderate < 15, else Heavy — the user
-  found "1.6mm" meaningless and mixed rows of mm/UV untidy). Swipe or nav arrows; BOOT cycles. Icons are drawn
-  from WMO codes (`weather_icons.*`). Lock widget = a card: 48 px icon, "23° out 29° in",
-  rain chance, sunset/sunrise.
-- BLE: `weather.status` {location{automatic, name?, lat?, lon?}, units, insideOffset,
-  inside?{temp, humidity}, now?{place, temp, feels, humidity, code, description, wind, uv,
-  fetchedAt}, fetching, error?}, `weather.location {automatic, lat, lon, name}`,
-  `weather.units {units: metric|imperial}`, `weather.inside.offset {offset}`,
+  condition; TODAY low/high | FEELS LIKE; UV, wind, rain chance, next sunset/sunrise), then
+  two "Next days" pages of 3 cards (tomorrow onward: 44 px icon; day + low/high; rain chance
+  + the day's total in words: Dry < 0.2 mm, Light < 4, Moderate < 15, else Heavy — the user
+  found "1.6mm" meaningless and mixed rows of mm/UV untidy; wind sign + strongest wind).
+  Swipe or nav arrows; BOOT cycles. Icons are drawn from WMO codes (`weather_icons.*`;
+  clouds are outlined by insetting each part, and a cloud over a sun/moon clears a gap of
+  its own shape). Lock widget = a card: 48 px icon, "23°  19/26°", rain chance + words,
+  sunset/sunrise.
+- BLE: `weather.status` {location{automatic, name?, lat?, lon?}, units, now?{place, temp,
+  feels, humidity, code, description, wind, uv, fetchedAt}, fetching, error?},
+  `weather.location {automatic, lat, lon, name}`, `weather.units {units: metric|imperial}`,
   `weather.refresh`; event `weather.changed`. App: `Features/Weather/WeatherView.swift`
   (location permission text = `INFOPLIST_KEY_NSLocationWhenInUseUsageDescription`).
 

@@ -29,6 +29,8 @@ struct Day {
   int rainChance = -1;  // %
   float rain = NAN;     // mm or inch
   float uvMax = NAN;
+  float windMax = NAN;  // km/h or mph
+  int windDir = 0;      // dominant, degrees the wind comes from
   char sunrise[6] = "", sunset[6] = "";  // HH:MM local
 };
 
@@ -47,7 +49,6 @@ struct Settings {
   float lat = NAN, lon = NAN;
   String name;
   bool imperial = false;
-  float insideOffset = 0;  // °C added to the room sensor's reading
 };
 
 void begin();  // settings + the cached forecast
@@ -55,7 +56,6 @@ const Forecast &forecast();
 Settings settings();
 void setLocation(bool automatic, float lat, float lon, const String &name);
 void setImperial(bool imperial);
-void setInsideOffset(float celsius);
 
 struct FetchState {
   bool running = false;

@@ -64,6 +64,8 @@ bool parse(const String &body, const String &place, uint32_t fetchedAt, bool imp
     day.rainChance = d["precipitation_probability_max"][i] | -1;
     day.rain = num(d["precipitation_sum"][i]);
     day.uvMax = num(d["uv_index_max"][i]);
+    day.windMax = num(d["wind_speed_10m_max"][i]);
+    day.windDir = d["wind_direction_10m_dominant"][i] | 0;
     const char *rise = d["sunrise"][i] | "", *set = d["sunset"][i] | "";
     if (strlen(rise) >= 16) strlcpy(day.sunrise, rise + 11, sizeof(day.sunrise));  // "2026-10-05T07:42"
     if (strlen(set) >= 16) strlcpy(day.sunset, set + 11, sizeof(day.sunset));
@@ -90,7 +92,7 @@ String forecastUrl(float lat, float lon, bool imperial) {
                "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,"
                "wind_direction_10m,uv_index,is_day"
                "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
-               "precipitation_sum,sunrise,sunset,uv_index_max"
+               "precipitation_sum,sunrise,sunset,uv_index_max,wind_speed_10m_max,wind_direction_10m_dominant"
                "&forecast_days=" + String(kDays) + "&timezone=auto";
   if (imperial) url += "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch";
   return url;
@@ -166,7 +168,6 @@ void begin() {
   prefs.lon = p.getFloat("lon", NAN);
   prefs.name = p.getString("name", "");
   prefs.imperial = p.getBool("imperial", false);
-  prefs.insideOffset = p.getFloat("insideOffset", 0);
   p.end();
   storage::makeDirs(storage::myDataDir());
   if (loadCache()) LOGI("weather", "cached forecast for %s", data.place.c_str());
@@ -202,14 +203,6 @@ void setImperial(bool imperial) {
   p.putBool("imperial", imperial);
   p.end();
   everTried = false;
-}
-
-void setInsideOffset(float celsius) {
-  prefs.insideOffset = constrain(celsius, -10.0f, 10.0f);
-  Preferences p;
-  p.begin("weather", false);
-  p.putFloat("insideOffset", prefs.insideOffset);
-  p.end();
 }
 
 FetchState fetchState() {
