@@ -49,7 +49,7 @@ struct CartridgesView: View {
                         // The cartridge being installed is shown by the progress card instead.
                         // Other cartridges are dimmed and inert until the install finishes.
                         let installing = install != nil && install?.error == nil
-                        ForEach(catalog.cartridges.filter { $0.id != install?.cartridge.id }) { cartridge in
+                        ForEach(ordered(catalog.cartridges).filter { $0.id != install?.cartridge.id }) { cartridge in
                             cartridgeCard(cartridge)
                                 .opacity(installing ? 0.4 : 1)
                                 .allowsHitTesting(!installing)
@@ -110,58 +110,90 @@ struct CartridgesView: View {
         }
     }
 
+    /// The running cartridge first, then the installed one, then the rest in catalog order.
+    private func ordered(_ cartridges: [CatalogCartridge]) -> [CatalogCartridge] {
+        func rank(_ c: CatalogCartridge) -> Int {
+            switch relation(to: c) {
+            case .current(let running): running ? 0 : 1
+            case .update, .older: 1
+            case .notInstalled: 2
+            }
+        }
+        return cartridges.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+    }
+
+    /// Artwork, name over status, and one action on the right; the description below at full
+    /// width. The running cartridge's panel glows.
     private func cartridgeCard(_ cartridge: CatalogCartridge) -> some View {
         let relation = relation(to: cartridge)
-        return GlassCard {
-            HStack(alignment: .top, spacing: Spacing.l) {
-                CartridgeArtwork(cartridge: cartridge)
-
-                VStack(alignment: .leading, spacing: Spacing.xs) {
-                    Text(cartridge.name).font(.lpTitle).foregroundStyle(Color.ink)
-                    Text("Version \(cartridge.version) · \(cartridge.sizeText)")
-                        .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                    if !cartridge.description.isEmpty {
-                        Text(cartridge.description)
-                            .font(.lpCallout).foregroundStyle(Color.inkMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, Spacing.xs)
-                    }
-                    actions(for: cartridge, relation: relation)
-                        .padding(.top, Spacing.s)
-                        .needsDotty(link)
-                    removeRow(for: cartridge, relation: relation)
-                        .needsDotty(link)
+        let running: Bool = { if case .current(true) = relation { return true } else { return false } }()
+        return VStack(alignment: .leading, spacing: Spacing.m) {
+            HStack(alignment: .center, spacing: Spacing.m) {
+                CartridgeArtwork(cartridge: cartridge, size: 56)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cartridge.name)
+                        .font(.lpTitle)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text(statusLine(cartridge, relation))
+                        .font(.lpCaption)
+                        .foregroundStyle(running ? DottyLight.firefly.color : Color.inkMuted)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: Spacing.s)
+                action(for: cartridge, relation: relation)
+                    .needsDotty(link)
             }
-            .padding(Spacing.m)
+            if !cartridge.description.isEmpty {
+                Text(cartridge.description)
+                    .font(.lpCallout)
+                    .foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            removeRow(for: cartridge, relation: relation)
+                .needsDotty(link)
+        }
+        .padding(Spacing.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if running {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(DottyLight.firefly.color.opacity(0.12))
+            }
+        }
+        .glassSurface(light: running ? DottyLight.firefly.color : nil)
+    }
+
+    /// Under the name: version and size, or how it relates to what Dotty has.
+    private func statusLine(_ cartridge: CatalogCartridge, _ relation: Relation) -> String {
+        switch relation {
+        case .current(let running): "\(running ? "Running" : "Installed") · v\(cartridge.version)"
+        case .update(let from): "Update · \(from) → \(cartridge.version)"
+        case .older(let installed): "v\(cartridge.version) · Dotty has \(installed)"
+        case .notInstalled: "v\(cartridge.version) · \(cartridge.sizeText)"
         }
     }
 
+    /// The one button on the right of the panel.
     @ViewBuilder
-    private func actions(for cartridge: CatalogCartridge, relation: Relation) -> some View {
+    private func action(for cartridge: CatalogCartridge, relation: Relation) -> some View {
         let busy = install != nil && install?.error == nil
         switch relation {
         case .current(let running):
-            HStack(spacing: Spacing.m) {
-                StatusPill(state: .connected, text: running ? "Running" : "Installed")
-                if running, let route = DashboardView.Route.screen(for: link.info) {
-                    NavigationLink("Open", value: route).buttonStyle(.light())
-                }
+            if running, let route = DashboardView.Route.screen(for: link.info) {
+                NavigationLink("Open", value: route).buttonStyle(.light())
             }
-        case .update(let from):
-            VStack(alignment: .leading, spacing: Spacing.xs) {
-                Button("Update to \(cartridge.version)") { Task { await installCartridge(cartridge) } }
-                    .buttonStyle(.light(DottyLight.leaf.color))
-                    .disabled(busy)
-                Text("You have \(from)").font(.lpCaption).foregroundStyle(Color.inkMuted)
-            }
-        case .older(let installed):
-            VStack(alignment: .leading, spacing: Spacing.xs) {
-                Button("Install older \(cartridge.version)") { confirmOlder = cartridge }
-                    .buttonStyle(.quiet())
-                    .disabled(busy)
-                Text("Dotty has a newer \(installed)").font(.lpCaption).foregroundStyle(Color.inkMuted)
-            }
+        case .update:
+            Button("Update") { Task { await installCartridge(cartridge) } }
+                .buttonStyle(.light(DottyLight.leaf.color))
+                .disabled(busy)
+        case .older:
+            Button("Install") { confirmOlder = cartridge }
+                .buttonStyle(.quiet())
+                .disabled(busy)
         case .notInstalled:
             Button("Install") { Task { await installCartridge(cartridge) } }
                 .buttonStyle(.light())
