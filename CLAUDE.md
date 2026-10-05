@@ -88,6 +88,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
   (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
   switch boot partitions.
+- Shared UI in dotty_core once two cartridges needed it: `nav_bar.*` (black top bar,
+  corner icons incl. stars, `nav::hit`), the off pictures (`images/sleep_*.h`), touch
+  swipes (`Touch::Gesture::Swipe*`, fired on release past 35 px; the e-paper can't follow a
+  finger, so scroll by pages), and the lock-screen widget (`shell::Config::drawLockWidget`
+  draws into its own 200x80 canvas and returns its height; the clock row — clock + a
+  padlock as tall as the digits — and the widget are centred together). A widget must not
+  touch the display's font (it shares `epd`): measure on the canvas it's given.
 - `lib/dotty_core/src/shell.*` owns the shared device behaviour (PWR lock/unlock/off,
   BOOT + PWR 1 s → launcher, auto-lock, lock screen + sleep, off picture). Firmwares
   pass a `shell::Config` (drawApp + optional hooks) and run their own logic only while
@@ -268,6 +275,29 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   {name, songs[]}`, `music.playlist.remove {name, song}`, `music.song.delete {name}`,
   plus `transfer.*`. Events: `music.state` (on change, every 5 s while playing),
   `music.library` (library or playlists changed).
+
+## Joke Factory cartridge (`cartridges/jokes/`)
+
+- Keeps **every English JokeAPI joke** (~319, ~45 KB) on the card (`joke_store.*`):
+  `data/jokes.tsv` (id, category, setup, punchline; parsed in place in PSRAM),
+  `data/seen.tsv` (id → last shown, local epoch), `data/favourites.json` (full text, so a
+  favourite survives JokeAPI dropping it). A background task (12 KB stack, core 0) refreshes
+  it via `/joke/Any?lang=en&amount=10&idRange=a-b` batches (32 requests; the last English id
+  comes from `/info`): right away when empty (retry 10 min), then weekly (retry 1 h); a
+  download with < 100 jokes is discarded. **No safe mode, no blacklist flags** (user's
+  choice). Measured: Programming 80, Pun 84, Dark 71, Misc 60, Christmas 14, Spooky 10.
+- Picking: a random unseen joke of the category, else the one seen longest ago (so they
+  come back after a while). Shown on Dotty = seen; lock-screen jokes don't count.
+- Screens: 2x2 grid (Dark, Code = Programming, Misc, Any; icon above label, labels ≤ 6
+  chars; nav ★ = favourites), joke view (two-part: punchline on tap or BOOT, then the next
+  joke; ☆/★ in the nav; swipe up/down scrolls 6 lines with ▲▼ markers), favourites
+  (numbered, paged; a favourite's title is "14/117", BOOT = next), "No jokes yet" screen
+  (needs Wi-Fi / no internet / download progress).
+- Lock screen: a joke that fits 4 lines (150 of 319), the same per 5-minute slot of the
+  clock (`mix(days*288 + slot) % fitting`), setup regular + punchline bold.
+- BLE: `jokes.status` {count, unseen{Dark,Programming,Misc,Any}, favourites, syncing, done,
+  total, syncedAt, syncError?}, `jokes.favourites`, `jokes.favourite.remove {id}`,
+  `jokes.sync`; event `jokes.changed`. App: `Features/Jokes/JokesView.swift`.
 
 ## SD library + Wi-Fi fetch (launcher)
 
