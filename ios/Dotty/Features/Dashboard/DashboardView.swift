@@ -114,7 +114,9 @@ struct DashboardView: View {
                          subtitle: info.isLauncher ? "In the launcher" : "Running now",
                          systemImage: "square.stack.3d.up",
                          action: Route.screen(for: info).map { route in { path.append(route) } })
-                LightRow(title: "Battery", systemImage: batterySymbol(info.battery)) {
+                LightRow(title: "Battery",
+                         subtitle: info.charging == true ? "Charging" : (info.power == true ? "Fully charged" : nil),
+                         systemImage: info.charging == true ? "battery.100percent.bolt" : batterySymbol(info.battery)) {
                     Text("\(info.battery)%")
                 }
             } else {

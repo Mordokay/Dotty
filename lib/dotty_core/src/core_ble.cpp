@@ -129,7 +129,9 @@ void buildInfo(JsonDocument &doc, bool withCommands) {
   doc["name"] = me.name;
   doc["version"] = me.version;
   doc["serial"] = serialText;
-  doc["battery"] = batteryPercent(batteryMillivolts());
+  doc["battery"] = battery::percent();
+  doc["charging"] = battery::charging();
+  doc["power"] = battery::external();
   JsonArray features = doc["features"].to<JsonArray>();
   String last;
   for (const auto &entry : handlers) {  // std::map: sorted, so namespaces come grouped

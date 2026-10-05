@@ -2,6 +2,7 @@
 
 #include <Fonts/FreeSans9pt7b.h>
 
+#include "art.h"
 #include "epd_display.h"
 
 namespace ui {
@@ -149,13 +150,14 @@ void drawHeader(Adafruit_GFX &gfx, const char *label) {
   gfx.setTextColor(kBlack);
 }
 
-void drawBattery(Adafruit_GFX &gfx, int16_t x, int16_t y, uint8_t percent) {
+void drawBattery(Adafruit_GFX &gfx, int16_t x, int16_t y, uint8_t percent, bool charging) {
   const int16_t w = 26, h = 13;
   gfx.drawRect(x, y, w, h, kBlack);
   gfx.drawRect(x + 1, y + 1, w - 2, h - 2, kBlack);
   gfx.fillRect(x + w, y + 4, 3, h - 8, kBlack);  // terminal nub
   const int16_t fill = (w - 6) * min<uint8_t>(percent, 100) / 100;
   gfx.fillRect(x + 3, y + 3, fill, h - 6, kBlack);
+  if (charging) art::drawBolt(gfx, x + w / 2, y + h / 2, 13, kBlack);  // over the level, like iOS
 }
 
 void drawNote(Adafruit_GFX &gfx, int16_t x, int16_t y) {

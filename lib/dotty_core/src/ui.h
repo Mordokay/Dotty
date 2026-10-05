@@ -33,8 +33,9 @@ int drawWrapped(Adafruit_GFX &gfx, const String &text, int16_t y, int16_t maxWid
 // Black title bar across the top.
 void drawHeader(Adafruit_GFX &gfx, const char *label);
 
-// Battery outline with fill level, w x h at (x, y).
-void drawBattery(Adafruit_GFX &gfx, int16_t x, int16_t y, uint8_t percent);
+// Battery outline with fill level, 26 x 13 (plus nub) at (x, y), with a bolt over it while
+// charging.
+void drawBattery(Adafruit_GFX &gfx, int16_t x, int16_t y, uint8_t percent, bool charging = false);
 
 // Small eighth-note glyph, ~10 x 14 px with its top-left at (x, y).
 void drawNote(Adafruit_GFX &gfx, int16_t x, int16_t y);

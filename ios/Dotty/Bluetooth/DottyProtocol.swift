@@ -29,6 +29,10 @@ struct DottyInfo: Decodable, Equatable, Sendable {
     let name: String
     let version: String
     let battery: Int
+    /// On a charger and not full yet (newer firmware; nil before).
+    let charging: Bool?
+    /// A charger or computer is powering Dotty.
+    let power: Bool?
     let serial: String?
     /// Command namespaces ("wifi", "music", …). The Info value is capped at 512 bytes, so
     /// newer firmware lists these instead of every command.

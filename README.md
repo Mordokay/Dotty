@@ -84,12 +84,25 @@ docs/HARDWARE.md      Hardware reference
 
 ## Roadmap
 
-- [x] Toolchain, SD card, "Hello, Dotty" on e-paper with full + partial refresh
-- [ ] Dotty's face and expressions
-- [ ] Sensors: SHTC3 room temperature/humidity, RTC clock, battery level
-- [ ] Touch input
-- [ ] BLE command service (testable with nRF Connect)
-- [ ] iOS companion app: settings, Wi-Fi setup, firmware updates over BLE (OTA)
+Platform
+- [x] Toolchain, SD card, e-paper with full + partial refresh, touch, RTC clock
+- [x] Kindle-style lock screen, power saving, power off
+- [x] Launcher + cartridges, Dotty Core BLE service, catalog on GitHub Releases
+- [x] iOS app: pairing, dashboard, cartridges (install / update / remove), Wi-Fi setup
+- [x] Battery: steady percentage, low-battery shutdown, charging screen
+- [ ] Clock set from the iPhone
+
+Cartridges, one at a time, each built around a piece of Dotty's hardware
+- [x] **Music** (speaker): library and playlists on the SD card, songs sent from the
+  iPhone over Wi-Fi, shuffle, managed from the app
+- [ ] **Joke Factory** (Wi-Fi): jokes from https://v2.jokeapi.dev shown like a Kindle
+  page; categories and safe mode chosen in the app
+- [ ] **Weather Station** (SHTC3 sensor + Wi-Fi): room temperature and humidity, plus a
+  forecast for your area from Open-Meteo (free, no key); updates while locked
+- [ ] **Album Viewer** (SD card + e-paper): photos from the iPhone, cropped and dithered
+  to 1-bit on the phone, browsed on Dotty
+- [ ] **Tape Recorder** (microphone): hold a side button to record and release to pause,
+  like a tape deck; a scrollable library of recordings to replay (swipe gestures)
 
 ## Restoring the factory demo
 

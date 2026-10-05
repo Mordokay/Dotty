@@ -60,6 +60,12 @@ bool runLockedWake() {
 // What the lock screen currently shows, to know when it needs a redraw.
 int lockShownMinute = -1;
 String lockShownText;
+int lockShownBattery = -1;
+
+// Percentage and charging/low state in one number, to notice any change.
+int batteryKey() {
+  return battery::percent() * 4 + (battery::external() ? 2 : 0) + (battery::low() ? 1 : 0);
+}
 
 void IRAM_ATTR onBootButton() {
   bootWentDown = true;
@@ -72,11 +78,15 @@ String nowPlaying() {
 void drawLock() {
   LockScreenInfo info = {};
   info.timeValid = rtc.read(info.time);
-  info.batteryPercent = batteryPercent(batteryMillivolts());
+  info.batteryPercent = battery::percent();
+  info.externalPower = battery::external();
+  info.charging = battery::charging();
+  info.batteryLow = battery::low();
   info.nowPlaying = nowPlaying();
   drawLockScreen(epd, info);
   lockShownMinute = info.time.tm_min;
   lockShownText = info.nowPlaying;
+  lockShownBattery = batteryKey();
 }
 
 void sleepPeripherals() {
@@ -176,7 +186,8 @@ void loopLock() {
     tm now;
     rtc.read(now);
     const bool appChanged = runLockedWake();
-    if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
+    if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
+        batteryKey() != lockShownBattery) {
       drawLock();
       refresh(false);
     }
@@ -189,7 +200,8 @@ void loopLock() {
   tm now;
   rtc.read(now);
   const bool appChanged = runLockedWake();
-  if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText) {
+  if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
+        batteryKey() != lockShownBattery) {
     drawLock();
     refresh(false);
     epd.waitBusy();
@@ -267,9 +279,21 @@ void logBattery() {
   static uint32_t lastLog = 0;
   if (lastLog != 0 && millis() - lastLog < kBatteryLogIntervalMs) return;
   lastLog = millis();
-  const uint32_t mv = batteryMillivolts();
-  LOGI("power", "battery %lu mV (%u%%)%s", mv, batteryPercent(mv),
-       power::usbHostConnected() ? ", USB host" : "");
+  LOGI("power", "battery %lu mV now, %lu mV smoothed, %u%%%s%s", battery::readMillivolts(),
+       battery::millivolts(), battery::percent(), battery::external() ? ", external power" : "",
+       power::usbHostConnected() ? " (USB host)" : "");
+}
+
+// The battery is flat: say so on the screen (the e-paper keeps it) and switch off. Dotty
+// stays off until it's charged; on battery the next PWR press shows this again.
+[[noreturn]] void batteryEmptyOff() {
+  LOGW("power", "battery empty (%lu mV): switching off", battery::millivolts());
+  if (cfg.beforePowerOff) cfg.beforePowerOff();
+  epd.waitBusy();
+  drawBatteryEmpty(epd);
+  epd.refreshFull();
+  epd.powerOff();
+  power::shutdown();
 }
 
 }  // namespace
@@ -297,6 +321,9 @@ void begin(const Config &config) {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
   LOGI("boot", "touch %s", touch.begin() ? "ok" : "FAILED");
   LOGI("boot", "rtc %s", rtc.begin(Wire) ? "ok" : "FAILED");
+  battery::begin();
+  // Switched on (PWR) with a flat battery: show why and go back off.
+  if (!battery::external() && battery::readMillivolts() < battery::kEmptyMv) batteryEmptyOff();
   ble::begin();
   net::registerCommands();
   storage::registerCommands();
@@ -304,6 +331,8 @@ void begin(const Config &config) {
 }
 
 bool update(Input &input) {
+  battery::poll();
+  if (battery::empty()) batteryEmptyOff();
   logBattery();
   ble::poll();
   handlePairing();

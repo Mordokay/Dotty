@@ -307,6 +307,21 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Power off on USB power: the latch can't cut power, so it deep-sleeps with PWR (ext0)
   as the wake source; waking is a fresh boot.
 - Battery voltage is logged every 10 minutes (`power: battery ... mV`) to measure drain.
+- `battery.*` (no fuel gauge, no charge-status pin: STAT only lights the orange LED, and no
+  GPIO sees VBUS — checked in the schematic): voltage EMA sampled every 5 s (every wake
+  while locked); on battery the shown % only drops when a lower level lasts 1 min (load
+  sag: music/Wi-Fi read 40-80 mV low, ~5-10 % in the flat middle of the curve). External
+  power = USB host, or the battery voltage jumping ≥ 40 mV between samples with no wake-lock
+  change in the last 15 s (on USB, Q5 takes the system off the battery and the charger
+  lifts it), or ≥ 4.20 V; a ≥ 40 mV drop = unplugged. While charging the % uses the curve
+  80 mV lower, capped at 99 until ≥ 4.17 V for 10 min ("Fully charged").
+- Lock screen on external power: big battery + bolt + "86%" instead of the padlock,
+  bottom line "Charging"/"Fully charged"; ≤ 10 % on battery: "Battery low - charge soon".
+  Below 3.40 V for 1 min (or at boot): "Battery empty" screen, then `power::shutdown()`
+  (latch off, e-paper keeps it). Info has `battery`, `charging`, `power`.
+- Measured overnight (locked, light sleep, 8.2 h): 4046 → 3996 mV ≈ 6-7 % ≈ 3.2 mA average,
+  ~5 days locked from full. Unplugging from USB drops the reading ~45 mV (charger voltage
+  gone), which looked like "90 % → 85 %" but isn't drain.
 
 ## iOS app (`ios/`)
 

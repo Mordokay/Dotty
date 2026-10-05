@@ -23,7 +23,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.6.0");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.6.1");
 
 namespace {
 
@@ -57,7 +57,7 @@ void drawHome(const char *hint = nullptr) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
-  ui::drawBattery(epd, kW - 8 - 29, 8, batteryPercent(batteryMillivolts()));
+  ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
 
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, "Dotty", 144);
