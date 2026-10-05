@@ -11,17 +11,17 @@ struct ReorderableSongList: View {
     let onMove: (_ from: Int, _ to: Int) -> Void
     let onRemove: (String) -> Void
 
-    private static let rowHeight: CGFloat = 52
-    private static let spacing: CGFloat = 6
+    static let rowHeight: CGFloat = 52
+    static let spacing: CGFloat = 6
     private static let pitch = rowHeight + spacing
     private static let removeWidth: CGFloat = 104
 
     /// The song being dragged by its handle, and how far.
     @State private var dragging: String?
     @State private var dragOffset: CGFloat = 0
-    /// The song swiped open to show Remove, and its horizontal offset.
-    @State private var swiped: String?
-    @State private var swipeOffset: CGFloat = 0
+    /// How far each row is swiped left (0 = closed). Each row keeps its own, so one closing
+    /// animates while another opens; only one stays open.
+    @State private var swipes: [String: CGFloat] = [:]
     /// The offset when the current swipe began (open rows start from Remove showing).
     @State private var swipeBase: CGFloat?
 
@@ -40,7 +40,9 @@ struct ReorderableSongList: View {
     // MARK: - Row
 
     private func row(_ song: String, index: Int) -> some View {
-        let open = swiped == song
+        let offset = swipes[song] ?? 0
+        // Remove fades in with the swipe: invisible at rest, solid once the row has moved its width.
+        let reveal = min(1, max(0, -offset / Self.removeWidth))
         return ZStack(alignment: .trailing) {
             // Behind the row: Remove, revealed by swiping left.
             Button(role: .destructive) {
@@ -54,7 +56,9 @@ struct ReorderableSongList: View {
                     .background(RoundedRectangle(cornerRadius: Radius.soft).fill(DottyLight.ember.color))
             }
             .buttonStyle(.plain)
-            .opacity(open ? 1 : 0)
+            .opacity(reveal)
+            .scaleEffect(0.85 + 0.15 * reveal, anchor: .trailing)
+            .allowsHitTesting(reveal > 0.5)
 
             HStack(spacing: Spacing.m) {
                 Text(title(song))
@@ -75,9 +79,9 @@ struct ReorderableSongList: View {
             .scaleEffect(dragging == song ? 1.03 : 1)
             .shadow(color: .black.opacity(dragging == song ? 0.35 : 0), radius: 12, y: 6)
             .contentShape(Rectangle())
-            .offset(x: open ? swipeOffset : 0)
+            .offset(x: offset)
             .onTapGesture {
-                if swiped != nil { closeSwipe() } else { onPlay(song) }
+                if swipes.values.contains(where: { $0 != 0 }) { closeSwipe() } else { onPlay(song) }
             }
             .simultaneousGesture(swipeGesture(song))
             .contextMenu {
@@ -143,29 +147,27 @@ struct ReorderableSongList: View {
                 // Only clearly sideways drags; vertical ones scroll the page.
                 guard dragging == nil, abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
                 if swipeBase == nil {
-                    swipeBase = swiped == song ? swipeOffset : 0
-                    swiped = song
+                    swipeBase = swipes[song] ?? 0
+                    // Another row was open: it slides shut while this one opens.
+                    withAnimation(.settle) {
+                        for other in swipes.keys where other != song { swipes[other] = 0 }
+                    }
                 }
-                swipeOffset = min(0, max(-Self.removeWidth * 1.4, (swipeBase ?? 0) + value.translation.width))
+                swipes[song] = min(0, max(-Self.removeWidth * 1.4, (swipeBase ?? 0) + value.translation.width))
             }
             .onEnded { _ in
+                guard swipeBase != nil else { return }
                 swipeBase = nil
-                guard swiped == song else { return }
                 withAnimation(.settle) {
-                    if swipeOffset < -Self.removeWidth / 2 {
-                        swipeOffset = -(Self.removeWidth + Spacing.s)
-                    } else {
-                        swiped = nil
-                        swipeOffset = 0
-                    }
+                    let past = (swipes[song] ?? 0) < -Self.removeWidth / 2
+                    swipes[song] = past ? -(Self.removeWidth + Spacing.s) : 0
                 }
             }
     }
 
     private func closeSwipe() {
         withAnimation(.settle) {
-            swiped = nil
-            swipeOffset = 0
+            for song in swipes.keys { swipes[song] = 0 }
         }
     }
 }

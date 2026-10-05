@@ -27,17 +27,17 @@ struct PlaylistView: View {
                     if loading {
                         HStack { Spacer(); FireflyLoader(size: 64, label: "Loading"); Spacer() }
                             .padding(.vertical, Spacing.l)
-                    } else if songs.isEmpty {
-                        LightRow(title: "No songs yet", subtitle: "Add some from your library", systemImage: "music.note")
-                            .glassSurface(cornerRadius: Radius.soft)
                     } else {
-                        ReorderableSongList(
-                            songs: songs,
-                            title: title,
-                            isPlaying: { model.now.queue == name && model.now.song == $0 && model.now.playing },
-                            onPlay: { song in Task { await model.play(playlist: name, song: song) } },
-                            onMove: move,
-                            onRemove: remove)
+                        VStack(spacing: ReorderableSongList.spacing) {
+                            addSongsRow
+                            ReorderableSongList(
+                                songs: songs,
+                                title: title,
+                                isPlaying: { model.now.queue == name && model.now.song == $0 && model.now.playing },
+                                onPlay: { song in Task { await model.play(playlist: name, song: song) } },
+                                onMove: move,
+                                onRemove: remove)
+                        }
                     }
                     footer
                 }
@@ -85,9 +85,6 @@ struct PlaylistView: View {
                 Button("Play", systemImage: "play.fill") { Task { await model.play(playlist: name) } }
                     .buttonStyle(.light())
                     .disabled(songs.isEmpty)
-                Button("Add songs", systemImage: "plus") { adding = true }
-                    .buttonStyle(.quiet())
-                    .disabled(model.songs.isEmpty)
             }
             if songs.count > 1 {
                 // Shows how the playlist was last sorted; a tap re-sorts it the other way.
@@ -101,6 +98,28 @@ struct PlaylistView: View {
                     .font(.lpCaption).foregroundStyle(Color.inkMuted)
             }
         }
+    }
+
+    /// The list's first row: lit, and never moved or removed.
+    private var addSongsRow: some View {
+        Button { adding = true } label: {
+            HStack(spacing: Spacing.m) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(DottyLight.firefly.color)
+                Text(songs.isEmpty ? "Add songs from your library" : "Add songs")
+                    .font(.lpHeadline)
+                    .foregroundStyle(Color.ink)
+                Spacer()
+            }
+            .padding(.horizontal, Spacing.l)
+            .frame(height: ReorderableSongList.rowHeight)
+            .glassSurface(light: DottyLight.firefly.color, cornerRadius: Radius.soft)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.songs.isEmpty)
+        .opacity(model.songs.isEmpty ? 0.5 : 1)
     }
 
     private var footer: some View {
