@@ -6,10 +6,12 @@ import SwiftUI
 struct ReorderableSongList: View {
     let songs: [String]
     let title: (String) -> String
-    let isPlaying: (String) -> Bool
+    let playState: (String) -> PlayState
     let onPlay: (String) -> Void
     let onMove: (_ from: Int, _ to: Int) -> Void
     let onRemove: (String) -> Void
+
+    enum PlayState { case idle, playing, paused }
 
     static let rowHeight: CGFloat = 52
     static let spacing: CGFloat = 6
@@ -60,20 +62,15 @@ struct ReorderableSongList: View {
             .scaleEffect(0.85 + 0.15 * reveal, anchor: .trailing)
             .allowsHitTesting(reveal > 0.5)
 
-            HStack(spacing: Spacing.m) {
+            HStack(spacing: Spacing.xs) {
+                playButton(song)
                 Text(title(song))
                     .font(.lpHeadline)
-                    .foregroundStyle(Color.ink)
+                    .foregroundStyle(playState(song) == .idle ? Color.ink : DottyLight.firefly.color)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if isPlaying(song) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(DottyLight.firefly.color)
-                }
                 handle(song, index: index)
             }
-            .padding(.leading, Spacing.l)
             .frame(height: Self.rowHeight)
             .glassSurface(cornerRadius: Radius.soft)
             .scaleEffect(dragging == song ? 1.03 : 1)
@@ -90,6 +87,21 @@ struct ReorderableSongList: View {
             }
         }
         .frame(height: Self.rowHeight)
+    }
+
+    /// ▶︎ to play this song, ❚❚ while it plays (pauses), ▶︎ again while paused (resumes).
+    private func playButton(_ song: String) -> some View {
+        let state = playState(song)
+        return Button { onPlay(song) } label: {
+            Image(systemName: state == .playing ? "pause.fill" : "play.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(state == .idle ? Color.inkMuted : DottyLight.firefly.color)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 48, height: Self.rowHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(state == .playing ? "Pause \(title(song))" : "Play \(title(song))")
     }
 
     /// The ≡ grip: drag it up or down; the other rows slide out of the way.

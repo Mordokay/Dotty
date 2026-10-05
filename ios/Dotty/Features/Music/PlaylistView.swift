@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// One playlist: play it, add songs from the library, drag to reorder, swipe (or Edit) to
-/// remove songs.
+/// One playlist: a panel with its name (edited in place), song count and sort; a lit
+/// "Add songs" first row; songs with play/pause on the left and a ≡ handle on the right,
+/// swipe left to remove; a jelly Delete button at the bottom.
 struct PlaylistView: View {
     let model: MusicModel
     @State private var name: String
@@ -11,19 +12,23 @@ struct PlaylistView: View {
     @State private var loading = true
     @State private var adding = false
     @State private var confirmDelete = false
-    @State private var renaming = false
-    @State private var newName = ""
+    /// The name field: locked until the name or the pencil is tapped.
+    @State private var editingName = false
+    @State private var draftName: String
+    @FocusState private var nameFocused: Bool
 
     init(model: MusicModel, name: String) {
         self.model = model
         _name = State(initialValue: name)
+        _draftName = State(initialValue: name)
     }
 
     var body: some View {
         LightField {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.l) {
-                    header
+                    titlePanel
+                        .padding(.top, Spacing.l)
                     if loading {
                         HStack { Spacer(); FireflyLoader(size: 64, label: "Loading"); Spacer() }
                             .padding(.vertical, Spacing.l)
@@ -33,13 +38,18 @@ struct PlaylistView: View {
                             ReorderableSongList(
                                 songs: songs,
                                 title: title,
-                                isPlaying: { model.now.queue == name && model.now.song == $0 && model.now.playing },
-                                onPlay: { song in Task { await model.play(playlist: name, song: song) } },
+                                playState: playState,
+                                onPlay: playOrPause,
                                 onMove: move,
                                 onRemove: remove)
                         }
                     }
-                    footer
+                    MorphButton(faces: [MorphFace(light: DottyLight.ember.color, title: "Delete playlist", systemImage: "trash")]) { _ in
+                        confirmDelete = true
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Spacing.l)
+                    .padding(.bottom, Spacing.xxl)
                 }
                 .padding(.horizontal, Spacing.l)
             }
@@ -56,14 +66,8 @@ struct PlaylistView: View {
             .presentationDetents([.large])
             .presentationBackground(.clear)
         }
-        .alert("Rename playlist", isPresented: $renaming) {
-            TextField("Name", text: $newName)
-            Button("Rename") {
-                let new = newName.trimmingCharacters(in: .whitespaces)
-                guard !new.isEmpty, new != name else { return }
-                Task { if await model.renamePlaylist(name, to: new) { name = new } }
-            }
-            Button("Cancel", role: .cancel) {}
+        .onChange(of: nameFocused) { _, focused in
+            if !focused && editingName { commitName() }
         }
         .confirmationDialog("Delete \(name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete playlist", role: .destructive) {
@@ -77,28 +81,93 @@ struct PlaylistView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.l) {
-            PageHeader(title: name, subtitle: songs.count == 1 ? "1 song" : "\(songs.count) songs")
-                .padding(.top, Spacing.l)
-            HStack(spacing: Spacing.m) {
-                Button("Play", systemImage: "play.fill") { Task { await model.play(playlist: name) } }
-                    .buttonStyle(.light())
-                    .disabled(songs.isEmpty)
+    // MARK: - Title panel
+
+    /// Name (editable in place) with its pencil, the song count, and the sort button.
+    private var titlePanel: some View {
+        HStack(alignment: .center, spacing: Spacing.m) {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                nameRow
+                Text(songs.count == 1 ? "1 song" : "\(songs.count) songs")
+                    .font(.lpCallout)
+                    .foregroundStyle(Color.inkMuted)
             }
-            if songs.count > 1 {
-                // Shows how the playlist was last sorted; a tap re-sorts it the other way.
-                MorphButton(faces: LibrarySort.allCases.map(\.face),
-                            initial: LibrarySort.allCases.firstIndex(of: lastSort) ?? 0) { index in
-                    let order = LibrarySort.allCases[index]
-                    UserDefaults.standard.set(order.rawValue, forKey: sortKey)
-                    Task { await model.sort(name, byDateAdded: order == .added) }
-                }
-                Text("Drag ≡ to reorder · swipe left to remove")
-                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
+            if songs.count > 1 { sortButton }
+        }
+        .padding(Spacing.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface()
+    }
+
+    /// The name is a text field, locked until the name or the pencil is tapped.
+    private var nameRow: some View {
+        HStack(spacing: Spacing.s) {
+            TextField("Playlist name", text: $draftName)
+                .font(.lpTitle)
+                .foregroundStyle(Color.ink)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { commitName() }
+                .allowsHitTesting(editingName)
+            pencilButton
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !editingName { startEditing() }
+        }
+    }
+
+    private var pencilButton: some View {
+        Button {
+            if editingName { commitName() } else { startEditing() }
+        } label: {
+            Image(systemName: editingName ? "checkmark.circle.fill" : "pencil")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(editingName ? DottyLight.firefly.color : Color.inkMuted)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(editingName ? "Save name" : "Rename playlist")
+    }
+
+    /// Shows how the playlist was last sorted; a tap re-sorts it the other way.
+    private var sortButton: some View {
+        let faces: [MorphFace] = LibrarySort.allCases.map(\.shortFace)
+        let initial = LibrarySort.allCases.firstIndex(of: lastSort) ?? 0
+        return MorphButton(faces: faces, initial: initial) { index in
+            let order = LibrarySort.allCases[index]
+            UserDefaults.standard.set(order.rawValue, forKey: sortKey)
+            Task { await model.sort(name, byDateAdded: order == .added) }
+        }
+        .fixedSize()
+    }
+
+    private func startEditing() {
+        draftName = name
+        editingName = true
+        nameFocused = true
+    }
+
+    private func commitName() {
+        editingName = false
+        nameFocused = false
+        let new = draftName.trimmingCharacters(in: .whitespaces)
+        guard !new.isEmpty, new != name else {
+            draftName = name
+            return
+        }
+        Task {
+            if await model.renamePlaylist(name, to: new) {
+                UserDefaults.standard.set(UserDefaults.standard.string(forKey: sortKey), forKey: "music.playlistSort.\(new)")
+                name = new
+            } else {
+                draftName = name
             }
         }
     }
+
+    // MARK: - Rows
 
     /// The list's first row: lit, and never moved or removed.
     private var addSongsRow: some View {
@@ -122,15 +191,20 @@ struct PlaylistView: View {
         .opacity(model.songs.isEmpty ? 0.5 : 1)
     }
 
-    private var footer: some View {
-        HStack(spacing: Spacing.m) {
-            Button("Rename", systemImage: "pencil") { newName = name; renaming = true }
-                .buttonStyle(.quiet())
-            Button("Delete playlist", systemImage: "trash") { confirmDelete = true }
-                .buttonStyle(.quiet(DottyLight.ember.color))
+    private func playState(_ song: String) -> ReorderableSongList.PlayState {
+        guard model.now.queue == name, model.now.song == song, model.now.count > 0 else { return .idle }
+        if model.now.playing { return .playing }
+        return model.now.paused ? .paused : .idle
+    }
+
+    /// Pauses or resumes the song playing here; any other song starts this playlist from it.
+    private func playOrPause(_ song: String) {
+        Task {
+            switch playState(song) {
+            case .playing, .paused: await model.toggle()
+            case .idle: await model.play(playlist: name, song: song)
+            }
         }
-        .padding(.top, Spacing.l)
-        .padding(.bottom, Spacing.xxl)
     }
 
     /// Reorders here at once, then on Dotty (which reloads the list when done).

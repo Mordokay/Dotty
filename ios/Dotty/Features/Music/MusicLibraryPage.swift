@@ -136,6 +136,14 @@ enum LibrarySort: String, CaseIterable {
         }
     }
 
+    /// A compact face for tight spots (the playlist panel).
+    var shortFace: MorphFace {
+        switch self {
+        case .name: MorphFace(light: DottyLight.lagoon.color, title: "Name", systemImage: "textformat")
+        case .added: MorphFace(light: DottyLight.amber.color, title: "Date", systemImage: "calendar")
+        }
+    }
+
     func sorted(_ songs: [MusicModel.Song]) -> [MusicModel.Song] {
         switch self {
         case .name:
