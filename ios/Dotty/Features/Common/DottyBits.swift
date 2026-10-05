@@ -126,18 +126,41 @@ struct CartridgeArtwork: View {
     }
 }
 
-/// "Dotty isn't connected", shown from the live connection state, so it goes away by itself
-/// the moment Dotty reconnects. Screens show this instead of storing connection errors.
+/// Shown from the live connection state, so it goes away by itself the moment Dotty
+/// reconnects: "Dotty disconnected" (red) for a few seconds after the link drops, then
+/// "Searching for Dotty" (blue) while the app keeps trying. Screens show this instead of
+/// storing connection errors, and disable what needs Dotty meanwhile.
 struct NotConnectedNotice: View {
     @Environment(DottyLink.self) private var link
 
+    static let alertSeconds: TimeInterval = 5
+
     var body: some View {
         if link.connection != .connected {
-            NoticeCard(kind: .info, text: link.connection == .connecting
-                       ? "Reconnecting to Dotty…"
-                       : "Dotty isn't connected. Press PWR on Dotty to wake it.")
-                .transition(.opacity)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let justDropped = link.lastDisconnect.map { context.date.timeIntervalSince($0) < Self.alertSeconds } ?? false
+                Group {
+                    if justDropped {
+                        NoticeCard(kind: .error, text: "Dotty disconnected.")
+                    } else if link.radio == .off {
+                        NoticeCard(kind: .info, text: "Bluetooth is off on this iPhone. Turn it on to reach Dotty.")
+                    } else {
+                        NoticeCard(kind: .info, text: "Searching for Dotty… If it's locked or asleep, press PWR on Dotty.")
+                    }
+                }
+                .animation(.settle, value: justDropped)
+            }
+            .transition(.opacity)
         }
+    }
+}
+
+extension View {
+    /// Dims and disables controls that need Dotty while it isn't connected.
+    func needsDotty(_ link: DottyLink) -> some View {
+        disabled(link.connection != .connected)
+            .opacity(link.connection == .connected ? 1 : 0.45)
+            .animation(.settle, value: link.connection)
     }
 }
 

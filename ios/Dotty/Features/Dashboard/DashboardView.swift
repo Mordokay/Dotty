@@ -31,6 +31,7 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Spacing.xl) {
                         header
+                        NotConnectedNotice()
                         dottyCard
                         if let route = Route.screen(for: link.connection == .connected ? link.info : nil),
                            let info = link.info {
@@ -122,8 +123,7 @@ struct DashboardView: View {
                     Text("\(info.battery)%")
                 }
             } else {
-                LightRow(title: "Not connected", subtitle: "Press PWR on Dotty to wake it.",
-                         systemImage: "moon.zzz")
+                LightRow(title: "Not connected", systemImage: "moon.zzz")  // the notice above explains
             }
             if let serial = link.paired?.serial {
                 LightRow(title: "Serial", systemImage: "number") {

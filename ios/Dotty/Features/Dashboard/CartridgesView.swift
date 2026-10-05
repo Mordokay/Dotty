@@ -41,6 +41,8 @@ struct CartridgesView: View {
                     PageHeader(title: "Cartridges",
                                subtitle: "Dotty downloads them over Wi-Fi and keeps a copy on its SD card, so switching back is quick.")
                         .padding(.top, Spacing.l)
+                    // During an install Dotty restarts on purpose; the install card explains.
+                    if install == nil { NotConnectedNotice() }
                     if let install { installCard(install) }
                     if let loadError { NoticeCard(kind: .error, text: loadError) }
                     if let catalog {
@@ -126,7 +128,9 @@ struct CartridgesView: View {
                     }
                     actions(for: cartridge, relation: relation)
                         .padding(.top, Spacing.s)
+                        .needsDotty(link)
                     removeRow(for: cartridge, relation: relation)
+                        .needsDotty(link)
                 }
             }
             .padding(Spacing.m)

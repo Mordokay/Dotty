@@ -391,6 +391,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Application Support/Outbox with queue.json so it survives closing the app, drops songs
   Dotty already has (stored name + size), keeps the screen awake while syncing, and ends
   an interrupted session with POST /done on the next launch), `Features/Common/DottyBits.swift` (small shared views).
+- Connection state on every screen (Dashboard, Cartridges, Wi-Fi, Music, Joke Factory):
+  `NotConnectedNotice` shows "Dotty disconnected" (red) for 5 s after a drop
+  (`DottyLink.lastDisconnect`), then "Searching for Dotty…" (blue), or "Bluetooth is off";
+  it vanishes on reconnect. Controls that need Dotty use `.needsDotty(link)` (disabled +
+  dimmed). Exceptions: no notice during a cartridge install or a Music sync (Dotty drops
+  the link on purpose), and Music stays enabled while syncing.
 - The dashboard's NavigationStack uses a `NavigationPath` (a typed `[Route]` path silently
   ignored links to pushed screens' own destinations, e.g. a Music playlist).
 - Per-cartridge screens: `DashboardView.route(for:)` maps a running cartridge id to its

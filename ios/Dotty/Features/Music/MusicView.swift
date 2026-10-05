@@ -56,11 +56,18 @@ private struct MusicContent: View {
                                 .padding(.top, Spacing.xxl)
                         }
                     } else {
-                        switch page {
-                        case .player: MusicPlayerCard(model: model)
-                        case .library: MusicLibraryPage(model: model, selection: $selection)
-                        case .playlists: MusicPlaylistsPage(model: model)
+                        Group {
+                            switch page {
+                            case .player: MusicPlayerCard(model: model)
+                            case .library: MusicLibraryPage(model: model, selection: $selection)
+                            case .playlists: MusicPlaylistsPage(model: model)
+                            }
                         }
+                        // Away: everything that talks to Dotty waits (not during a sync, when
+                        // Bluetooth is paused on purpose).
+                        .disabled(link.connection != .connected && !model.outbox.syncing)
+                        .opacity(link.connection == .connected || model.outbox.syncing ? 1 : 0.45)
+                        .animation(.settle, value: link.connection)
                     }
                 }
                 .padding(.horizontal, Spacing.l)

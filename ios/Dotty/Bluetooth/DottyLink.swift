@@ -29,6 +29,8 @@ final class DottyLink: NSObject {
     private(set) var paired: PairedDotty? = PairedDotty.load()
     /// The latest event that wasn't a reply (e.g. fetch.progress).
     private(set) var lastEvent: DottyMessage?
+    /// When an established connection last dropped (screens flash "Dotty disconnected").
+    private(set) var lastDisconnect: Date?
     /// Counts events, so views can react to the same event arriving twice.
     private(set) var eventCount = 0
 
@@ -283,6 +285,7 @@ extension DottyLink: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        if connection == .connected { lastDisconnect = Date() }
         connection = .idle
         infoCharacteristic = nil
         commandCharacteristic = nil

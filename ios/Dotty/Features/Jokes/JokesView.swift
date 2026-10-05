@@ -36,8 +36,8 @@ struct JokesView: View {
                         .padding(.top, Spacing.l)
                     NotConnectedNotice()
                     if let error { NoticeCard(kind: .error, text: error) }
-                    if let status { statusCard(status) }
-                    favouritesCard
+                    if let status { statusCard(status).needsDotty(link) }
+                    favouritesCard.needsDotty(link)
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)

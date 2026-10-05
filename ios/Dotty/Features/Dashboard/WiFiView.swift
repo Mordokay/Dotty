@@ -29,8 +29,8 @@ struct WiFiView: View {
                     if let notice { NoticeCard(kind: .success, text: notice) }
                     NotConnectedNotice()
                     if let error { NoticeCard(kind: .error, text: error) }
-                    if !state.saved.isEmpty { savedCard }
-                    visibleCard
+                    if !state.saved.isEmpty { savedCard.needsDotty(link) }
+                    visibleCard.needsDotty(link)
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)
