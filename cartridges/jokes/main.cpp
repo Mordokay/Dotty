@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.10");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.11");
 
 namespace {
 
@@ -42,7 +42,7 @@ constexpr int16_t kLineH = 19;
 constexpr int16_t kFirstBaseline = nav::kHeight + 19;
 constexpr int kVisibleLines = (EpdDisplay::kSize - 4 - kFirstBaseline) / kLineH + 1;  // 7
 constexpr int kScrollLines = kVisibleLines - 2;  // a swipe moves this many lines (e-paper can't follow a finger)
-constexpr int16_t kRowH = 28;    // favourites list
+constexpr int16_t kRowH = 38;    // favourites list
 constexpr int kListRows = (EpdDisplay::kSize - nav::kHeight - 2) / kRowH;
 
 // The grid, in reading order.
@@ -201,15 +201,15 @@ void drawFavourites() {
     const int i = listPage * perPage + row;
     if (i >= static_cast<int>(favs.size())) break;
     const int16_t top = nav::kHeight + 2 + row * kRowH;
-    epd.setCursor(10, top + 19);
+    epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, String(i + 1) + ". " + favs[i].setup, kW - 20));
     epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   if (pages > 1) {
     const int16_t top = nav::kHeight + 2 + perPage * kRowH;
-    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + 19);
-    if (listPage > 0) epd.fillTriangle(22, top + 13, 32, top + 6, 32, top + 20, kBlack);
-    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + 13, kW - 32, top + 6, kW - 32, top + 20, kBlack);
+    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
+    if (listPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
+    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
   }
 }
 
@@ -335,11 +335,12 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
       else return;
       break;
     case Screen::Favourites: {
-      if (gesture == G::SwipeUp) {
+      // Pages: swipe left or up for the next, right or down for the previous.
+      if (gesture == G::SwipeUp || gesture == G::SwipeLeft) {
         listPage++;
         break;
       }
-      if (gesture == G::SwipeDown) {
+      if (gesture == G::SwipeDown || gesture == G::SwipeRight) {
         listPage--;
         break;
       }

@@ -91,7 +91,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
 - **Taps without a finger**: serial keys `1`-`9` tap a 3x3 grid like a phone keypad (`1` =
-  the nav bar's left corner, `3` its right corner, `5` the middle). Send keys with a short
+  the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right. Send keys with a short
   wait before closing the port (`write; flush; sleep 0.3`): closing at once left the byte
   queued in macOS until the next open, where the screenshot's `s` overwrote it.
 - **Screenshots without a camera**: send `s` over serial (only while a computer has the
@@ -123,6 +123,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
   (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
   switch boot partitions.
+- Lists (Music playlists, Album menu, Tape recordings, Joke favourites): 38 px rows (28 was
+  too small to tap), 4 a page or 3 + a `‹ 1/2 ›` pager row; swipe left/up = next page,
+  right/down = previous.
 - Shared UI in dotty_core once two cartridges needed it: `nav_bar.*` (black top bar, 45 px
   since the user kept missing the 30 px bar's arrows; corner icons incl. stars; `nav::hit`
   and `nav::kTouch` = a third of the width per corner, the title isn't a button), the off pictures (`images/sleep_*.h`), touch

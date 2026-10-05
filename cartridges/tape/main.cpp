@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.2.0");
+DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.2.1");
 
 namespace {
 
@@ -40,7 +40,7 @@ constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 constexpr int16_t kNavH = nav::kHeight;
 constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
-constexpr int16_t kRowH = 28;
+constexpr int16_t kRowH = 38;
 constexpr int kMenuRows = (kW - kNavH - 2) / kRowH;
 constexpr uint32_t kSavedMs = 3000;      // "Saved" under the cassette
 constexpr uint32_t kBootHoldMs = 120;    // BOOT this long = record (a click is not)
@@ -292,17 +292,17 @@ void drawList() {
     const int16_t top = kNavH + 2 + row * kRowH;
     const String length = clock(recordings[i].durationMs);
     const int16_t lengthW = ui::textWidth(epd, length);
-    epd.setCursor(10, top + 19);
+    epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, ui::printable(tape::displayName(recordings[i].name)), kW - 30 - lengthW));
-    epd.setCursor(kW - 10 - lengthW, top + 19);
+    epd.setCursor(kW - 10 - lengthW, top + kRowH / 2 + 6);
     epd.print(length);
     epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   if (pages > 1) {
     const int16_t top = kNavH + 2 + per * kRowH;
-    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + 19);
-    if (listPage > 0) epd.fillTriangle(22, top + 13, 32, top + 6, 32, top + 20, kBlack);
-    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + 13, kW - 32, top + 6, kW - 32, top + 20, kBlack);
+    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
+    if (listPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
+    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
   }
 }
 
@@ -655,6 +655,11 @@ void loop() {
   if (screen == Screen::Player && input.gesture == Touch::Gesture::SwipeLeft) redraw |= (playAt(playIndex + 1), true);
   if (screen == Screen::Player && input.gesture == Touch::Gesture::SwipeRight) redraw |= (playAt(playIndex - 1), true);
   if (input.gesture == Touch::Gesture::LongPress) full = true;
+  if (screen == Screen::List) {  // pages: swipe left/up = next, right/down = previous
+    using G = Touch::Gesture;
+    if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) listPage++, redraw = true;
+    if (input.gesture == G::SwipeRight || input.gesture == G::SwipeDown) listPage--, redraw = true;
+  }
   if (savedUntil && millis() > savedUntil) {
     savedUntil = 0;
     redraw = true;

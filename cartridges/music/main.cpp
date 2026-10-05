@@ -28,7 +28,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.10.3");
+DOTTY_CARTRIDGE("music", "Music", "0.10.4");
 
 namespace {
 
@@ -45,7 +45,7 @@ constexpr uint16_t kWhite = EpdDisplay::kWhite;
 
 constexpr int16_t kNavH = nav::kHeight;
 constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
-constexpr int16_t kRowH = 28;     // playlist menu rows, from kNavH + 2
+constexpr int16_t kRowH = 38;     // playlist menu rows, from kNavH + 2 (4 a page; 28 was too small to tap)
 constexpr int kMenuRows = (EpdDisplay::kSize - kNavH - 2) / kRowH;
 constexpr int16_t kButtonY = 115;
 constexpr int16_t kPrevX = 38;
@@ -344,18 +344,18 @@ void drawPlaylists() {
                          : ui::printable(items[i]).isEmpty() ? "Playlist " + String(i) : items[i];
     const String count = String(items[i].isEmpty() ? music::songs().size() : music::playlistSongs(items[i]).size());
     const int16_t countW = ui::textWidth(epd, count);
-    epd.setCursor(10, top + 19);
+    epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, label, kW - 30 - countW));
-    epd.setCursor(kW - 10 - countW, top + 19);
+    epd.setCursor(kW - 10 - countW, top + kRowH / 2 + 6);
     epd.print(count);
     if (!current) epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   epd.setTextColor(kBlack);
   if (pages > 1) {  // pager:  <   2 / 3   >
     const int16_t top = kNavH + 2 + perPage * kRowH;
-    ui::drawCentered(epd, String(menuPage + 1) + " / " + String(pages), top + 19);
-    if (menuPage > 0) epd.fillTriangle(22, top + 13, 32, top + 6, 32, top + 20, kBlack);
-    if (menuPage < pages - 1) epd.fillTriangle(kW - 22, top + 13, kW - 32, top + 6, kW - 32, top + 20, kBlack);
+    ui::drawCentered(epd, String(menuPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
+    if (menuPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
+    if (menuPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
   }
 }
 
@@ -686,6 +686,11 @@ void loop() {
   }
   if (input.gesture == Touch::Gesture::Tap) redraw |= onTap(shell::touch.x(), shell::touch.y());
   if (input.gesture == Touch::Gesture::LongPress) fullRequested = true;  // clears ghosting
+  if (screen == Screen::Playlists) {  // pages: swipe left/up = next, right/down = previous
+    using G = Touch::Gesture;
+    if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) menuPage++, redraw = true;
+    if (input.gesture == G::SwipeRight || input.gesture == G::SwipeDown) menuPage--, redraw = true;
+  }
   if (input.boot && !queue.empty()) next();
   redraw |= stateDirty;
   stateDirty = false;

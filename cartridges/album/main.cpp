@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.2");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.3");
 
 namespace {
 
@@ -40,7 +40,7 @@ constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 constexpr int16_t kNavH = nav::kHeight;
 constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
-constexpr int16_t kRowH = 28;  // album menu rows, from kNavH + 2
+constexpr int16_t kRowH = 38;  // album menu rows, from kNavH + 2
 constexpr int kMenuRows = (kW - kNavH - 2) / kRowH;
 constexpr int16_t kInfoH = 26;           // the viewer's bottom strip (position + date)
 constexpr uint32_t kOverlayMs = 6000;    // the viewer's labels hide by themselves
@@ -199,18 +199,18 @@ void drawAlbums() {
     epd.setTextColor(current ? kWhite : kBlack);
     const String count = String(items[i].isEmpty() ? album::photos().size() : album::albumPhotos(items[i]).size());
     const int16_t countW = ui::textWidth(epd, count);
-    epd.setCursor(10, top + 19);
+    epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, albumLabel(items[i]), kW - 30 - countW));
-    epd.setCursor(kW - 10 - countW, top + 19);
+    epd.setCursor(kW - 10 - countW, top + kRowH / 2 + 6);
     epd.print(count);
     if (!current) epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   epd.setTextColor(kBlack);
   if (pages > 1) {  // pager:  <   2 / 3   >
     const int16_t top = kNavH + 2 + perPage * kRowH;
-    ui::drawCentered(epd, String(menuPage + 1) + " / " + String(pages), top + 19);
-    if (menuPage > 0) epd.fillTriangle(22, top + 13, 32, top + 6, 32, top + 20, kBlack);
-    if (menuPage < pages - 1) epd.fillTriangle(kW - 22, top + 13, kW - 32, top + 6, kW - 32, top + 20, kBlack);
+    ui::drawCentered(epd, String(menuPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
+    if (menuPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
+    if (menuPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
   }
 }
 
@@ -607,6 +607,10 @@ void loop() {
   if (screen == Screen::Viewer && (input.gesture == G::SwipeLeft || input.boot)) step(1);
   if (screen == Screen::Viewer && input.gesture == G::SwipeRight) step(-1);
   if (input.gesture == G::LongPress) fullDraw = true;  // clears ghosting
+  if (screen == Screen::Albums) {  // pages: swipe left/up = next, right/down = previous
+    if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) menuPage++, redraw = true;
+    if (input.gesture == G::SwipeRight || input.gesture == G::SwipeDown) menuPage--, redraw = true;
+  }
   if (stateDirty) {
     stateDirty = false;
     redraw = true;
