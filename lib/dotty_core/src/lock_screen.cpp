@@ -63,12 +63,12 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
     int16_t x1, y1;
     uint16_t w, h;
     gfx.getTextBounds(clock, 0, 0, &x1, &y1, &w, &h);  // y1 < 0: the digits' top above the baseline
-    const int16_t lockW = 18, lockH = 26, gap = 12;
+    const int16_t lockW = art::padlockWidth(h), gap = 12;  // padlock as tall as the digits
     const int16_t top = kAreaTop + (kAreaBottom - kAreaTop - (h + kGap + widgetH)) / 2;
     const int16_t x = (kW - (w + gap + lockW)) / 2;
     gfx.setCursor(x - x1, top - y1);
     gfx.print(clock);
-    art::drawSmallPadlock(gfx, x + w + gap, top + (h - lockH) / 2);
+    art::drawSmallPadlock(gfx, x + w + gap, top, h);
     // Canvas bits: 1 = white, like the display's.
     gfx.drawBitmap(0, top + h + kGap, area.getBuffer(), kW, widgetH, kWhite, kBlack);
   }

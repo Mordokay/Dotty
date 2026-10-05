@@ -8,8 +8,10 @@ namespace art {
 // Solid padlock, 44 x 60 px, horizontally centred on cx with its top at y.
 void drawPadlock(Adafruit_GFX &gfx, int16_t cx, int16_t top);
 
-// Small padlock, 18 x 26 px, top-left at (x, top): for the clock row of the lock screen.
-void drawSmallPadlock(Adafruit_GFX &gfx, int16_t x, int16_t top);
+// Padlock `height` px tall (and padlockWidth(height) wide), top-left at (x, top): for the
+// clock row of the lock screen, sized to the clock's digits.
+void drawSmallPadlock(Adafruit_GFX &gfx, int16_t x, int16_t top, int16_t height);
+int16_t padlockWidth(int16_t height);
 
 // Wi-Fi symbol (three arcs over a dot) filling a size x size box at (x, y).
 void drawWifi(Adafruit_GFX &gfx, int16_t x, int16_t y, int16_t size = 64);

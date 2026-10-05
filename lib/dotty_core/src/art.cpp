@@ -43,16 +43,23 @@ void drawWifi(Adafruit_GFX &gfx, int16_t x, int16_t y, int16_t size) {
   }
 }
 
-void drawSmallPadlock(Adafruit_GFX &gfx, int16_t x, int16_t top) {
-  const int16_t cx = x + 9;
-  gfx.fillCircle(cx, top + 8, 7, kBlack);  // shackle
-  gfx.fillCircle(cx, top + 8, 4, kWhite);
-  gfx.fillRect(x + 2, top + 8, 4, 4, kBlack);
-  gfx.fillRect(x + 12, top + 8, 4, 4, kBlack);
-  gfx.fillRect(x + 5, top + 8, 8, 4, kWhite);
-  gfx.fillRoundRect(x, top + 12, 18, 14, 2, kBlack);  // body
-  gfx.fillCircle(cx, top + 18, 2, kWhite);            // keyhole
-  gfx.fillRect(cx - 1, top + 18, 2, 5, kWhite);
+int16_t padlockWidth(int16_t height) {
+  return height * 7 / 10;
+}
+
+void drawSmallPadlock(Adafruit_GFX &gfx, int16_t x, int16_t top, int16_t height) {
+  const int16_t w = padlockWidth(height), cx = x + w / 2;
+  const int16_t outer = w * 2 / 5, inner = max<int16_t>(2, w / 5);
+  const int16_t ringY = top + outer;               // shackle: the top half of a ring…
+  const int16_t bodyTop = top + height * 9 / 20;   // …standing on the body
+  gfx.fillCircle(cx, ringY, outer, kBlack);
+  gfx.fillCircle(cx, ringY, inner, kWhite);
+  gfx.fillRect(cx - outer, ringY, outer * 2 + 1, bodyTop - ringY, kBlack);  // legs…
+  gfx.fillRect(cx - inner, ringY, inner * 2 + 1, bodyTop - ringY, kWhite);  // …with the gap between
+  gfx.fillRoundRect(x, bodyTop, w, top + height - bodyTop, max<int16_t>(2, height / 12), kBlack);
+  const int16_t keyY = bodyTop + (top + height - bodyTop) * 2 / 5, keyR = max<int16_t>(2, w / 9);
+  gfx.fillCircle(cx, keyY, keyR, kWhite);  // keyhole
+  gfx.fillRect(cx - keyR / 2, keyY, max<int16_t>(2, keyR), (top + height - keyY) * 3 / 5, kWhite);
 }
 
 namespace {
