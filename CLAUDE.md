@@ -74,6 +74,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Verified with a deliberate hang (loopTask shown at the hanging line). A live stuck
   Dotty can also be inspected without restarting: OpenOCD (`tool-openocd-esp32`,
   `board/esp32s3-builtin.cfg`) + `xtensa-esp32s3-elf-gdb`, `thread apply all bt`.
+- **The USB serial port must stay quiet without a computer**: locking after unplugging
+  crashed with an interrupt-watchdog reset on CPU1 (an interrupt storm; the log task was in
+  its serial code). `log.cpp` only streams while `HWCDC::isPlugged()`; library log levels
+  are errors only (`CORE_DEBUG_LEVEL=1`, `CONFIG_NIMBLE_CPP_LOG_LEVEL=1`). Don't add
+  `Serial.print`s or raise those levels for releases.
 - PWR is debounced (30 ms) and ignored for 600 ms after a lock/unlock; a light-sleep wake
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
