@@ -74,19 +74,36 @@ void drawIcon(Adafruit_GFX &gfx, Icon icon, int16_t cx, int16_t cy, uint16_t col
     case Icon::StarFilled:
       fillStar(gfx, cx, cy, 11, 4.6f, color);
       break;
+    case Icon::Trash:  // lid with a handle, body narrowing down, two ribs
+      gfx.fillRect(cx - 9, cy - 8, 19, 3, color);
+      gfx.fillRect(cx - 3, cy - 11, 7, 3, color);
+      thickLine(gfx, cx - 7, cy - 4, cx - 5, cy + 9, color);
+      thickLine(gfx, cx + 7, cy - 4, cx + 5, cy + 9, color);
+      gfx.fillRect(cx - 5, cy + 8, 11, 2, color);
+      gfx.drawFastVLine(cx - 1, cy - 2, 9, color);
+      gfx.drawFastVLine(cx + 2, cy - 2, 9, color);
+      break;
     case Icon::None:
       break;
   }
 }
 
-void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right) {
+void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right, const String &rightText) {
   gfx.fillRect(0, 0, kW, kHeight, kBlack);
   gfx.setFont(&FreeSans9pt7b);
   gfx.setTextColor(kWhite);
   ui::drawCentered(gfx, ui::fitText(gfx, title, kW - 2 * kButton), kHeight / 2 + 7);
+  if (rightText.length()) {
+    gfx.setCursor(kW - 8 - ui::textWidth(gfx, rightText), kHeight / 2 + 7);
+    gfx.print(rightText);
+  }
   gfx.setTextColor(kBlack);
   drawIcon(gfx, left, kButton / 2, kHeight / 2, kWhite);
-  drawIcon(gfx, right, kW - kButton / 2, kHeight / 2, kWhite);
+  if (rightText.isEmpty()) drawIcon(gfx, right, kW - kButton / 2, kHeight / 2, kWhite);
+}
+
+String pageLabel(int page, int pages) {
+  return pages > 1 ? String(page + 1) + "/" + String(pages) : String();
 }
 
 int hit(uint16_t x, uint16_t y) {

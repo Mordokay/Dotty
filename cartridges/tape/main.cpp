@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.2.1");
+DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.3.0");
 
 namespace {
 
@@ -47,6 +47,7 @@ constexpr uint32_t kBootHoldMs = 120;    // BOOT this long = record (a click is 
 constexpr int16_t kSaveTop = 164;        // the deck's Undo · Save · Discard row (to the bottom)
 constexpr uint32_t kConfirmMs = 10000;   // "Discard this tape?" goes away by itself
 constexpr int16_t kAskTop = 74;          // its Yes / No buttons (where the cassette was)
+constexpr int16_t kAskDeleteTop = 136;   // the player's Yes / No (where the controls were)
 constexpr int16_t kButtonY = 114;        // the player's play button
 constexpr int16_t kVolumeY = 191;
 
@@ -61,6 +62,8 @@ int playIndex = 0;                        // in recordings, for the player
 String savedName;                         // the tape just saved, shown for a moment
 uint32_t savedUntil = 0;
 uint32_t confirmDiscardUntil = 0;         // the trash was tapped: "Discard this tape?" until then
+uint32_t confirmDeleteUntil = 0;          // the player's trash: "Delete this recording?" until then
+bool resumeAfterAsk = false;              // it was playing when asked: No plays on
 bool stateDirty = true;
 bool listDirty = true;
 
@@ -155,17 +158,6 @@ void undoIcon(int16_t cx, int16_t cy) {
   }
   thick(ax + r, ay, ax + r, ay + 5);  // the tail on the right goes down a little
   epd.fillTriangle(ax - r - 5, ay - 1, ax - r + 5, ay - 1, ax - r, ay + 6, kBlack);
-}
-
-// A bin: lid with a handle, body narrowing down, two ribs.
-void trashIcon(int16_t cx, int16_t cy) {
-  epd.fillRect(cx - 9, cy - 8, 19, 3, kBlack);  // lid
-  epd.fillRect(cx - 3, cy - 11, 7, 3, kBlack);  // handle
-  thick(cx - 7, cy - 4, cx - 5, cy + 9);        // body sides
-  thick(cx + 7, cy - 4, cx + 5, cy + 9);
-  epd.fillRect(cx - 5, cy + 8, 11, 2, kBlack);  // bottom
-  epd.drawFastVLine(cx - 1, cy - 2, 9, kBlack);  // ribs
-  epd.drawFastVLine(cx + 2, cy - 2, 9, kBlack);
 }
 
 void playAt(int index) {
@@ -265,17 +257,21 @@ void drawDeck() {
     undoIcon(kUndoX + kUndoW / 2, y + 15);
     button(kSaveX, y, kSaveW, 30, "Save", true);
     button(kDiscardX, y, kDiscardW, 30, nullptr, false);
-    trashIcon(kDiscardX + kDiscardW / 2, y + 15);
+    nav::drawIcon(epd, nav::Icon::Trash, kDiscardX + kDiscardW / 2, y + 15, kBlack);
   }
 }
 
-int perPage(int count) {
-  return count <= kMenuRows ? kMenuRows : kMenuRows - 1;
+// Every row holds a recording; the page ("1/2") sits in the nav bar's right corner.
+int listPages(int count) {
+  return max(1, (count + kMenuRows - 1) / kMenuRows);
 }
 
 void drawList() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, "Recordings", nav::Icon::Back, nav::Icon::None);
+  const int per = kMenuRows;
+  const int pages = listPages(recordings.size());
+  listPage = constrain(listPage, 0, pages - 1);
+  nav::draw(epd, "Tapes", nav::Icon::Back, nav::Icon::None, nav::pageLabel(listPage, pages));
   epd.setTextColor(kBlack);
   epd.setFont(&FreeSans9pt7b);
   if (recordings.empty()) {
@@ -283,9 +279,6 @@ void drawList() {
     ui::drawCentered(epd, "Hold BOOT to record", 127);
     return;
   }
-  const int per = perPage(recordings.size());
-  const int pages = (recordings.size() + per - 1) / per;
-  listPage = constrain(listPage, 0, pages - 1);
   for (int row = 0; row < per; row++) {
     const int i = listPage * per + row;
     if (i >= static_cast<int>(recordings.size())) break;
@@ -298,23 +291,28 @@ void drawList() {
     epd.print(length);
     epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
-  if (pages > 1) {
-    const int16_t top = kNavH + 2 + per * kRowH;
-    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
-    if (listPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
-    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
-  }
+}
+
+bool askingDelete() {
+  return confirmDeleteUntil && millis() < confirmDeleteUntil;
 }
 
 void drawPlayer() {
   epd.fillScreen(kWhite);
   const int count = recordings.size();
-  nav::draw(epd, String(playIndex + 1) + " / " + String(count), nav::Icon::Back, nav::Icon::None);
+  nav::draw(epd, String(playIndex + 1) + " / " + String(count), nav::Icon::Back,
+            count ? nav::Icon::Trash : nav::Icon::None);
   epd.setTextColor(kBlack);
   if (count == 0) return;
   const tape::Recording &r = recordings[playIndex];
   epd.setFont(&FreeSansBold9pt7b);
   ui::drawWrapped(epd, ui::printable(tape::displayName(r.name)), 64, kW - 16, 2, 18);
+  if (askingDelete()) {  // in place of the controls
+    ui::drawCentered(epd, "Delete this recording?", 124);
+    button(12, kAskDeleteTop, 84, 30, "Yes", true);
+    button(104, kAskDeleteTop, 84, 30, "No", false);
+    return;
+  }
 
   const int16_t cx = kW / 2, cy = kButtonY;
   epd.fillCircle(cx, cy, 24, kBlack);
@@ -364,6 +362,22 @@ void drawApp() {
 
 // ---------- touch ----------
 
+// The player's recording goes; the next one shows (not playing), or the list if none is left.
+void deleteCurrent() {
+  confirmDeleteUntil = 0;
+  if (recordings.empty()) return;
+  player.stop();
+  tape::remove(recordings[playIndex].name);
+  reloadList();
+  notifyList();
+  if (recordings.empty()) {
+    screen = Screen::List;
+    return;
+  }
+  playIndex = min<int>(playIndex, recordings.size() - 1);
+  stateDirty = true;
+}
+
 bool onTap(uint16_t x, uint16_t y) {
   if (screen == Screen::Deck) {
     if (y < kNavH && x > kW - kNavButton && tape::state() != tape::State::Recording) {
@@ -392,28 +406,46 @@ bool onTap(uint16_t x, uint16_t y) {
   }
   if (screen == Screen::List) {
     if (y < kNavH) {
-      if (x >= kNavButton) return false;
-      screen = Screen::Deck;
+      if (x < kNavButton) {
+        screen = Screen::Deck;
+      } else if (x > kW - kNavButton && listPages(recordings.size()) > 1) {
+        listPage = (listPage + 1) % listPages(recordings.size());  // the page number: next, round
+      } else {
+        return false;
+      }
       return true;
     }
-    const int per = perPage(recordings.size());
+    const int per = kMenuRows;
     const int row = (y - kNavH - 2) / kRowH;
-    if (row >= per) {
-      if (x < 70) listPage--;
-      else if (x > kW - 70) listPage++;
-      else return false;
-      return true;
-    }
+    if (row >= per) return false;
     const int i = listPage * per + row;
     if (row < 0 || i >= static_cast<int>(recordings.size())) return false;
     playAt(i);
     return true;
   }
   // Player
+  if (askingDelete()) {
+    if (y < kAskDeleteTop - 8 || y > kAskDeleteTop + 38) return false;
+    if (x < kW / 2) {  // Yes
+      deleteCurrent();
+    } else {           // No
+      confirmDeleteUntil = 0;
+      if (resumeAfterAsk) player.togglePause();
+    }
+    return true;
+  }
   if (y < kNavH) {
-    if (x >= kNavButton) return false;
-    player.stop();
-    screen = Screen::List;
+    if (x < kNavButton) {
+      player.stop();
+      screen = Screen::List;
+      listPage = playIndex / kMenuRows;  // back where that recording is
+    } else if (x > kW - kNavButton && !recordings.empty()) {
+      resumeAfterAsk = playing();
+      if (resumeAfterAsk) player.togglePause();
+      confirmDeleteUntil = millis() + kConfirmMs;  // ask first
+    } else {
+      return false;
+    }
     return true;
   }
   if (y > kVolumeY - 24) {
@@ -652,6 +684,12 @@ void loop() {
   if (input.key == 'l') shell::lock();
   static bool redraw = false, full = false;
   if (input.gesture == Touch::Gesture::Tap) redraw |= onTap(shell::touch.x(), shell::touch.y());
+  if (confirmDeleteUntil && millis() > confirmDeleteUntil) {  // unanswered: back to the controls
+    confirmDeleteUntil = 0;
+    if (resumeAfterAsk && player.isPaused()) player.togglePause();
+    redraw = true;
+  }
+  if (askingDelete()) input.gesture = input.gesture == Touch::Gesture::Tap ? input.gesture : Touch::Gesture::None;
   if (screen == Screen::Player && input.gesture == Touch::Gesture::SwipeLeft) redraw |= (playAt(playIndex + 1), true);
   if (screen == Screen::Player && input.gesture == Touch::Gesture::SwipeRight) redraw |= (playAt(playIndex - 1), true);
   if (input.gesture == Touch::Gesture::LongPress) full = true;

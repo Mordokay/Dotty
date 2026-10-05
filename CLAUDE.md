@@ -123,9 +123,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
   (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
   switch boot partitions.
-- Lists (Music playlists, Album menu, Tape recordings, Joke favourites): 38 px rows (28 was
-  too small to tap), 4 a page or 3 + a `‹ 1/2 ›` pager row; swipe left/up = next page,
-  right/down = previous.
+- Lists (Music playlists, Album menu, Tape "Tapes", Joke favourites): 38 px rows (28 was
+  too small to tap), always 4 a page; the page is the nav bar's right corner
+  (`nav::draw(…, rightText)` + `nav::pageLabel`, "2/3"; tapping it = next page, round), so no
+  pager row. Swipe left/up = next page, right/down = previous.
 - Shared UI in dotty_core once two cartridges needed it: `nav_bar.*` (black top bar, 45 px
   since the user kept missing the 30 px bar's arrows; corner icons incl. stars; `nav::hit`
   and `nav::kTouch` = a third of the width per corner, the title isn't a button), the off pictures (`images/sleep_*.h`), touch
@@ -444,6 +445,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   each BOOT hold is a part; the file is cut back with VFS `truncate("/sdcard/…")`, the hint
   says "Undo takes the last 0:06"), Save, 🗑 (the cassette turns into "Discard this tape?"
   Yes / No; gone after 10 s or when BOOT records again). Text labels didn't fit three wide.
+  Player: 🗑 in the nav's right corner (`nav::Icon::Trash`) pauses and asks "Delete this
+  recording?" Yes / No in place of the controls; Yes shows the next one, No plays on.
 - Screens: deck (cassette, ● REC time + 20-bar dB meter -60..0 dBFS, or PAUSED + Save),
   recordings (paged, newest first, "Mon 6 Oct 09:14" + length), player (‹ › and swipes =
   previous/next, volume row). Dev keys: `r` toggles a simulated BOOT hold, `v` saves, `w`

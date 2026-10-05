@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.11");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.12");
 
 namespace {
 
@@ -185,8 +185,12 @@ void drawJoke() {
 
 void drawFavourites() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, "Favourites", nav::Icon::Back, nav::Icon::None);
   const auto &favs = jokes::favourites();
+  // Every row holds a joke; the page ("1/2") sits in the nav bar's right corner.
+  const int perPage = kListRows;
+  const int pages = max<int>(1, (favs.size() + perPage - 1) / perPage);
+  listPage = constrain(listPage, 0, pages - 1);
+  nav::draw(epd, "Favourites", nav::Icon::Back, nav::Icon::None, nav::pageLabel(listPage, pages));
   epd.setFont(&FreeSans9pt7b);
   if (favs.empty()) {
     ui::drawCentered(epd, "No favourites yet", 90);
@@ -194,9 +198,6 @@ void drawFavourites() {
     ui::drawCentered(epd, "to keep it here", 140);
     return;
   }
-  const int perPage = static_cast<int>(favs.size()) <= kListRows ? kListRows : kListRows - 1;
-  const int pages = (favs.size() + perPage - 1) / perPage;
-  listPage = constrain(listPage, 0, pages - 1);
   for (int row = 0; row < perPage; row++) {
     const int i = listPage * perPage + row;
     if (i >= static_cast<int>(favs.size())) break;
@@ -204,12 +205,6 @@ void drawFavourites() {
     epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, String(i + 1) + ". " + favs[i].setup, kW - 20));
     epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
-  }
-  if (pages > 1) {
-    const int16_t top = nav::kHeight + 2 + perPage * kRowH;
-    ui::drawCentered(epd, String(listPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
-    if (listPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
-    if (listPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
   }
 }
 
@@ -350,14 +345,15 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
         break;
       }
       const auto &favs = jokes::favourites();
-      if (favs.empty() || y < nav::kHeight + 2) return;
-      const int perPage = static_cast<int>(favs.size()) <= kListRows ? kListRows : kListRows - 1;
-      const int row = (y - nav::kHeight - 2) / kRowH;
-      if (row >= perPage) {  // pager row
-        if (x < 70) listPage--;
-        else if (x > kW - 70) listPage++;
+      const int pages = max<int>(1, (favs.size() + kListRows - 1) / kListRows);
+      if (nav::hit(x, y) == 1 && pages > 1) {  // the page number: next, round
+        listPage = (listPage + 1) % pages;
         break;
       }
+      if (favs.empty() || y < nav::kHeight + 2) return;
+      const int perPage = kListRows;
+      const int row = (y - nav::kHeight - 2) / kRowH;
+      if (row >= perPage) return;
       const int i = listPage * perPage + row;
       if (i < static_cast<int>(favs.size())) openFavourite(i);
       break;

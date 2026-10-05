@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.3");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.4");
 
 namespace {
 
@@ -178,17 +178,18 @@ std::vector<String> menuItems() {
   return items;
 }
 
-int menuPerPage(int count) {
-  return count <= kMenuRows ? kMenuRows : kMenuRows - 1;
+// Every row holds an item; the page ("1/2") sits in the nav bar's right corner.
+int menuPages(int count) {
+  return max(1, (count + kMenuRows - 1) / kMenuRows);
 }
 
 void drawAlbums() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, "Albums", nav::Icon::Back, nav::Icon::None);
   const std::vector<String> items = menuItems();
-  const int perPage = menuPerPage(items.size());
-  const int pages = (items.size() + perPage - 1) / perPage;
+  const int perPage = kMenuRows;
+  const int pages = menuPages(items.size());
   menuPage = constrain(menuPage, 0, pages - 1);
+  nav::draw(epd, "Albums", nav::Icon::Back, nav::Icon::None, nav::pageLabel(menuPage, pages));
   epd.setFont(&FreeSans9pt7b);
   for (int row = 0; row < perPage; row++) {
     const int i = menuPage * perPage + row;
@@ -206,12 +207,6 @@ void drawAlbums() {
     if (!current) epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
   }
   epd.setTextColor(kBlack);
-  if (pages > 1) {  // pager:  <   2 / 3   >
-    const int16_t top = kNavH + 2 + perPage * kRowH;
-    ui::drawCentered(epd, String(menuPage + 1) + " / " + String(pages), top + kRowH / 2 + 6);
-    if (menuPage > 0) epd.fillTriangle(22, top + kRowH / 2, 32, top + kRowH / 2 - 7, 32, top + kRowH / 2 + 7, kBlack);
-    if (menuPage < pages - 1) epd.fillTriangle(kW - 22, top + kRowH / 2, kW - 32, top + kRowH / 2 - 7, kW - 32, top + kRowH / 2 + 7, kBlack);
-  }
 }
 
 void drawTransfer() {
@@ -320,20 +315,20 @@ bool drawLockScreenPhoto(Adafruit_GFX &gfx, const LockScreenInfo &info) {
 // ---------- touch ----------
 
 bool onAlbumsTap(uint16_t x, uint16_t y) {
-  if (y < kNavH) {
-    if (x >= kNavButton) return false;
-    screen = Screen::Viewer;  // back
-    return true;
-  }
   const std::vector<String> items = menuItems();
-  const int perPage = menuPerPage(items.size());
-  const int row = (y - kNavH - 2) / kRowH;
-  if (row >= perPage) {  // pager row
-    if (x < 70) menuPage--;
-    else if (x > kW - 70) menuPage++;
-    else return false;
+  if (y < kNavH) {
+    if (x < kNavButton) {
+      screen = Screen::Viewer;  // back
+    } else if (x > kW - kNavButton && menuPages(items.size()) > 1) {
+      menuPage = (menuPage + 1) % menuPages(items.size());  // the page number: next, round
+    } else {
+      return false;
+    }
     return true;
   }
+  const int perPage = kMenuRows;
+  const int row = (y - kNavH - 2) / kRowH;
+  if (row >= perPage) return false;
   const int i = menuPage * perPage + row;
   if (row < 0 || i >= static_cast<int>(items.size())) return false;
   openAlbum(items[i]);
@@ -351,7 +346,7 @@ bool onViewerTap(uint16_t x, uint16_t y) {
     overlayUntil = 0;
     const std::vector<String> items = menuItems();
     const auto it = std::find(items.begin(), items.end(), activeAlbum);
-    menuPage = (it - items.begin()) / menuPerPage(items.size());
+    menuPage = (it - items.begin()) / kMenuRows;
     return true;
   }
   if (list.empty()) return false;
