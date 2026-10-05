@@ -110,7 +110,7 @@ struct JokesView: View {
                     }
                 } label: {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text(joke.category.uppercased())
+                        Text((joke.category == "Programming" ? "Code" : joke.category).uppercased())
                             .font(.lpLabel)
                             .foregroundStyle(DottyLight.firefly.color)
                         Text(joke.setup)
@@ -171,7 +171,10 @@ struct JokesView: View {
             var s = Status()
             s.count = reply["count"] as? Int ?? 0
             let unseen = reply["unseen"] as? [String: Int] ?? [:]
-            s.unseen = ["Dark", "Programming", "Misc", "Any"].compactMap { name in unseen[name].map { (name, $0) } }
+            // Dotty reports JokeAPI's names; "Programming" shows as "Code", as on Dotty's grid.
+            s.unseen = ["Dark", "Programming", "Misc", "Any"].compactMap { name in
+                unseen[name].map { (name == "Programming" ? "Code" : name, $0) }
+            }
             s.favourites = reply["favourites"] as? Int ?? 0
             s.syncing = reply["syncing"] as? Bool ?? false
             s.done = reply["done"] as? Int ?? 0

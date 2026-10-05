@@ -68,6 +68,12 @@ int listPage = 0;
 int waitingCategory = jokes::kAny;  // the cell tapped while jokes were downloading
 bool redraw = true;
 
+// The name shown for a category: JokeAPI's own, except "Programming" (too wide) → "Code".
+// Labels stay at 6 characters or fewer.
+String label(int category) {
+  return category == jokes::Programming ? String("Code") : String(jokes::categoryName(category));
+}
+
 // ---------- drawing helpers ----------
 
 struct Line {
@@ -141,15 +147,15 @@ void drawGrid() {
     epd.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 7, kBlack);
     drawCategoryIcon(kGrid[i], x + w / 2, y + 30);
     epd.setFont(&FreeSansBold9pt7b);
-    const String label = jokes::categoryName(kGrid[i]);
-    epd.setCursor(x + (w - ui::textWidth(epd, label)) / 2, y + 66);
-    epd.print(label);
+    const String name = label(kGrid[i]);
+    epd.setCursor(x + (w - ui::textWidth(epd, name)) / 2, y + 66);
+    epd.print(name);
   }
 }
 
 void drawJoke() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, jokes::categoryName(shown.category), nav::Icon::Back,
+  nav::draw(epd, label(shown.category), nav::Icon::Back,
             jokes::isFavourite(shown.id) ? nav::Icon::StarFilled : nav::Icon::Star);
   const std::vector<Line> lines = jokeLines();
   scrollLine = constrain(scrollLine, 0, max(0, static_cast<int>(lines.size()) - kVisibleLines));
@@ -206,7 +212,7 @@ void drawFavourites() {
 // No jokes on the card yet: why, and what happens next.
 void drawMessage() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, jokes::categoryName(waitingCategory), nav::Icon::Back, nav::Icon::None);
+  nav::draw(epd, label(waitingCategory), nav::Icon::Back, nav::Icon::None);
   const jokes::SyncState sync = jokes::syncState();
   epd.setFont(&FreeSansBold9pt7b);
   if (!sdReady) {
