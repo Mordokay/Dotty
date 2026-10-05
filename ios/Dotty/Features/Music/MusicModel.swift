@@ -12,6 +12,8 @@ final class MusicModel {
         let name: String
         let title: String
         let size: Int
+        /// When the song arrived on Dotty (nil for songs from before Dotty kept the date).
+        let added: Date?
     }
 
     struct Playlist: Identifiable, Hashable {
@@ -81,7 +83,10 @@ final class MusicModel {
         let reply = try await link.send("music.library")
         songs = (reply["songs"] as? [[String: Any]] ?? []).compactMap { item in
             guard let name = item["name"] as? String else { return nil }
-            return Song(name: name, title: item["title"] as? String ?? name, size: item["size"] as? Int ?? 0)
+            // Dotty sends local time as epoch seconds; files written before its clock was
+            // synced carry 1980-ish dates.
+            let added = (item["added"] as? Double).flatMap { $0 > 1_600_000_000 ? Date(timeIntervalSince1970: $0) : nil }
+            return Song(name: name, title: item["title"] as? String ?? name, size: item["size"] as? Int ?? 0, added: added)
         }
         playlists = (reply["playlists"] as? [[String: Any]] ?? []).compactMap { item in
             guard let name = item["name"] as? String else { return nil }
@@ -188,6 +193,11 @@ final class MusicModel {
             batchBytes += bytes
         }
         if !batch.isEmpty { await edit("music.playlist.add", ["name": playlist, "songs": batch]) }
+    }
+
+    /// Positions as in `playlistSongs`.
+    func move(in playlist: String, from: Int, to: Int) async {
+        await edit("music.playlist.move", ["name": playlist, "from": from, "to": to])
     }
 
     func remove(_ song: String, from playlist: String) async {

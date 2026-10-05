@@ -13,6 +13,7 @@ namespace music {
 struct Song {
   String name;  // file name in library/
   size_t size = 0;
+  time_t added = 0;  // the file's date on the card (when it arrived)
 };
 
 void begin();
@@ -31,6 +32,8 @@ bool deletePlaylist(const String &name);
 bool renamePlaylist(const String &name, const String &newName);
 bool addToPlaylist(const String &playlist, const std::vector<String> &songNames);
 bool removeFromPlaylist(const String &playlist, const String &song);
+// Moves the song at `from` to `to` (positions in playlistSongs()).
+bool moveInPlaylist(const String &playlist, int from, int to);
 
 // "NAPA-Deslocado.mp3" → "NAPA - Deslocado"
 String title(const String &songName);

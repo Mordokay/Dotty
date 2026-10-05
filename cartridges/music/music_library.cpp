@@ -64,7 +64,7 @@ void rescan() {
   File dir = SD_MMC.open(libraryDir());
   for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
     const String name = f.name();
-    if (!f.isDirectory() && isSong(name)) library.push_back({name, f.size()});
+    if (!f.isDirectory() && isSong(name)) library.push_back({name, f.size(), f.getLastWrite()});
   }
   std::sort(library.begin(), library.end(), [](const Song &a, const Song &b) { return a.name < b.name; });
   LOGI("music", "%u songs, %u playlists", static_cast<unsigned>(library.size()),
@@ -146,6 +146,17 @@ bool removeFromPlaylist(const String &playlist, const String &song) {
   if (end == entries.end()) return true;
   entries.erase(end, entries.end());
   return writePlaylist(playlist, entries);
+}
+
+bool moveInPlaylist(const String &playlist, int from, int to) {
+  // Rewritten from the songs still in the library, so positions match playlistSongs().
+  std::vector<String> songs = playlistSongs(playlist);
+  const int count = songs.size();
+  if (from < 0 || from >= count || to < 0 || to >= count) return false;
+  const String moved = songs[from];
+  songs.erase(songs.begin() + from);
+  songs.insert(songs.begin() + to, moved);
+  return writePlaylist(playlist, songs);
 }
 
 String title(const String &songName) {

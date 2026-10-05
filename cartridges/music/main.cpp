@@ -27,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.8.4");
+DOTTY_CARTRIDGE("music", "Music", "0.8.5");
 
 namespace {
 
@@ -191,6 +191,13 @@ void drawTriangle(int16_t cx, int16_t cy, int16_t dir, uint16_t color) {
   epd.fillTriangle(cx - 8 * dir, cy - 10, cx - 8 * dir, cy + 10, cx + 7 * dir, cy, color);
 }
 
+// A song's title as the screen can show it, or `fallback` when nothing printable is left
+// (e.g. an all-Korean title: the fonts are ASCII only; the app shows the real one).
+String displayTitle(const String &song, const String &fallback) {
+  const String title = ui::printable(music::title(song));
+  return title.isEmpty() ? fallback : title;
+}
+
 // ---------- nav bar ----------
 
 enum class NavIcon { None, Back, Shuffle, InOrder, Playlists };
@@ -268,7 +275,9 @@ void drawPlayer() {
     ui::drawCentered(epd, "the Dotty app", 142);
     return;
   }
-  ui::drawCentered(epd, ui::fitText(epd, music::title(currentSong()), kW - 12), 50);
+  // One line, then the position in the queue; titles with no Latin letters (the fonts have
+  // nothing else) get a stand-in.
+  ui::drawCentered(epd, ui::fitText(epd, displayTitle(currentSong(), "Song " + String(queueIndex + 1)), kW - 12), 50);
   epd.setFont(&FreeSans9pt7b);
   ui::drawCentered(epd, String(queueIndex + 1) + " / " + String(queue.size()), 69);
 
@@ -313,8 +322,9 @@ void drawTransfer() {
   ui::drawHeader(epd, "Receiving songs");
   epd.setTextColor(kBlack);
   epd.setFont(&FreeSansBold9pt7b);
-  const String file = s.file.length() ? music::title(s.file) : String("Waiting for songs");
-  ui::drawCentered(epd, ui::fitText(epd, file, kW - 12), 80);
+  const String file = s.file.length() ? displayTitle(s.file, "Song " + String(s.filesReceived + 1))
+                                      : String("Waiting for songs");
+  ui::drawWrapped(epd, file, 66, kW - 12, 2, 18);
   const int16_t barX = 15, barY = 105, barW = kW - 30, barH = 10;
   epd.drawRect(barX, barY, barW, barH, kBlack);
   if (s.total > 0) {
@@ -387,7 +397,8 @@ void drawPlaylists() {
     const bool current = items[i] == queueName;  // the queue playing now is highlighted
     if (current) epd.fillRect(0, top, kW, kRowH - 1, kBlack);
     epd.setTextColor(current ? kWhite : kBlack);
-    const String label = items[i].isEmpty() ? String("Play all") : items[i];
+    const String label = items[i].isEmpty() ? String("Play all")
+                         : ui::printable(items[i]).isEmpty() ? "Playlist " + String(i) : items[i];
     const String count = String(items[i].isEmpty() ? music::songs().size() : music::playlistSongs(items[i]).size());
     const int16_t countW = ui::textWidth(epd, count);
     epd.setCursor(10, top + 19);
@@ -559,6 +570,7 @@ void registerCommands() {
       o["name"] = s.name;
       o["title"] = music::title(s.name);
       o["size"] = s.size;
+      o["added"] = static_cast<int64_t>(s.added);  // local time as epoch seconds
     }
     JsonArray lists = reply["playlists"].to<JsonArray>();
     for (const String &name : music::playlists()) {
@@ -590,6 +602,14 @@ void registerCommands() {
   });
   ble::on("music.playlist.add", [](JsonObjectConst args, JsonObject reply) {
     if (!music::addToPlaylist(args["name"] | "", stringList(args["songs"]))) return fail(reply, "no such playlist");
+    refreshQueue();
+    notifyLibraryChanged();
+  });
+  // {name, from, to}: positions as in music.playlist.
+  ble::on("music.playlist.move", [](JsonObjectConst args, JsonObject reply) {
+    if (!music::moveInPlaylist(args["name"] | "", args["from"] | -1, args["to"] | -1)) {
+      return fail(reply, "no such position");
+    }
     refreshQueue();
     notifyLibraryChanged();
   });
@@ -663,7 +683,7 @@ void setup() {
   config.drawApp = drawApp;
   config.sleepApp = [] { player.powerDown(); };
   config.wakeApp = [] { player.powerUp(); };
-  config.nowPlaying = [] { return musicPlaying() ? music::title(currentSong()) : String(); };
+  config.nowPlaying = [] { return musicPlaying() ? displayTitle(currentSong(), "Playing music") : String(); };
   config.beforePowerOff = [] { player.stop(); };
   config.offPictures = kOffPictures;
   config.offPictureCount = sizeof(kOffPictures) / sizeof(kOffPictures[0]);

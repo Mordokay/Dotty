@@ -9,12 +9,14 @@ struct MusicLibraryPage: View {
     @Binding var selection: Set<String>?
 
     @State private var search = ""
+    @AppStorage("music.librarySort") private var sort = LibrarySort.name
     @State private var picking = false
     @State private var deleting: MusicModel.Song?
 
     private var visibleSongs: [MusicModel.Song] {
         let query = search.trimmingCharacters(in: .whitespaces)
-        return query.isEmpty ? model.songs : model.songs.filter { $0.title.localizedCaseInsensitiveContains(query) }
+        let found = query.isEmpty ? model.songs : model.songs.filter { $0.title.localizedCaseInsensitiveContains(query) }
+        return sort.sorted(found)
     }
 
     var body: some View {
@@ -39,6 +41,19 @@ struct MusicLibraryPage: View {
                 Text(model.songs.count == 1 ? "1 song" : "\(model.songs.count) songs")
                     .font(.lpTitle).foregroundStyle(Color.ink)
                 Spacer()
+                if model.songs.count > 1 {
+                    Menu {
+                        Picker("Sort by", selection: $sort) {
+                            ForEach(LibrarySort.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol) }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.inkMuted)
+                            .frame(width: 40, height: 40)
+                    }
+                    .accessibilityLabel("Sort by \(sort.title)")
+                }
                 if !model.songs.isEmpty {
                     Button(selection == nil ? "Select" : "Done") {
                         withAnimation(.settle) { selection = selection == nil ? [] : nil }
@@ -100,13 +115,39 @@ struct MusicLibraryPage: View {
     }
 
     private func size(_ song: MusicModel.Song) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(song.size), countStyle: .file)
+        let size = ByteCountFormatter.string(fromByteCount: Int64(song.size), countStyle: .file)
+        guard sort == .added, let added = song.added else { return size }
+        return "\(size) · added \(added.formatted(.relative(presentation: .named)))"
     }
 
     private func toggle(_ name: String) {
         guard var picked = selection else { return }
         if picked.contains(name) { picked.remove(name) } else { picked.insert(name) }
         selection = picked
+    }
+}
+
+/// How the library is ordered (remembered between launches).
+enum LibrarySort: String, CaseIterable {
+    case name, added
+
+    var title: String { self == .name ? "Name" : "Date added" }
+    var symbol: String { self == .name ? "textformat" : "calendar" }
+
+    func sorted(_ songs: [MusicModel.Song]) -> [MusicModel.Song] {
+        switch self {
+        case .name:
+            return songs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .added:  // newest first; undated songs last, by name
+            return songs.sorted { a, b in
+                switch (a.added, b.added) {
+                case let (x?, y?) where x != y: return x > y
+                case (.some, nil): return true
+                case (nil, .some): return false
+                default: return a.title.localizedStandardCompare(b.title) == .orderedAscending
+                }
+            }
+        }
     }
 }
 

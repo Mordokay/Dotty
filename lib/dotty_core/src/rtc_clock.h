@@ -3,7 +3,8 @@
 #include <Wire.h>
 #include <time.h>
 
-// PCF85063 real-time clock. Stores local time (no time zone handling yet).
+// PCF85063 real-time clock. Stores local time (no time zone handling yet). Reads and
+// writes also set the system clock to it, so time() and SD file dates are local time.
 class RtcClock {
  public:
   // Starts the clock. If it lost power (or holds a time older than this

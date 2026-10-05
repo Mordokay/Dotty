@@ -1,6 +1,7 @@
 #include "rtc_clock.h"
 
 #include <Arduino.h>
+#include <sys/time.h>
 
 #include "board_pins.h"
 #include "log.h"
@@ -16,6 +17,17 @@ uint8_t toBcd(int v) {
 
 int fromBcd(uint8_t v) {
   return (v >> 4) * 10 + (v & 0x0F);
+}
+
+// Keeps the system clock (time(), file timestamps on the SD card) on the RTC's local time.
+// The system clock drifts in light sleep (no 32 kHz crystal), so every read re-syncs it.
+void syncSystemTime(const tm &local) {
+  tm copy = local;
+  const time_t t = mktime(&copy);
+  if (labs(static_cast<long>(time(nullptr) - t)) > 2) {
+    const timeval tv = {t, 0};
+    settimeofday(&tv, nullptr);
+  }
 }
 
 // __DATE__ = "Oct  4 2026", __TIME__ = "17:42:05"
@@ -69,7 +81,9 @@ bool RtcClock::read(tm &out) {
   out.tm_wday = r[4] & 0x07;
   out.tm_mon = fromBcd(r[5] & 0x1F) - 1;
   out.tm_year = fromBcd(r[6]) + 100;  // 2000-2099
-  return !(r[0] & 0x80);
+  const bool valid = !(r[0] & 0x80);
+  if (valid) syncSystemTime(out);
+  return valid;
 }
 
 bool RtcClock::write(const tm &t) {
@@ -82,5 +96,7 @@ bool RtcClock::write(const tm &t) {
   wire_->write(t.tm_wday);
   wire_->write(toBcd(t.tm_mon + 1));
   wire_->write(toBcd(t.tm_year - 100));
-  return wire_->endTransmission() == 0;
+  const bool ok = wire_->endTransmission() == 0;
+  if (ok) syncSystemTime(t);
+  return ok;
 }
