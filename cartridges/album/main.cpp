@@ -4,8 +4,8 @@
 //
 // Screens: the viewer (one photo, the whole screen; swipe or BOOT for the next one, tap
 // for the album, position and date) and the album menu ("All photos" + every album).
-// Locked, the screen becomes a screensaver: the active album, one photo a minute, looping,
-// or a single chosen photo, with a small clock in the corner.
+// Locked, the screen becomes a screensaver: the active album, a new photo every 30 min
+// (settable), looping, or a single chosen photo, with a small clock in the corner.
 
 #include <Arduino.h>
 #include <Fonts/FreeSans9pt7b.h>
@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.1.0");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.0");
 
 namespace {
 
@@ -53,10 +53,13 @@ String activeAlbum;
 std::vector<String> list;
 int index = 0;
 
-// Locked: the active album, a photo a minute, or always one photo.
+// Locked: the active album as a slideshow, or always one photo. The slideshow changes photo
+// every `slideMinutes`, on the clock (:00, :30…): each change is a full refresh, and those
+// are what wear e-paper; 30 min costs no more than the clock's own ghost-clearing refresh.
 enum class Saver { Album, Photo };
 Saver saver = Saver::Album;
 String saverPhoto;
+int slideMinutes = 30;
 
 enum class Screen { Viewer, Albums };
 Screen screen = Screen::Viewer;
@@ -92,6 +95,7 @@ void saveState() {
   p.putString("photo", currentPhoto());
   p.putString("saver", saver == Saver::Photo ? "photo" : "album");
   p.putString("saverPhoto", saverPhoto);
+  p.putInt("every", slideMinutes);
   p.end();
 }
 
@@ -249,7 +253,7 @@ void drawApp() {
 
 // Set while unlocked: the next lock screen starts a new slideshow from the photo on screen.
 bool slideshowFresh = true;
-int64_t slideshowStartMinute = 0;
+int64_t slideshowStartMinute = 0;  // in slideMinutes slots
 int slideshowStartIndex = 0;
 String lockShown;  // the photo on the lock screen, to know when it changes (full refresh)
 
@@ -286,15 +290,16 @@ bool drawLockScreenPhoto(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   if (saver == Saver::Photo && album::hasPhoto(saverPhoto)) {
     photo = saverPhoto;
   } else if (!list.empty()) {
-    // The active album from the photo that was on screen, one photo a minute, looping.
-    const int64_t minute = info.timeValid ? epochMinute(info.time) : 0;
+    // The active album from the photo that was on screen, a new one every slideMinutes on
+    // the clock, looping.
+    const int64_t slot = (info.timeValid ? epochMinute(info.time) : 0) / slideMinutes;
     if (slideshowFresh) {
       slideshowFresh = false;
-      slideshowStartMinute = minute;
+      slideshowStartMinute = slot;
       slideshowStartIndex = index;
     }
     const int count = list.size();
-    const int64_t steps = max<int64_t>(0, minute - slideshowStartMinute);
+    const int64_t steps = max<int64_t>(0, slot - slideshowStartMinute);
     index = (slideshowStartIndex + steps) % count;  // unlocking shows the same photo
     photo = list[index];
   }
@@ -364,6 +369,7 @@ void addState(JsonObject out) {
   JsonObject s = out["screensaver"].to<JsonObject>();
   s["mode"] = saver == Saver::Photo ? "photo" : "album";
   if (saver == Saver::Photo) s["photo"] = saverPhoto;
+  s["every"] = slideMinutes;
 }
 
 void notifyState() {
@@ -466,6 +472,16 @@ void registerCommands() {
     stateDirty = true;
     addState(reply);
   });
+  // {every}: minutes between slideshow photos on the lock screen (1-1440; the app offers
+  // 10, 30, 60).
+  ble::on("album.slideshow", [](JsonObjectConst args, JsonObject reply) {
+    const int every = args["every"] | 0;
+    if (every < 1 || every > 1440) return fail(reply, "every must be 1-1440 minutes");
+    slideMinutes = every;
+    saveState();
+    stateDirty = true;
+    addState(reply);
+  });
   ble::on("album.create", [](JsonObjectConst args, JsonObject reply) {
     if (!album::createAlbum(args["name"] | "")) return fail(reply, "invalid name");
     notifyLibraryChanged();
@@ -540,6 +556,7 @@ void setup() {
   const String photo = p.getString("photo", "");
   saver = p.getString("saver", "album") == "photo" ? Saver::Photo : Saver::Album;
   saverPhoto = p.getString("saverPhoto", "");
+  slideMinutes = constrain(p.getInt("every", 30), 1, 1440);
   p.end();
   openAlbum(active, photo);
   registerCommands();

@@ -32,6 +32,19 @@ final class AlbumModel {
         var count = 0
         var photo = ""
         var lockPhoto: String?
+        /// Minutes between slideshow photos on the lock screen (on the clock: :00, :30…).
+        var every = 30
+
+        /// "30 min", "1 hour"
+        var everyText: String { AlbumModel.interval(every) }
+    }
+
+    /// The slideshow intervals the app offers: each photo change is a full refresh, the thing
+    /// that wears e-paper, so not every minute (30 min costs no more than the plain clock).
+    static let intervals = [10, 30, 60]
+
+    static func interval(_ minutes: Int) -> String {
+        minutes % 60 == 0 ? (minutes == 60 ? "1 hour" : "\(minutes / 60) hours") : "\(minutes) min"
     }
 
     private(set) var photos: [Photo] = []
@@ -109,8 +122,9 @@ final class AlbumModel {
         state.index = message["index"] as? Int ?? 0
         state.count = message["count"] as? Int ?? 0
         state.photo = message["photo"] as? String ?? ""
-        if let saver = message["screensaver"] as? [String: Any], saver["mode"] as? String == "photo" {
-            state.lockPhoto = saver["photo"] as? String
+        if let saver = message["screensaver"] as? [String: Any] {
+            if saver["mode"] as? String == "photo" { state.lockPhoto = saver["photo"] as? String }
+            state.every = saver["every"] as? Int ?? 1  // 0.1.0 changed photo every minute
         }
         onDotty = state
     }
@@ -174,6 +188,10 @@ final class AlbumModel {
     /// The lock screen shows this album, a new photo every minute (it becomes Dotty's active album).
     func lockScreen(album: String) async {
         await control("album.screensaver", ["mode": "album", "album": album])
+    }
+
+    func setSlideshow(every minutes: Int) async {
+        await control("album.slideshow", ["every": minutes])
     }
 
     /// The lock screen always shows this photo.

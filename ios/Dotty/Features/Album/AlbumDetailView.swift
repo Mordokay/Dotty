@@ -43,7 +43,7 @@ struct AlbumDetailView: View {
                                  systemImage: "photo") {
                             Button("Show") { Task { await model.show(album: title) } }.buttonStyle(.quiet())
                         }
-                        ChoiceRow(title: "Lock screen slideshow", subtitle: "A new photo every minute, looping",
+                        ChoiceRow(title: "Lock screen slideshow", subtitle: "A new photo every \(model.onDotty.everyText), looping",
                                   systemImage: "lock", chosen: onLockScreen) {
                             Task { await model.lockScreen(album: title) }
                         }

@@ -384,7 +384,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   and "2 / 4 · 14 Jul 2024" for 6 s; swipe or BOOT = next; a new photo = full refresh. Album
   menu like Music's playlist menu. NVS `album`: active album, photo, saver mode/photo.
 - Lock screen (`Config::lockScreen`): the active album as a slideshow — from the photo on
-  screen, one photo a minute (counted from the minutes since locking), looping;
+  screen, a new photo every 10 / 30 (default) / 60 min on the clock (:00, :30…; NVS
+  `album/every`, `album.slideshow {every}`), looping. Every minute (0.1.0) was dropped for
+  panel wear: each photo change is a full refresh, and those wear e-paper (the datasheet has
+  no refresh-count rating); at 30 min it costs no more than the plain clock lock screen's
+  own ghost-clearing full refresh every 30 partials;
   unlocking stays on that photo — or always one photo; a white badge bottom-right with a
   padlock, the time, and the battery when low or charging. No photos = the usual clock.
 - BLE: `album.status` {album, index, count, photo, screensaver{mode, photo?}, photos,
@@ -394,7 +398,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `album.screensaver {mode: album|photo, album?, photo?}`, `album.create/delete/rename/add/
   remove/move`, `album.photo.delete {names[]}`, plus `transfer.*`; events `album.state`,
   `album.library`. Dev keys: `n` next, `o` labels, `l` lock.
-- App: `Features/Album/` — tabs Photos (On Dotty card, grid with multi-select: add to album /
+- App previews (`EpaperImage`): shrunk = smoothed; enlarged = a whole number of screen
+  pixels per dot (uneven nearest-neighbour scaling looked worse than the real panel).
+- App: `Features/Album/` — tabs Photos (On Dotty card with the slideshow interval, grid with multi-select: add to album /
   delete) · Albums (covers; album page: show, lock-screen slideshow choice, add new or
   existing photos, drag a photo onto another to reorder, rename, delete).
 

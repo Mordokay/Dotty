@@ -126,16 +126,28 @@ enum PhotoDither {
     }
 }
 
-/// A Dotty photo as the app shows it: pixel-sharp, ink on paper.
+/// A Dotty photo as the app shows it, ink on paper. Shrunk (thumbnails), it's smoothed, the
+/// way the eye blends the dots on Dotty; enlarged, each dot becomes the same whole number of
+/// screen pixels (uneven nearest-neighbour scaling made the preview look worse than Dotty).
 struct EpaperImage: View {
     let image: UIImage?
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
-        ZStack {
-            Color(red: 0.925, green: 0.914, blue: 0.878)
-            if let image {
-                Image(uiImage: image).resizable().interpolation(.none)
+        GeometryReader { geometry in
+            let pixels = geometry.size.width * displayScale
+            let size = PhotoDither.size
+            let whole = pixels >= CGFloat(size) ? floor(pixels / CGFloat(size)) * CGFloat(size) / displayScale : geometry.size.width
+            ZStack {
+                Color(red: 0.925, green: 0.914, blue: 0.878)
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(pixels >= CGFloat(size) ? .none : .high)
+                        .frame(width: whole, height: whole)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .aspectRatio(1, contentMode: .fit)
     }

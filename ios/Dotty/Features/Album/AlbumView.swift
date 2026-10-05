@@ -131,6 +131,7 @@ extension View {
 /// The photo on Dotty's screen, and what its lock screen shows.
 private struct OnDottyCard: View {
     let model: AlbumModel
+    @Environment(DottyLink.self) private var link
 
     var body: some View {
         let now = model.onDotty
@@ -143,7 +144,7 @@ private struct OnDottyCard: View {
                     Text(now.album.isEmpty ? "All photos" : now.album).font(.lpHeadline).foregroundStyle(Color.ink)
                     Text(now.count == 0 ? "No photos yet" : "Photo \(now.index + 1) of \(now.count)")
                         .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                    Label(now.lockPhoto == nil ? "Lock screen: this album, a new photo every minute"
+                    Label(now.lockPhoto == nil ? "Lock screen: this album, a new photo every \(now.everyText)"
                                                : "Lock screen: always the same photo",
                           systemImage: "lock")
                         .font(.lpCaption).foregroundStyle(Color.inkMuted)
@@ -152,7 +153,38 @@ private struct OnDottyCard: View {
                 Spacer(minLength: 0)
             }
             .padding(Spacing.m)
+            if link.info?.isAtLeast("0.2.0") == true { SlideshowIntervalRow(model: model) }
         }
+    }
+}
+
+/// How often the lock-screen slideshow changes photo. Each change is a full refresh of the
+/// e-paper (what wears it, and costs battery), so the choices start at 10 minutes.
+struct SlideshowIntervalRow: View {
+    let model: AlbumModel
+
+    var body: some View {
+        let every = model.onDotty.every
+        HStack(spacing: Spacing.m) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Slideshow").font(.lpHeadline).foregroundStyle(Color.ink)
+                Text("A new photo on the lock screen every…")
+                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Spacing.s)
+            MorphButton(faces: AlbumModel.intervals.map { minutes in
+                            MorphFace(light: minutes == 10 ? DottyLight.amber.color : minutes == 30 ? DottyLight.lagoon.color
+                                                                                                    : DottyLight.dusk.color,
+                                      title: AlbumModel.interval(minutes), systemImage: "timer")
+                        },
+                        initial: AlbumModel.intervals.firstIndex(of: every) ?? 1) { index in
+                Task { await model.setSlideshow(every: AlbumModel.intervals[index]) }
+            }
+            .fixedSize()
+            .id(every)  // follow Dotty when it changes elsewhere
+        }
+        .padding(Spacing.m)
     }
 }
 

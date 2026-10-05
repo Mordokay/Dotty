@@ -97,6 +97,7 @@ private struct CropEditor: View {
     @State private var contrast = PhotoDither.Tone().contrast
     @State private var preview: UIImage?
     @State private var bitmap: Data?
+    @Environment(\.displayScale) private var displayScale
 
     private var width: CGFloat { CGFloat(photo.image.width) }
     private var height: CGFloat { CGFloat(photo.image.height) }
@@ -138,8 +139,9 @@ private struct CropEditor: View {
 
             HStack(alignment: .center, spacing: Spacing.l) {
                 VStack(spacing: Spacing.xs) {
+                    // Exactly 2 screen pixels per Dotty dot.
                     EpaperImage(image: preview)
-                        .frame(width: 112, height: 112)
+                        .frame(width: 400 / displayScale, height: 400 / displayScale)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     Text("On Dotty").font(.lpLabel).foregroundStyle(Color.inkMuted)
                 }
