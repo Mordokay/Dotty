@@ -64,6 +64,19 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   open the port with pyserial from `~/.platformio/penv/bin/python`, write `d`, read
   lines (no reset needed). To catch boot from scratch, pulse RTS to reset instead.
 - Don't call `Serial.setTxTimeoutMs(0)`: it stopped all USB serial output.
+- **Loop watchdog + crash dumps** (cartridges, not the launcher): a loop pass that doesn't
+  return for 90 s trips the task watchdog → panic → core dump to the `coredump` partition →
+  restart. The next boot logs `the last run crashed (reset reason N)` and a summary (the
+  running task, usually IDLE — not the stuck one). Full dump with every task's backtrace:
+  `esptool --port P read-flash 0x7F0000 0x10000 dump.bin`, then `.venv/bin/esp-coredump
+  info_corefile --gdb ~/.platformio/packages/tool-xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb
+  -t raw -c dump.bin .pio/build/<env>/firmware.elf` (needs the ELF of that exact build).
+  Verified with a deliberate hang (loopTask shown at the hanging line). A live stuck
+  Dotty can also be inspected without restarting: OpenOCD (`tool-openocd-esp32`,
+  `board/esp32s3-builtin.cfg`) + `xtensa-esp32s3-elf-gdb`, `thread apply all bt`.
+- PWR is debounced (30 ms) and ignored for 600 ms after a lock/unlock; a light-sleep wake
+  unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
+  on battery once flashed the lock screen and bounced straight back to the app.
 - "Port is busy" on upload means the user's VS Code serial monitor is open — ask them to
   close it rather than killing their process.
 - Destructive disk operations (e.g. `diskutil eraseDisk`) are blocked for Claude: give the
