@@ -59,6 +59,7 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   }
   const bool widgetShown = widgetH > 0;
   if (widgetShown) {
+    gfx.setFont(&FreeSansBold24pt7b);  // the widget may have changed it (it can share this display)
     int16_t x1, y1;
     uint16_t w, h;
     gfx.getTextBounds(clock, 0, 0, &x1, &y1, &w, &h);  // y1 < 0: the digits' top above the baseline

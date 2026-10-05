@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.1");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.2");
 
 namespace {
 
@@ -372,13 +372,14 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
 // ---------- lock screen ----------
 
 // Lines of a joke as the lock screen sets them: setup regular, punchline bold, centred.
-std::vector<Line> lockLines(const char *setup, const char *punchline, int maxLines) {
+// Measured on `gfx` (the lock widget's own canvas), so the display's font is left alone.
+std::vector<Line> lockLines(Adafruit_GFX &gfx, const char *setup, const char *punchline, int maxLines) {
   std::vector<Line> lines;
-  epd.setFont(&FreeSans9pt7b);
-  for (const String &l : ui::wrapText(epd, setup, kTextW, maxLines)) lines.push_back({l});
+  gfx.setFont(&FreeSans9pt7b);
+  for (const String &l : ui::wrapText(gfx, setup, kTextW, maxLines)) lines.push_back({l});
   if (punchline[0]) {
-    epd.setFont(&FreeSansBold9pt7b);
-    for (const String &l : ui::wrapText(epd, punchline, kTextW, maxLines)) lines.push_back({l, true});
+    gfx.setFont(&FreeSansBold9pt7b);
+    for (const String &l : ui::wrapText(gfx, punchline, kTextW, maxLines)) lines.push_back({l, true});
   }
   return lines;
 }
@@ -388,7 +389,7 @@ std::vector<Line> lockLines(const char *setup, const char *punchline, int maxLin
 int16_t drawLockJoke(Adafruit_GFX &gfx, const tm &now, int16_t maxHeight) {
   const jokes::Joke *j = jokes::lockJoke(now);
   if (!j) return 0;
-  const std::vector<Line> lines = lockLines(j->setup, j->punchline, 4);
+  const std::vector<Line> lines = lockLines(gfx, j->setup, j->punchline, 4);
   for (size_t i = 0; i < lines.size(); i++) {
     gfx.setFont(lines[i].bold ? &FreeSansBold9pt7b : &FreeSans9pt7b);
     ui::drawCentered(gfx, lines[i].text, 14 + i * kLineH);
