@@ -1,0 +1,4 @@
+{
+  "description": "Today's weather from Open-Meteo next to the temperature and humidity in your room, a 6-day forecast, and the outside temperature on the lock screen. Finds where it is by itself, or set a city in the app.",
+  "requires": ["wifi"]
+}

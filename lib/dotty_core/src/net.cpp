@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_crt_bundle.h>
+#include <esp_sntp.h>
 #include <esp_http_client.h>
 
 #include <algorithm>
@@ -250,6 +251,31 @@ String ip() {
 
 int rssi() {
   return WiFi.RSSI();
+}
+
+bool internetTime(time_t &utc, String &error) {
+  if (!connected()) {
+    error = "not connected";
+    return false;
+  }
+  esp_sntp_stop();
+  esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+  esp_sntp_setservername(0, "pool.ntp.org");
+  esp_sntp_setservername(1, "time.google.com");
+  sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
+  esp_sntp_init();
+  // Reading the status resets it once it says COMPLETED, so it's read once per pass.
+  const uint32_t start = millis();
+  bool ok = false;
+  while (!ok && millis() - start < 8000) {
+    ok = sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
+    if (!ok) delay(100);
+  }
+  // SNTP just set the system clock to UTC; the caller puts local time back right away.
+  utc = time(nullptr);
+  esp_sntp_stop();
+  if (!ok) error = "no internet time";
+  return ok;
 }
 
 bool getString(const String &url, String &body, String &error) {

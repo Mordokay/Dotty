@@ -98,8 +98,9 @@ Cartridges, one at a time, each built around a piece of Dotty's hardware
 - [x] **Joke Factory** (Wi-Fi): every JokeAPI joke kept offline on the SD card, a 2x2
   category grid, punchlines on tap, favourites, and a new joke on the lock screen every
   5 minutes
-- [ ] **Weather Station** (SHTC3 sensor + Wi-Fi): room temperature and humidity, plus a
-  forecast for your area from Open-Meteo (free, no key); updates while locked
+- [x] **Weather Station** (SHTC3 sensor + Wi-Fi): room temperature and humidity next to
+  today's weather from Open-Meteo (free, no key), a 6-day forecast, outside and inside on
+  the lock screen; location found automatically or set in the app; updates hourly
 - [ ] **Album Viewer** (SD card + e-paper): photos from the iPhone, cropped and dithered
   to 1-bit on the phone, browsed on Dotty
 - [ ] **Tape Recorder** (microphone): hold a side button to record and release to pause,

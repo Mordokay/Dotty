@@ -54,6 +54,11 @@ int rssi();
 
 bool getString(const String &url, String &body, String &error);
 
+// Internet time (SNTP) while connected: the current UTC time. Dotty keeps local time
+// (RTC and system clock), so callers convert it with the place's UTC offset and hand it to
+// shell::setLocalTime().
+bool internetTime(time_t &utc, String &error);
+
 // Streams a response body into `sink` (return false to stop). `progress(done, total)`;
 // total is 0 when the server doesn't say.
 using Sink = std::function<bool(const uint8_t *data, size_t len)>;

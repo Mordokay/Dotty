@@ -402,7 +402,28 @@ void begin(const Config &config) {
   lastInteraction = millis();
 }
 
+// 's' on the serial monitor: the screen as hex, for tools/screenshot.py (only with a
+// computer attached; the serial port stays quiet otherwise).
+void sendScreenshot() {
+  if (!HWCDC::isPlugged()) return;
+  const uint8_t *buf = epd.getBuffer();
+  const size_t bytes = EpdDisplay::kSize * EpdDisplay::kSize / 8;
+  Serial.printf("\n#SCREEN %d %d\n", EpdDisplay::kSize, EpdDisplay::kSize);
+  char line[2 * 50 + 2];
+  for (size_t i = 0; i < bytes; i += 50) {
+    size_t n = 0;
+    for (size_t j = i; j < i + 50 && j < bytes; j++) n += snprintf(line + n, sizeof(line) - n, "%02x", buf[j]);
+    line[n++] = '\n';
+    Serial.write(reinterpret_cast<uint8_t *>(line), n);
+    Serial.flush();
+  }
+  Serial.print("#END\n");
+}
+
 bool update(Input &input) {
+  const char key = dlog::takeKey();
+  if (key == 's') sendScreenshot();
+  input.key = key == 's' ? 0 : key;
   battery::poll();
   if (battery::empty()) batteryEmptyOff();
   logBattery();
@@ -477,6 +498,14 @@ void refresh(bool full, bool autoFull) {
 
 int partialsSinceFull() {
   return partials;
+}
+
+void setLocalTime(time_t local) {
+  tm t;
+  gmtime_r(&local, &t);  // the epoch already holds local time: no zone to apply
+  rtc.write(t);
+  LOGI("clock", "set to %04d-%02d-%02d %02d:%02d:%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour,
+       t.tm_min, t.tm_sec);
 }
 
 bool locked() {

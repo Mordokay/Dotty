@@ -52,7 +52,11 @@ struct Config {
 struct Input {
   Touch::Gesture gesture = Touch::Gesture::None;
   bool boot = false;  // BOOT clicked (pressed and released on its own)
+  char key = 0;       // a key typed on the serial monitor (developer aid), 0 if none
 };
+
+// Sets the clock (RTC and system time) to this local time, e.g. from internet time.
+void setLocalTime(time_t local);
 
 // Shared hardware, ready after begin().
 extern EpdDisplay epd;

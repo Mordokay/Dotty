@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Weather Station artwork for the iOS app (the e-paper icon is icon.png): a firefly glowing
+     like a sun behind a cloud, with a few raindrops, under the app icon's night sky. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.7"/><stop offset="0.35" stop-color="#B8E04E" stop-opacity="0.25"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="sun" r="0.5">
+    <stop offset="0" stop-color="#FFFDE6"/><stop offset="0.6" stop-color="#F1F27C"/><stop offset="1" stop-color="#C9D44A"/>
+  </radialGradient>
+  <linearGradient id="cloud" x1="0" y1="400" x2="0" y2="760" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#F4F1E4"/><stop offset="1" stop-color="#B9C2C4"/>
+  </linearGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="150" cy="170" r="5" opacity="0.9"/><circle cx="290" cy="100" r="3" opacity="0.6"/>
+  <circle cx="880" cy="140" r="4" opacity="0.8"/><circle cx="930" cy="420" r="3" opacity="0.5"/>
+  <circle cx="90" cy="460" r="3" opacity="0.5"/><circle cx="560" cy="80" r="2.5" opacity="0.5"/>
+  <circle cx="940" cy="660" r="4" opacity="0.7"/><circle cx="110" cy="780" r="2.5" opacity="0.4"/>
+  <circle cx="230" cy="940" r="3" opacity="0.5"/><circle cx="880" cy="920" r="3.5" opacity="0.6"/>
+</g>
+<!-- the firefly sun -->
+<circle cx="610" cy="380" r="360" fill="url(#halo)"/>
+<circle cx="610" cy="380" r="150" fill="url(#sun)"/>
+<!-- the cloud -->
+<g fill="url(#cloud)">
+  <rect x="190" y="520" width="620" height="210" rx="105"/>
+  <circle cx="380" cy="530" r="125"/>
+  <circle cx="560" cy="470" r="160"/>
+</g>
+<!-- raindrops -->
+<g stroke="#8FD3E8" stroke-width="26" stroke-linecap="round">
+  <line x1="350" y1="790" x2="320" y2="870"/>
+  <line x1="510" y1="790" x2="480" y2="870"/>
+  <line x1="670" y1="790" x2="640" y2="870"/>
+</g>
+<!-- fireflies -->
+<circle cx="220" cy="300" r="70" fill="url(#halo)"/><circle cx="220" cy="300" r="7" fill="#FFFBD2"/>
+<circle cx="840" cy="780" r="60" fill="url(#halo)"/><circle cx="840" cy="780" r="6" fill="#FFFBD2"/>
+</svg>

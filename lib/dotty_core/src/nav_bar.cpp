@@ -45,6 +45,10 @@ void drawIcon(Adafruit_GFX &gfx, Icon icon, int16_t cx, int16_t cy, uint16_t col
       thickLine(gfx, cx + 4, cy - 8, cx - 4, cy, color);
       thickLine(gfx, cx - 4, cy, cx + 4, cy + 8, color);
       break;
+    case Icon::Forward:
+      thickLine(gfx, cx - 4, cy - 8, cx + 4, cy, color);
+      thickLine(gfx, cx + 4, cy, cx - 4, cy + 8, color);
+      break;
     case Icon::Shuffle:  // crossing arrows
       thickLine(gfx, cx - 11, cy - 7, cx + 6, cy + 6, color);
       thickLine(gfx, cx - 11, cy + 6, cx + 6, cy - 7, color);

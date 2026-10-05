@@ -11,7 +11,7 @@ struct DashboardView: View {
     @State private var wifi: WiFiState?
 
     enum Route: Hashable {
-        case cartridges, wifi, music, jokes
+        case cartridges, wifi, music, jokes, weather
 
         /// The screen of the cartridge Dotty is running, if it has one (and its firmware
         /// has the commands that screen needs).
@@ -20,6 +20,7 @@ struct DashboardView: View {
             switch info.id {
             case "music" where info.isAtLeast("0.7.0"): return .music  // library + playlists
             case "jokes" where info.supports("jokes"): return .jokes
+            case "weather" where info.supports("weather"): return .weather
             default: return nil
             }
         }
@@ -72,6 +73,7 @@ struct DashboardView: View {
                 case .wifi: WiFiView()
                 case .music: MusicView()
                 case .jokes: JokesView()
+                case .weather: WeatherView()
                 }
             }
         }
@@ -137,6 +139,7 @@ struct DashboardView: View {
         switch route {
         case .music: "Playing, playlists and sending songs"
         case .jokes: "Favourites and the jokes on Dotty"
+        case .weather: "Location, units and the room sensor"
         default: ""
         }
     }
@@ -145,6 +148,7 @@ struct DashboardView: View {
         switch route {
         case .music: "music.note.list"
         case .jokes: "face.smiling"
+        case .weather: "cloud.sun"
         default: "square.stack.3d.up"
         }
     }

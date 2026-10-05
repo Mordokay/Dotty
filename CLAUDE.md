@@ -82,6 +82,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - PWR is debounced (30 ms) and ignored for 600 ms after a lock/unlock; a light-sleep wake
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
+- **Screenshots without a camera**: send `s` over serial (only while a computer has the
+  port) → Dotty prints `#SCREEN 200 200`, the framebuffer as hex lines, `#END`;
+  `.venv/bin/python tools/screenshot.py [out.png]` does it and saves a 2× PNG. Other
+  serial keys reach the firmware as `shell::Input::key` for dev shortcuts (Weather:
+  `r` fetch, `n` next screen, `l` lock).
 - "Port is busy" on upload means the user's VS Code serial monitor is open — ask them to
   close it rather than killing their process.
 - Destructive disk operations (e.g. `diskutil eraseDisk`) are blocked for Claude: give the
@@ -316,6 +321,35 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - BLE: `jokes.status` {count, unseen{Dark,Programming,Misc,Any}, favourites, syncing, done,
   total, syncedAt, syncError?}, `jokes.favourites`, `jokes.favourite.remove {id}`,
   `jokes.sync`; event `jokes.changed`. App: `Features/Jokes/JokesView.swift`.
+
+## Weather Station cartridge (`cartridges/weather/`)
+
+- Outside: Open-Meteo forecast (free, no key; `current` + 7 `daily`, `timezone=auto`,
+  imperial = `temperature_unit/wind_speed_unit/precipitation_unit` params) for a location
+  that is automatic (ipwho.is from Dotty's public IP — off by a city on a phone hotspot) or
+  set from the app (iPhone location via CoreLocation, or a city from Open-Meteo geocoding,
+  searched on the phone). Settings in NVS `weather` (auto, lat, lon, name, imperial,
+  insideOffset). Fetched hourly (retry 10 min) by a background task (core 0, 12 KB), also
+  while locked; the raw answer is cached as `data/forecast.json` + `forecast.meta`.
+- Inside: SHTC3 (`lib/dotty_core/src/climate.*`, I2C 0x70: wake 0x3517, measure 0x7866,
+  sleep 0xB098, CRC-8 0x31), read every 60 s. It reads ~5 °C high from the board's own heat;
+  the app sets `insideOffset` (°C) to match a thermometer.
+- Every fetch also syncs the clock: `net::internetTime()` (SNTP, read the sync status once
+  per check — reading clears it) + the forecast's `utc_offset_seconds` →
+  `shell::setLocalTime()` (writes the RTC). The fetch task only hands results over
+  (`takeFetched`, `takeClock`); I2C and drawing stay on the main loop.
+- Screens: Today (place in the nav + "3h ago" when stale; 56 px icon, big temperature,
+  condition; INSIDE | OUTSIDE; UV, wind, rain chance, next sunset/sunrise), then two
+  "Next days" pages of 3 cards (tomorrow onward: 44 px icon, day + low/high, rain chance +
+  amount + UV added only while they fit). Swipe or nav arrows; BOOT cycles. Icons are drawn
+  from WMO codes (`weather_icons.*`). Lock widget = a card: 48 px icon, "23° out 29° in",
+  rain chance, sunset/sunrise.
+- BLE: `weather.status` {location{automatic, name?, lat?, lon?}, units, insideOffset,
+  inside?{temp, humidity}, now?{place, temp, feels, humidity, code, description, wind, uv,
+  fetchedAt}, fetching, error?}, `weather.location {automatic, lat, lon, name}`,
+  `weather.units {units: metric|imperial}`, `weather.inside.offset {offset}`,
+  `weather.refresh`; event `weather.changed`. App: `Features/Weather/WeatherView.swift`
+  (location permission text = `INFOPLIST_KEY_NSLocationWhenInUseUsageDescription`).
 
 ## SD library + Wi-Fi fetch (launcher)
 

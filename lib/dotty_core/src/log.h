@@ -17,6 +17,10 @@ namespace dlog {
 void begin();
 void write(char level, const char *tag, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 
+// Another key typed on the serial monitor (not 'd'), once; 0 if none. The shell uses 's'
+// for a screenshot (tools/screenshot.py).
+char takeKey();
+
 }  // namespace dlog
 
 #define LOGE(tag, ...) dlog::write('E', tag, __VA_ARGS__)

@@ -52,6 +52,8 @@ void replayHistory() {
   portEXIT_CRITICAL(&lock);
 }
 
+volatile char pendingKey = 0;
+
 void drainTask(void *) {
   char chunk[256];
   for (;;) {
@@ -64,7 +66,9 @@ void drainTask(void *) {
     }
     // Serial commands: 'd' replays the whole history.
     while (Serial.available()) {
-      if (Serial.read() == 'd') {
+      const int key = Serial.read();
+      if (key > 32 && key != 'd') pendingKey = key;
+      if (key == 'd') {
         replayHistory();
         Serial.print("\n----- log history -----\n");
       }
@@ -87,6 +91,12 @@ void drainTask(void *) {
 }
 
 }  // namespace
+
+char takeKey() {
+  const char key = pendingKey;
+  pendingKey = 0;
+  return key;
+}
 
 void begin() {
   ring = static_cast<char *>(heap_caps_malloc(kRingSize, MALLOC_CAP_SPIRAM));

@@ -10,7 +10,7 @@ namespace nav {
 constexpr int16_t kHeight = 30;
 constexpr int16_t kButton = 44;
 
-enum class Icon { None, Back, Shuffle, InOrder, Playlists, Star, StarFilled };
+enum class Icon { None, Back, Forward, Shuffle, InOrder, Playlists, Star, StarFilled };
 
 void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right);
 
