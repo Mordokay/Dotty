@@ -156,8 +156,7 @@ final class SongOutbox {
             let rssi = reply["rssi"] as? Int ?? 0
             weakSignal = rssi != 0 && rssi < Self.weakSignalDbm ? (ssid, rssi) : nil
         } catch {
-            self.error = link.connection == .connected ? error.localizedDescription
-                                                       : "Dotty isn't connected. Press PWR on Dotty to wake it."
+            if !link.lostConnection(error) { self.error = error.localizedDescription }
             return
         }
         UserDefaults.standard.set([server.absoluteString, token], forKey: Self.sessionKey)

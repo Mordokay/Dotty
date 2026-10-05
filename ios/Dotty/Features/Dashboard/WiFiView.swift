@@ -27,6 +27,7 @@ struct WiFiView: View {
                                subtitle: "Pick a network for Dotty. It remembers every network you add and joins the strongest one nearby.")
                         .padding(.top, Spacing.l)
                     if let notice { NoticeCard(kind: .success, text: notice) }
+                    NotConnectedNotice()
                     if let error { NoticeCard(kind: .error, text: error) }
                     if !state.saved.isEmpty { savedCard }
                     visibleCard
@@ -107,8 +108,7 @@ struct WiFiView: View {
             }
             state = try await WiFiState.load(from: link)
         } catch {
-            self.error = link.connection == .connected ? error.localizedDescription
-                                                       : "Dotty isn't connected. Press PWR on Dotty to wake it."
+            if !link.lostConnection(error) { self.error = error.localizedDescription }
         }
     }
 

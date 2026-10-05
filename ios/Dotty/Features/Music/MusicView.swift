@@ -44,11 +44,17 @@ private struct MusicContent: View {
                     PageHeader(title: "Music")
                         .padding(.top, Spacing.l)
                     LightTabs(tabs: MusicPage.allCases, selection: $page) { $0.title }
+                    // Bluetooth is paused on purpose while songs go over Wi-Fi.
+                    if !model.outbox.syncing { NotConnectedNotice() }
                     if let notice = model.notice { NoticeCard(kind: .success, text: notice) }
                     if let error = model.error { NoticeCard(kind: .error, text: error) }
                     if !model.loaded && model.error == nil {
-                        HStack { Spacer(); FireflyLoader(size: 96, label: "Reading Dotty's library"); Spacer() }
-                            .padding(.top, Spacing.xxl)
+                        // Nothing to show until the library has loaded once (the notice above
+                        // explains a missing connection).
+                        if link.connection == .connected {
+                            HStack { Spacer(); FireflyLoader(size: 96, label: "Reading Dotty's library"); Spacer() }
+                                .padding(.top, Spacing.xxl)
+                        }
                     } else {
                         switch page {
                         case .player: MusicPlayerCard(model: model)

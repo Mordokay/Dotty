@@ -75,7 +75,7 @@ final class MusicModel {
             apply(state: try await link.send("music.status"))
             loaded = true
         } catch {
-            self.error = describe(error)
+            report(error)
         }
     }
 
@@ -148,7 +148,7 @@ final class MusicModel {
         do {
             apply(state: try await link.send(command, arguments))
         } catch {
-            self.error = describe(error)
+            report(error)
         }
     }
 
@@ -169,7 +169,7 @@ final class MusicModel {
             try await loadLibrary()
             return true
         } catch {
-            self.error = describe(error)
+            report(error)
             return false
         }
     }
@@ -213,7 +213,7 @@ final class MusicModel {
         do {
             for name in names { try await link.send("music.song.delete", ["name": name]) }
         } catch {
-            self.error = describe(error)
+            report(error)
         }
         try? await loadLibrary()
     }
@@ -229,7 +229,7 @@ final class MusicModel {
             try await link.send(command, arguments)
             try await loadLibrary()
         } catch {
-            self.error = describe(error)
+            report(error)
         }
     }
 
@@ -241,11 +241,13 @@ final class MusicModel {
     func reconnected() async {
         guard !outbox.syncing else { return }
         error = nil
+        outbox.error = nil
         await load()
     }
 
-    private func describe(_ error: Error) -> String {
-        link.connection == .connected ? error.localizedDescription : "Dotty isn't connected. Press PWR on Dotty to wake it."
+    /// Keeps real failures; losing the connection is shown live by NotConnectedNotice.
+    private func report(_ error: Error) {
+        if !link.lostConnection(error) { self.error = error.localizedDescription }
     }
 }
 

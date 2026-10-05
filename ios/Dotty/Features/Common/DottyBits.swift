@@ -125,3 +125,27 @@ struct CartridgeArtwork: View {
         }
     }
 }
+
+/// "Dotty isn't connected", shown from the live connection state, so it goes away by itself
+/// the moment Dotty reconnects. Screens show this instead of storing connection errors.
+struct NotConnectedNotice: View {
+    @Environment(DottyLink.self) private var link
+
+    var body: some View {
+        if link.connection != .connected {
+            NoticeCard(kind: .info, text: link.connection == .connecting
+                       ? "Reconnecting to Dotty…"
+                       : "Dotty isn't connected. Press PWR on Dotty to wake it.")
+                .transition(.opacity)
+        }
+    }
+}
+
+extension DottyLink {
+    /// True when a command failed only because Dotty went away; the live
+    /// NotConnectedNotice covers that, so don't keep it as an error.
+    func lostConnection(_ error: Error) -> Bool {
+        if case DottyError.notConnected = error { return true }
+        return connection != .connected
+    }
+}
