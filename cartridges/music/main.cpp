@@ -21,13 +21,14 @@
 #include "images/sleep_portrait.h"
 #include "log.h"
 #include "music_library.h"
+#include "nav_bar.h"
 #include "power.h"
 #include "shell.h"
 #include "storage.h"
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.9.5");
+DOTTY_CARTRIDGE("music", "Music", "0.9.6");
 
 namespace {
 
@@ -42,8 +43,8 @@ constexpr int16_t kW = EpdDisplay::kSize;
 constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 
-constexpr int16_t kNavH = 30;     // nav bar height; its corner buttons are kNavButton wide
-constexpr int16_t kNavButton = 44;
+constexpr int16_t kNavH = nav::kHeight;
+constexpr int16_t kNavButton = nav::kButton;
 constexpr int16_t kRowH = 28;     // playlist menu rows, from kNavH + 2
 constexpr int kMenuRows = (EpdDisplay::kSize - kNavH - 2) / kRowH;
 constexpr int16_t kButtonY = 100;
@@ -198,70 +199,12 @@ String displayTitle(const String &song, const String &fallback) {
   return title.isEmpty() ? fallback : title;
 }
 
-// ---------- nav bar ----------
-
-enum class NavIcon { None, Back, Shuffle, InOrder, Playlists };
-
-// A thick white line (the nav bar is black).
-void thickLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
-  for (int d = 0; d < 2; d++) {
-    epd.drawLine(x0, y0 + d, x1, y1 + d, kWhite);
-    epd.drawLine(x0 + d, y0, x1 + d, y1, kWhite);
-  }
-}
-
-// An arrow head pointing right with its tip at (x, y).
-void arrowHead(int16_t x, int16_t y) {
-  epd.fillTriangle(x, y, x - 6, y - 5, x - 6, y + 5, kWhite);
-}
-
-// Icons are drawn inside the kNavButton-wide corner, centred on cx.
-void drawNavIcon(NavIcon icon, int16_t cx) {
-  const int16_t cy = kNavH / 2;
-  switch (icon) {
-    case NavIcon::Back:
-      thickLine(cx + 4, cy - 8, cx - 4, cy);
-      thickLine(cx - 4, cy, cx + 4, cy + 8);
-      break;
-    case NavIcon::Shuffle:  // crossing arrows
-      thickLine(cx - 11, cy - 7, cx + 6, cy + 6);
-      thickLine(cx - 11, cy + 6, cx + 6, cy - 7);
-      arrowHead(cx + 11, cy - 7);
-      arrowHead(cx + 11, cy + 7);
-      break;
-    case NavIcon::InOrder:  // parallel arrows
-      thickLine(cx - 11, cy - 6, cx + 6, cy - 6);
-      thickLine(cx - 11, cy + 5, cx + 6, cy + 5);
-      arrowHead(cx + 11, cy - 5);
-      arrowHead(cx + 11, cy + 6);
-      break;
-    case NavIcon::Playlists:  // a list with a note
-      for (int i = 0; i < 3; i++) epd.fillRect(cx - 12, cy - 8 + i * 7, i == 2 ? 10 : 16, 3, kWhite);
-      epd.fillCircle(cx + 7, cy + 7, 3, kWhite);
-      epd.fillRect(cx + 9, cy - 6, 2, 13, kWhite);
-      epd.fillRect(cx + 9, cy - 6, 5, 2, kWhite);
-      break;
-    case NavIcon::None:
-      break;
-  }
-}
-
-void drawNavBar(const String &title, NavIcon left, NavIcon right) {
-  epd.fillRect(0, 0, kW, kNavH, kBlack);
-  epd.setFont(&FreeSans9pt7b);
-  epd.setTextColor(kWhite);
-  ui::drawCentered(epd, ui::fitText(epd, title, kW - 2 * kNavButton), 20);
-  epd.setTextColor(kBlack);
-  drawNavIcon(left, kNavButton / 2);
-  drawNavIcon(right, kW - kNavButton / 2);
-}
-
 // ---------- screens ----------
 
 void drawPlayer() {
   epd.fillScreen(kWhite);
-  drawNavBar(queueName.length() ? queueName : String("Music"), shuffle ? NavIcon::Shuffle : NavIcon::InOrder,
-             NavIcon::Playlists);
+  nav::draw(epd, queueName.length() ? queueName : String("Music"), shuffle ? nav::Icon::Shuffle : nav::Icon::InOrder,
+            nav::Icon::Playlists);
 
   epd.setFont(&FreeSansBold9pt7b);
   if (!sdReady) {
@@ -384,7 +327,7 @@ int menuPerPage(int count) {
 
 void drawPlaylists() {
   epd.fillScreen(kWhite);
-  drawNavBar("Playlists", NavIcon::Back, NavIcon::None);
+  nav::draw(epd, "Playlists", nav::Icon::Back, nav::Icon::None);
   const std::vector<String> items = menuItems();
   const int perPage = menuPerPage(items.size());
   const int pages = (items.size() + perPage - 1) / perPage;

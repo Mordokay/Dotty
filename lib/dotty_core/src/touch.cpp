@@ -67,18 +67,29 @@ Touch::Gesture Touch::poll() {
     if (!down_) {
       down_ = true;
       longReported_ = false;
+      moved_ = false;
       downAt_ = millis();
-      readPoint();
-    } else if (!longReported_ && millis() - downAt_ >= kLongPressMs) {
-      longReported_ = true;
-      return Gesture::LongPress;
+      readPoint(x_, y_);
+      lastX_ = x_;
+      lastY_ = y_;
+    } else {
+      readPoint(lastX_, lastY_);
+      if (abs(lastX_ - x_) >= kSwipePx || abs(lastY_ - y_) >= kSwipePx) moved_ = true;
+      if (!moved_ && !longReported_ && millis() - downAt_ >= kLongPressMs) {
+        longReported_ = true;
+        return Gesture::LongPress;
+      }
     }
     return Gesture::None;
   }
 
   if (down_) {
     down_ = false;
-    return longReported_ ? Gesture::None : Gesture::Tap;
+    if (longReported_) return Gesture::None;
+    if (!moved_) return Gesture::Tap;
+    const int16_t dx = lastX_ - x_, dy = lastY_ - y_;
+    if (abs(dy) >= abs(dx)) return dy < 0 ? Gesture::SwipeUp : Gesture::SwipeDown;
+    return dx < 0 ? Gesture::SwipeLeft : Gesture::SwipeRight;
   }
   // A whole tap that started and ended while we were busy refreshing.
   return sawInterrupt ? Gesture::Tap : Gesture::None;
@@ -91,9 +102,9 @@ uint8_t Touch::touchCount() {
   return count <= 2 ? count : 0;
 }
 
-void Touch::readPoint() {
+void Touch::readPoint(uint16_t &x, uint16_t &y) {
   uint8_t buf[4];
   if (readRegs(0x03, buf, sizeof(buf)) != sizeof(buf)) return;
-  x_ = (buf[0] & 0x0F) << 8 | buf[1];
-  y_ = (buf[2] & 0x0F) << 8 | buf[3];
+  x = (buf[0] & 0x0F) << 8 | buf[1];
+  y = (buf[2] & 0x0F) << 8 | buf[3];
 }

@@ -43,6 +43,18 @@ void drawWifi(Adafruit_GFX &gfx, int16_t x, int16_t y, int16_t size) {
   }
 }
 
+void drawSmallPadlock(Adafruit_GFX &gfx, int16_t x, int16_t top) {
+  const int16_t cx = x + 9;
+  gfx.fillCircle(cx, top + 8, 7, kBlack);  // shackle
+  gfx.fillCircle(cx, top + 8, 4, kWhite);
+  gfx.fillRect(x + 2, top + 8, 4, 4, kBlack);
+  gfx.fillRect(x + 12, top + 8, 4, 4, kBlack);
+  gfx.fillRect(x + 5, top + 8, 8, 4, kWhite);
+  gfx.fillRoundRect(x, top + 12, 18, 14, 2, kBlack);  // body
+  gfx.fillCircle(cx, top + 18, 2, kWhite);            // keyhole
+  gfx.fillRect(cx - 1, top + 18, 2, 5, kWhite);
+}
+
 namespace {
 
 void fillBolt(Adafruit_GFX &gfx, int16_t cx, int16_t cy, int16_t height, uint16_t color) {

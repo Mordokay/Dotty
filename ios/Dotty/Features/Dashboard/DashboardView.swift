@@ -11,7 +11,7 @@ struct DashboardView: View {
     @State private var wifi: WiFiState?
 
     enum Route: Hashable {
-        case cartridges, wifi, music
+        case cartridges, wifi, music, jokes
 
         /// The screen of the cartridge Dotty is running, if it has one (and its firmware
         /// has the commands that screen needs).
@@ -19,6 +19,7 @@ struct DashboardView: View {
             guard let info, !info.isLauncher else { return nil }
             switch info.id {
             case "music" where info.isAtLeast("0.7.0"): return .music  // library + playlists
+            case "jokes" where info.supports("jokes"): return .jokes
             default: return nil
             }
         }
@@ -69,6 +70,7 @@ struct DashboardView: View {
                 case .cartridges: CartridgesView()
                 case .wifi: WiFiView()
                 case .music: MusicView()
+                case .jokes: JokesView()
                 }
             }
         }
@@ -132,11 +134,19 @@ struct DashboardView: View {
     }
 
     private func screenSubtitle(_ route: Route) -> String {
-        route == .music ? "Playing, playlists and sending songs" : ""
+        switch route {
+        case .music: "Playing, playlists and sending songs"
+        case .jokes: "Favourites and the jokes on Dotty"
+        default: ""
+        }
     }
 
     private func screenSymbol(_ route: Route) -> String {
-        route == .music ? "music.note.list" : "square.stack.3d.up"
+        switch route {
+        case .music: "music.note.list"
+        case .jokes: "face.smiling"
+        default: "square.stack.3d.up"
+        }
     }
 
     private var wifiReloadKey: String {

@@ -6,7 +6,7 @@
 // so a tap is not lost while the main loop is blocked in an e-paper refresh.
 class Touch {
  public:
-  enum class Gesture { None, Tap, LongPress };
+  enum class Gesture { None, Tap, LongPress, SwipeUp, SwipeDown, SwipeLeft, SwipeRight };
 
   bool begin();
 
@@ -14,8 +14,12 @@ class Touch {
   void sleep();
   bool wake();
 
-  // Call often. Tap fires on release; LongPress fires once while still held.
+  // Call often. Tap and swipes fire on release (a swipe = the finger moved at least
+  // kSwipePx, mostly in one direction; SwipeUp = moved up); LongPress fires once while
+  // still held, if the finger hasn't moved.
   Gesture poll();
+
+  static constexpr int16_t kSwipePx = 35;
 
   // Where the finger went down (panel coordinates, same as the display's).
   uint16_t x() const { return x_; }
@@ -23,11 +27,14 @@ class Touch {
 
  private:
   uint8_t touchCount();
-  void readPoint();
+  void readPoint(uint16_t &x, uint16_t &y);
 
   bool down_ = false;
   bool longReported_ = false;
   uint32_t downAt_ = 0;
   uint16_t x_ = 0;
   uint16_t y_ = 0;
+  uint16_t lastX_ = 0;  // latest position while down
+  uint16_t lastY_ = 0;
+  bool moved_ = false;  // went past kSwipePx: not a tap or long press
 };

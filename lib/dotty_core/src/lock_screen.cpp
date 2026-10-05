@@ -40,13 +40,32 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   gfx.setCursor(kW - 8 - 29 - 6 - pctW, 20);
   gfx.print(pct);
 
-  // Big clock.
   char clock[6] = "--:--";
   if (info.timeValid) snprintf(clock, sizeof(clock), "%02d:%02d", info.time.tm_hour, info.time.tm_min);
   gfx.setFont(&FreeSansBold24pt7b);
-  ui::drawCentered(gfx, clock, 82);
 
-  if (info.externalPower) {
+  // With a widget (a joke, the forecast…): clock and a small padlock share one row near the
+  // top, and the widget gets the middle. The clock's row is cleared again if it draws nothing.
+  bool widgetShown = false;
+  if (info.widget && info.timeValid) {
+    const int16_t clockW = ui::textWidth(gfx, clock), lockW = 18, gap = 12;
+    const int16_t x = (kW - (clockW + gap + lockW)) / 2;
+    int16_t x1, y1;
+    uint16_t w, h;
+    gfx.getTextBounds(clock, 0, 60, &x1, &y1, &w, &h);
+    gfx.setCursor(x - x1, 60);
+    gfx.print(clock);
+    art::drawSmallPadlock(gfx, x + clockW + gap, 30);
+    gfx.setFont(&FreeSans9pt7b);
+    widgetShown = info.widget(gfx, info.time, 72, 162);
+    if (!widgetShown) gfx.fillRect(0, 26, kW, 140, kWhite);
+    gfx.setFont(&FreeSansBold24pt7b);
+  }
+
+  if (widgetShown) {
+    // The middle is the widget's; power and music news stay on the bottom line.
+  } else if (info.externalPower) {
+    ui::drawCentered(gfx, clock, 82);
     // Big battery filling up, with the exact percentage beside it.
     const int16_t bw = 84, bh = 40, gap = 12;
     gfx.setFont(&FreeSansBold18pt7b);
@@ -57,6 +76,7 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
     gfx.setCursor(x + bw + 6 + gap, 139);
     gfx.print(big);
   } else {
+    ui::drawCentered(gfx, clock, 82);
     art::drawPadlock(gfx, kW / 2, 100);
   }
 

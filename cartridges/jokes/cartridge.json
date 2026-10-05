@@ -1,0 +1,4 @@
+{
+  "description": "Every JokeAPI joke on the SD card, offline: pick Dark, Programming, Misc or Any, reveal punchlines, star favourites, and get a new joke on the lock screen every 5 minutes.",
+  "requires": ["sd", "wifi"]
+}

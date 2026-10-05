@@ -89,6 +89,7 @@ void drawLock() {
   info.charging = battery::charging();
   info.batteryLow = battery::low();
   info.nowPlaying = nowPlaying();
+  info.widget = cfg.drawLockWidget;
   drawLockScreen(epd, info);
   lockShownMinute = info.time.tm_min;
   lockShownText = info.nowPlaying;
@@ -358,8 +359,8 @@ bool update(Input &input) {
 
   if (gesture != Touch::Gesture::None || bootClick) lastInteraction = millis();
   if (gesture != Touch::Gesture::None) {
-    LOGI("touch", "%s at (%u, %u)", gesture == Touch::Gesture::Tap ? "tap" : "long press",
-         touch.x(), touch.y());
+    static const char *kNames[] = {"none", "tap", "long press", "swipe up", "swipe down", "swipe left", "swipe right"};
+    LOGI("touch", "%s at (%u, %u)", kNames[static_cast<int>(gesture)], touch.x(), touch.y());
   }
   if (millis() - lastInteraction >= kAutoLockMs) {
     LOGI("ui", "idle for %lu s", kAutoLockMs / 1000);
