@@ -19,5 +19,9 @@ struct LockScreenInfo {
 // redrawn once a minute.
 void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info);
 
+// A short card when the power source changes while unlocked: big battery (with a bolt on
+// a charger), the percentage, and "Charging" / "Fully charged" / "On battery".
+void drawPowerCard(Adafruit_GFX &gfx, uint8_t percent, bool external, bool charging);
+
 // Shown just before Dotty switches itself off with an empty battery (e-paper keeps it).
 void drawBatteryEmpty(Adafruit_GFX &gfx);

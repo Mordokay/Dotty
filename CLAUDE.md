@@ -330,6 +330,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   bottom line "Charging"/"Fully charged"; ≤ 10 % on battery: "Battery low - charge soon".
   Below 3.40 V for 1 min (or at boot): "Battery empty" screen, then `power::shutdown()`
   (latch off, e-paper keeps it). Info has `battery`, `charging`, `power`.
+- Unlocked, the cartridge screens have no battery icon, so the shell shows a power card for
+  2.5 s when the power source changes (big battery, %, "Charging"/"Fully charged"/"On
+  battery"; a tap dismisses it), then redraws the app. Not for the state at boot, nor for
+  changes while locked (the lock screen shows those).
 - Measured overnight (locked, light sleep, 8.2 h): 4046 → 3996 mV ≈ 6-7 % ≈ 3.2 mA average,
   ~5 days locked from full. Unplugging from USB drops the reading ~45 mV (charger voltage
   gone), which looked like "90 % → 85 %" but isn't drain.

@@ -27,6 +27,7 @@ constexpr uint32_t kPowerOffHoldMs = 2000;
 constexpr uint32_t kLauncherComboMs = 1000;
 constexpr uint32_t kAutoLockMs = 2 * 60 * 1000;
 constexpr uint32_t kBatteryLogIntervalMs = 10 * 60 * 1000;
+constexpr uint32_t kPowerCardMs = 2500;
 constexpr int kPartialRefreshesPerFull = 50;
 constexpr int16_t kW = EpdDisplay::kSize;
 
@@ -56,6 +57,11 @@ bool runLockedWake() {
   nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
   return cfg.onLockedWake();
 }
+
+// The power card (plugged in / unplugged while unlocked): when it goes away, and the power
+// source last announced.
+uint32_t powerCardUntil = 0;
+bool announcedExternal = false;
 
 // What the lock screen currently shows, to know when it needs a redraw.
 int lockShownMinute = -1;
@@ -322,6 +328,7 @@ void begin(const Config &config) {
   LOGI("boot", "touch %s", touch.begin() ? "ok" : "FAILED");
   LOGI("boot", "rtc %s", rtc.begin(Wire) ? "ok" : "FAILED");
   battery::begin();
+  announcedExternal = battery::external();  // no card for the state Dotty starts in
   // Switched on (PWR) with a flat battery: show why and go back off.
   if (!battery::external() && battery::readMillivolts() < battery::kEmptyMv) batteryEmptyOff();
   ble::begin();
@@ -341,7 +348,9 @@ bool update(Input &input) {
   const Touch::Gesture gesture = touch.poll();
 
   if (isLocked) {
-    // Locked: touch and BOOT are ignored, only PWR unlocks.
+    // Locked: touch and BOOT are ignored, only PWR unlocks. The lock screen shows power
+    // changes itself, so no card for them afterwards.
+    announcedExternal = battery::external();
     loopLock();
     delay(10);
     return false;
@@ -354,7 +363,29 @@ bool update(Input &input) {
   }
   if (millis() - lastInteraction >= kAutoLockMs) {
     LOGI("ui", "idle for %lu s", kAutoLockMs / 1000);
+    powerCardUntil = 0;
     lock();
+    return false;
+  }
+
+  // Plugged in or unplugged: there's no battery icon on the app screens, so say it.
+  if (battery::external() != announcedExternal) {
+    announcedExternal = battery::external();
+    epd.waitBusy();
+    drawPowerCard(epd, battery::percent(), battery::external(), battery::charging());
+    refresh(false);
+    powerCardUntil = millis() + kPowerCardMs;
+  }
+  if (powerCardUntil) {
+    // The card goes away by itself, or with a tap; the app waits meanwhile.
+    if (static_cast<int32_t>(millis() - powerCardUntil) < 0 && gesture != Touch::Gesture::Tap) {
+      delay(10);
+      return false;
+    }
+    powerCardUntil = 0;
+    epd.waitBusy();
+    showApp();
+    delay(10);
     return false;
   }
 

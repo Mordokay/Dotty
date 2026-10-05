@@ -87,3 +87,13 @@ void drawBatteryEmpty(Adafruit_GFX &gfx) {
   gfx.setFont(&FreeSans9pt7b);
   ui::drawCentered(gfx, "Charge Dotty to wake it", 172);
 }
+
+void drawPowerCard(Adafruit_GFX &gfx, uint8_t percent, bool external, bool charging) {
+  gfx.fillScreen(kWhite);
+  gfx.setTextColor(kBlack);
+  art::drawBigBattery(gfx, (kW - 126) / 2, 34, 120, 56, percent, charging);
+  gfx.setFont(&FreeSansBold18pt7b);
+  ui::drawCentered(gfx, String(percent) + "%", 140);
+  gfx.setFont(&FreeSans9pt7b);
+  ui::drawCentered(gfx, !external ? "On battery" : charging ? "Charging" : "Fully charged", 176);
+}
