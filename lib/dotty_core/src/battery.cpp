@@ -20,6 +20,13 @@ constexpr uint32_t kFullAfterMs = 10 * 60 * 1000;
 constexpr uint32_t kSurelyExternalMv = 4200;  // only a charger holds the battery this high
 constexpr uint32_t kDropAfterMs = 60 * 1000;   // on battery: a lower reading must last this long
 constexpr uint32_t kEmptyAfterMs = 60 * 1000;
+// Unplugging rarely shows as one step: the voltage relaxes over minutes. A battery that is
+// really charging keeps rising (or holds near the charger's 4.2 V once full), so external
+// power that stops rising while below charging level has been unplugged.
+constexpr uint32_t kRiseWindowMs = 5 * 60 * 1000;
+constexpr int32_t kRiseMv = 8;
+constexpr uint32_t kChargingLevelMv = 4150;  // charging, the battery reads above this soon
+constexpr uint32_t kFullFloorMv = 4090;      // the charger tops up again before it gets here
 
 float smoothed = 0;
 uint32_t lastRaw = 0;
@@ -33,6 +40,8 @@ bool isFull = false;
 uint8_t shown = 0;
 uint32_t lowerSince = 0;
 uint32_t emptySince = 0;
+float riseRef = 0;       // smoothed voltage at the start of the current rise window
+uint32_t riseSince = 0;
 
 uint8_t curve(int32_t mv) {
   struct Point {
@@ -60,6 +69,8 @@ void setExternal(bool on, uint32_t raw, const char *why) {
   fullSince = 0;
   isFull = false;
   smoothed = raw;  // the old level no longer applies
+  riseRef = raw;
+  riseSince = millis();
   LOGI("battery", "%s (%s, %lu mV)", on ? "external power" : "on battery", why, raw);
 }
 
@@ -133,6 +144,20 @@ void poll() {
   }
 
   smoothed = smoothed * 0.75f + raw * 0.25f;
+  if (onExternal && !host) {
+    // No longer charging? (A computer is trusted while it's attached.)
+    if (smoothed >= riseRef + kRiseMv) {
+      riseRef = smoothed;
+      riseSince = now;
+    } else if (now - riseSince >= kRiseWindowMs) {
+      if (isFull ? smoothed < kFullFloorMv : smoothed < kChargingLevelMv) {
+        setExternal(false, static_cast<uint32_t>(smoothed), "stopped rising");
+      } else {
+        riseRef = smoothed;  // holding at the top: still plugged in
+        riseSince = now;
+      }
+    }
+  }
   if (onExternal) {
     if (smoothed >= kFullMv) {
       if (fullSince == 0) fullSince = now;

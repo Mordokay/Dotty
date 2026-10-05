@@ -313,7 +313,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   sag: music/Wi-Fi read 40-80 mV low, ~5-10 % in the flat middle of the curve). External
   power = USB host, or the battery voltage jumping ≥ 40 mV between samples with no wake-lock
   change in the last 15 s (on USB, Q5 takes the system off the battery and the charger
-  lifts it), or ≥ 4.20 V; a ≥ 40 mV drop = unplugged. While charging the % uses the curve
+  lifts it), or ≥ 4.20 V. Unplugged = a ≥ 40 mV drop, or (no USB host) the voltage not
+  rising ≥ 8 mV in 5 min while below 4.15 V (4.09 V once full): pulling the cable makes
+  it relax over minutes, not in one step, so the first version kept "Charging" forever. While charging the % uses the curve
   80 mV lower, capped at 99 until ≥ 4.17 V for 10 min ("Fully charged").
 - Lock screen on external power: big battery + bolt + "86%" instead of the padlock,
   bottom line "Charging"/"Fully charged"; ≤ 10 % on battery: "Battery low - charge soon".

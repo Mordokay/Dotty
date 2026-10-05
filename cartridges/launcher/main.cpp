@@ -23,7 +23,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.6.1");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.6.2");
 
 namespace {
 
