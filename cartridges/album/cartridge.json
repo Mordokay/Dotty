@@ -1,0 +1,4 @@
+{
+  "description": "Your photos on Dotty: frame each one in the app, sort them into albums, and let the lock screen show an album, a new photo every minute, or always the same one.",
+  "requires": ["sd", "wifi"]
+}

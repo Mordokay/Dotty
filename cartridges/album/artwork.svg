@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Album Viewer artwork for the iOS app (the e-paper icon is icon.png): two instant photos
+     under the app icon's night sky, the front one a moonlit hill with a firefly. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.7"/><stop offset="0.35" stop-color="#B8E04E" stop-opacity="0.25"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="photo" x1="0" y1="300" x2="0" y2="640" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#1B3150"/><stop offset="1" stop-color="#2C5A46"/>
+  </linearGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="150" cy="170" r="5" opacity="0.9"/><circle cx="290" cy="100" r="3" opacity="0.6"/>
+  <circle cx="880" cy="140" r="4" opacity="0.8"/><circle cx="940" cy="420" r="3" opacity="0.5"/>
+  <circle cx="80" cy="520" r="3" opacity="0.5"/><circle cx="560" cy="70" r="2.5" opacity="0.5"/>
+  <circle cx="950" cy="700" r="4" opacity="0.7"/><circle cx="100" cy="820" r="2.5" opacity="0.4"/>
+  <circle cx="230" cy="950" r="3" opacity="0.5"/><circle cx="880" cy="930" r="3.5" opacity="0.6"/>
+</g>
+<circle cx="512" cy="512" r="430" fill="url(#halo)" opacity="0.55"/>
+<!-- back photo -->
+<g transform="rotate(-10 512 512)">
+  <rect x="250" y="220" width="460" height="540" rx="18" fill="#D9D3C2"/>
+  <rect x="285" y="255" width="390" height="390" rx="6" fill="#33465E"/>
+</g>
+<!-- front photo -->
+<g transform="rotate(7 540 540)">
+  <rect x="320" y="270" width="460" height="540" rx="18" fill="#F6F1E3"/>
+  <rect x="355" y="305" width="390" height="390" rx="6" fill="url(#photo)"/>
+  <circle cx="650" cy="390" r="44" fill="#F4EBD0"/>
+  <path d="M355 640 Q450 500 560 590 Q640 520 745 600 L745 695 L355 695 Z" fill="#163423"/>
+  <circle cx="470" cy="470" r="60" fill="url(#halo)"/><circle cx="470" cy="470" r="7" fill="#FFFBD2"/>
+</g>
+<!-- fireflies -->
+<circle cx="200" cy="300" r="70" fill="url(#halo)"/><circle cx="200" cy="300" r="7" fill="#FFFBD2"/>
+<circle cx="860" cy="800" r="60" fill="url(#halo)"/><circle cx="860" cy="800" r="6" fill="#FFFBD2"/>
+</svg>

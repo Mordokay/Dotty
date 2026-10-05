@@ -120,6 +120,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   draws into its own 200x80 canvas and returns its height; the clock row — clock + a
   padlock as tall as the digits — and the widget are centred together). A widget must not
   touch the display's font (it shares `epd`): measure on the canvas it's given.
+- A cartridge can replace the whole lock screen with `shell::Config::lockScreen(gfx, info)`
+  (Album's photo screensaver); return true when the picture changed: photos get a full
+  refresh (partial refreshes ghost on dithered photos), the clock-only minute a partial one.
 - `lib/dotty_core/src/shell.*` owns the shared device behaviour (PWR lock/unlock/off,
   BOOT + PWR 1 s → launcher, auto-lock, lock screen + sleep, off picture). Firmwares
   pass a `shell::Config` (drawApp + optional hooks) and run their own logic only while
@@ -361,6 +364,39 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `weather.location {automatic, lat, lon, name, source: phone|city}`, `weather.units {units: metric|imperial}`,
   `weather.refresh`; event `weather.changed`. App: `Features/Weather/WeatherView.swift`
   (location permission text = `INFOPLIST_KEY_NSLocationWhenInUseUsageDescription`).
+
+## Album Viewer cartridge (`cartridges/album/`)
+
+- Photos are made on the phone (`Features/Album/PhotoDither.swift`): the user frames a square
+  in `PhotoEditor` (pinch/drag, rule-of-thirds guides, brightness/contrast sliders, live
+  "On Dotty" preview), then 200x200 grey → brightness · contrast (Pillow's ImageEnhance
+  maths) → Atkinson; defaults 1.15/1.4 like `tools/img2epd.py`. Named after the EXIF date
+  taken, `20240714-193205.pbm` (`-2`… if taken), so name order = date order and Dotty shows
+  "14 Jul 2024" from the name.
+- Card (`album_library.*`): `data/photos/*.pbm` (binary PBM P4, 200x200, 1 = black, 5011 B —
+  opens on a computer; the bitmap is what `drawBitmap` wants), `data/albums/<name>.txt` (one
+  photo name per line, album order). Deleting an album keeps its photos; deleting a photo
+  drops it from every album. "All photos" = every photo by name.
+- Uploads: Wi-Fi `transfer` (dir `photos`), sent right after the editor closes
+  (`PhotoOutbox`, queue in Application Support/PhotoOutbox survives closing the app), then
+  `album.add` for the album they were added from (batched: commands ≤ 512 bytes).
+- Dotty: viewer = the photo full screen; tap shows the album name (nav, back = album menu)
+  and "2 / 4 · 14 Jul 2024" for 6 s; swipe or BOOT = next; a new photo = full refresh. Album
+  menu like Music's playlist menu. NVS `album`: active album, photo, saver mode/photo.
+- Lock screen (`Config::lockScreen`): the active album as a slideshow — from the photo on
+  screen, one photo a minute (counted from the minutes since locking), looping;
+  unlocking stays on that photo — or always one photo; a white badge bottom-right with a
+  padlock, the time, and the battery when low or charging. No photos = the usual clock.
+- BLE: `album.status` {album, index, count, photo, screensaver{mode, photo?}, photos,
+  albums}, `album.library` {photos[{name, added}], albums[{name, count, cover}]},
+  `album.album {name}`, `album.photo {name}` → base64 bitmap (the app caches it in
+  Caches/AlbumPhotos and fetches thumbnails one at a time), `album.show {album, photo?}`,
+  `album.screensaver {mode: album|photo, album?, photo?}`, `album.create/delete/rename/add/
+  remove/move`, `album.photo.delete {names[]}`, plus `transfer.*`; events `album.state`,
+  `album.library`. Dev keys: `n` next, `o` labels, `l` lock.
+- App: `Features/Album/` — tabs Photos (On Dotty card, grid with multi-select: add to album /
+  delete) · Albums (covers; album page: show, lock-screen slideshow choice, add new or
+  existing photos, drag a photo onto another to reorder, rename, delete).
 
 ## SD library + Wi-Fi fetch (launcher)
 

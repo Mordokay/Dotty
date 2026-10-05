@@ -101,8 +101,9 @@ Cartridges, one at a time, each built around a piece of Dotty's hardware
 - [x] **Weather Station** (Wi-Fi): today's weather from Open-Meteo (free, no key) with
   low/high, feels like, UV, wind, rain and sunset; a 6-day forecast; a weather card on the
   lock screen; location found automatically or set in the app; updates hourly
-- [ ] **Album Viewer** (SD card + e-paper): photos from the iPhone, cropped and dithered
-  to 1-bit on the phone, browsed on Dotty
+- [x] **Album Viewer** (SD card + e-paper): photos from the iPhone, framed and dithered
+  to 1-bit in the app, sorted into albums, browsed on Dotty; the lock screen becomes a
+  slideshow (a new photo every minute) or one chosen photo
 - [ ] **Tape Recorder** (microphone): hold a side button to record and release to pause,
   like a tape deck; a scrollable library of recordings to replay (swipe gestures)
 

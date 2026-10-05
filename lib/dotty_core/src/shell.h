@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "epd_display.h"
+#include "lock_screen.h"
 #include "rtc_clock.h"
 #include "touch.h"
 
@@ -44,6 +45,11 @@ struct Config {
   // height used, 0 for nothing. The clock and a small padlock then share one row, and the
   // row plus this content are centred together. 0 keeps the usual layout.
   int16_t (*drawLockWidget)(Adafruit_GFX &gfx, const tm &now, int16_t maxHeight) = nullptr;
+  // Replaces the whole lock screen (e.g. a photo as a screensaver). Draw everything into
+  // gfx (::drawLockScreen(gfx, info) gives the usual one) and return true when the picture
+  // changed and needs a full refresh (partial refreshes leave ghosts of a photo), false for
+  // a partial one. Called once a minute, and when the battery or power source changes.
+  bool (*lockScreen)(Adafruit_GFX &gfx, const LockScreenInfo &info) = nullptr;
   // Power-off pictures; one is picked at random each time.
   const Picture *offPictures = nullptr;
   size_t offPictureCount = 0;

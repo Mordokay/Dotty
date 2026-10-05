@@ -93,7 +93,9 @@ String nowPlaying() {
   return cfg.nowPlaying ? cfg.nowPlaying() : String();
 }
 
-void drawLock() {
+// Draws the lock screen; true if it needs a full refresh (the firmware's own, see
+// Config::lockScreen).
+bool drawLock() {
   LockScreenInfo info = {};
   info.timeValid = rtc.read(info.time);
   info.batteryPercent = battery::percent();
@@ -102,10 +104,16 @@ void drawLock() {
   info.batteryLow = battery::low();
   info.nowPlaying = nowPlaying();
   info.widget = cfg.drawLockWidget;
-  drawLockScreen(epd, info);
+  bool full = false;
+  if (cfg.lockScreen) {
+    full = cfg.lockScreen(epd, info);
+  } else {
+    drawLockScreen(epd, info);
+  }
   lockShownMinute = info.time.tm_min;
   lockShownText = info.nowPlaying;
   lockShownBattery = batteryKey();
+  return full;
 }
 
 void sleepPeripherals() {
@@ -224,8 +232,7 @@ void loopLock() {
     const bool appChanged = runLockedWake();
     if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
         batteryKey() != lockShownBattery) {
-      drawLock();
-      refresh(false);
+      refresh(drawLock());
     }
     return;
   }
@@ -238,8 +245,7 @@ void loopLock() {
   const bool appChanged = runLockedWake();
   if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
         batteryKey() != lockShownBattery) {
-    drawLock();
-    refresh(false);
+    refresh(drawLock());
     epd.waitBusy();
     rtc.read(now);
   }

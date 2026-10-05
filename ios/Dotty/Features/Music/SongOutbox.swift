@@ -214,7 +214,7 @@ final class SongOutbox {
         await Self.endSession(server: server, token: saved[1])
     }
 
-    private static func endSession(server: URL, token: String) async {
+    static func endSession(server: URL, token: String) async {
         var request = URLRequest(url: server.appending(path: "done"))
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
