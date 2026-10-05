@@ -16,6 +16,8 @@ struct PlaylistView: View {
     @State private var editingName = false
     @State private var draftName: String
     @FocusState private var nameFocused: Bool
+    /// The name's natural width, so the field hugs it and the pencil sits right after it.
+    @State private var nameWidth: CGFloat = 0
 
     init(model: MusicModel, name: String) {
         self.model = model
@@ -101,7 +103,8 @@ struct PlaylistView: View {
 
     /// The name is a text field, locked until the name or the pencil is tapped.
     private var nameRow: some View {
-        HStack(spacing: Spacing.s) {
+        // About two spaces of the title font between the name and the pencil.
+        HStack(spacing: 10) {
             TextField("Playlist name", text: $draftName)
                 .font(.lpTitle)
                 .foregroundStyle(Color.ink)
@@ -109,7 +112,16 @@ struct PlaylistView: View {
                 .submitLabel(.done)
                 .onSubmit { commitName() }
                 .allowsHitTesting(editingName)
+                .frame(maxWidth: nameWidth + 2)
+                .background {
+                    Text(draftName.isEmpty ? "Playlist name" : draftName)
+                        .font(.lpTitle)
+                        .fixedSize()
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { nameWidth = $0 }
+                }
             pencilButton
+            Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -122,10 +134,10 @@ struct PlaylistView: View {
             if editingName { commitName() } else { startEditing() }
         } label: {
             Image(systemName: editingName ? "checkmark.circle.fill" : "pencil")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 21, weight: .heavy))
                 .foregroundStyle(editingName ? DottyLight.firefly.color : Color.inkMuted)
-                .frame(width: 36, height: 36)
-                .contentShape(Rectangle())
+                .frame(height: 36)
+                .contentShape(Rectangle().inset(by: -8))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(editingName ? "Save name" : "Rename playlist")
