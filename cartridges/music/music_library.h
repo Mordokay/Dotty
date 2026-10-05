@@ -34,6 +34,8 @@ bool addToPlaylist(const String &playlist, const std::vector<String> &songNames)
 bool removeFromPlaylist(const String &playlist, const String &song);
 // Moves the song at `from` to `to` (positions in playlistSongs()).
 bool moveInPlaylist(const String &playlist, int from, int to);
+// Reorders a playlist by title (A-Z) or by date added (newest first).
+bool sortPlaylist(const String &playlist, bool byDateAdded);
 
 // "NAPA-Deslocado.mp3" → "NAPA - Deslocado"
 String title(const String &songName);

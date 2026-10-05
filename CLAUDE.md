@@ -264,7 +264,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   lines (`ui::drawWrapped`).
 - Commands: `music.status`, `music.toggle`, `music.next`, `music.prev`, `music.volume
   {value}`, `music.shuffle {on}`, `music.play {playlist?, index?, song?}`, `music.library` (songs + playlists),
-  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.rename {name, to}`, `music.playlist.move {name, from, to}`, `music.playlist.add
+  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.rename {name, to}`, `music.playlist.move {name, from, to}`, `music.playlist.sort {name, by: name|added}`, `music.playlist.add
   {name, songs[]}`, `music.playlist.remove {name, song}`, `music.song.delete {name}`,
   plus `transfer.*`. Events: `music.state` (on change, every 5 s while playing),
   `music.library` (library or playlists changed).
@@ -331,6 +331,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Application Support/Outbox with queue.json so it survives closing the app, drops songs
   Dotty already has (stored name + size), keeps the screen awake while syncing, and ends
   an interrupted session with POST /done on the next launch), `Features/Common/DottyBits.swift` (small shared views).
+- The dashboard's NavigationStack uses a `NavigationPath` (a typed `[Route]` path silently
+  ignored links to pushed screens' own destinations, e.g. a Music playlist).
 - Per-cartridge screens: `DashboardView.route(for:)` maps a running cartridge id to its
   screen (only when the firmware has the commands the screen needs).
 - `ios/Dotty-Info.plist` (outside the synced folder) adds `UIBackgroundModes:

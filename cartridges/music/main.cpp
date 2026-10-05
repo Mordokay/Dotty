@@ -27,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.9.0");
+DOTTY_CARTRIDGE("music", "Music", "0.9.1");
 
 namespace {
 
@@ -610,6 +610,13 @@ void registerCommands() {
     if (!music::moveInPlaylist(args["name"] | "", args["from"] | -1, args["to"] | -1)) {
       return fail(reply, "no such position");
     }
+    refreshQueue();
+    notifyLibraryChanged();
+  });
+  // {name, by: "name" | "added"}: rewrites the playlist in that order.
+  ble::on("music.playlist.sort", [](JsonObjectConst args, JsonObject reply) {
+    const String by = args["by"] | "name";
+    if (!music::sortPlaylist(args["name"] | "", by == "added")) return fail(reply, "no such playlist");
     refreshQueue();
     notifyLibraryChanged();
   });

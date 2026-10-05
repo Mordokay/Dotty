@@ -3,7 +3,9 @@ import SwiftUI
 /// Home once paired: Dotty's status, cartridges, Wi-Fi and settings.
 struct DashboardView: View {
     @Environment(DottyLink.self) private var link
-    @State private var path: [Route] = []
+    /// A NavigationPath, not [Route]: pushed screens add their own destinations (a Music
+    /// playlist), and a typed path silently ignores links to anything but Route.
+    @State private var path = NavigationPath()
     @State private var confirmForget = false
     @State private var showDesignSystem = false
     @State private var wifi: WiFiState?
@@ -38,11 +40,11 @@ struct DashboardView: View {
                         }
                         GlassCard(title: "Cartridges") {
                             LightRow(title: "Browse cartridges", subtitle: "Install one over Wi-Fi",
-                                     systemImage: "square.stack.3d.up", action: { path.append(.cartridges) })
+                                     systemImage: "square.stack.3d.up", action: { path.append(Route.cartridges) })
                         }
                         GlassCard(title: "Wi-Fi") {
                             LightRow(title: "Wi-Fi networks", subtitle: wifi?.summary ?? "Networks Dotty can join",
-                                     systemImage: "wifi", action: { path.append(.wifi) }) {
+                                     systemImage: "wifi", action: { path.append(Route.wifi) }) {
                                 if let rssi = wifi?.current?.rssi ?? wifi?.last?.rssi { SignalStrength(rssi: rssi) }
                             }
                         }

@@ -159,6 +159,20 @@ bool moveInPlaylist(const String &playlist, int from, int to) {
   return writePlaylist(playlist, songs);
 }
 
+bool sortPlaylist(const String &playlist, bool byDateAdded) {
+  if (!SD_MMC.exists(playlistPath(playlist))) return false;
+  std::vector<String> songs = playlistSongs(playlist);
+  auto added = [](const String &name) {
+    const auto it = std::find_if(library.begin(), library.end(), [&](const Song &s) { return s.name == name; });
+    return it == library.end() ? time_t(0) : it->added;
+  };
+  std::stable_sort(songs.begin(), songs.end(), [&](const String &a, const String &b) {
+    if (byDateAdded) return added(a) > added(b);
+    return strcasecmp(title(a).c_str(), title(b).c_str()) < 0;
+  });
+  return writePlaylist(playlist, songs);
+}
+
 String title(const String &songName) {
   String name = songName;
   const int dot = name.lastIndexOf('.');

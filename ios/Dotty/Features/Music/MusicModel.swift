@@ -200,6 +200,11 @@ final class MusicModel {
         await edit("music.playlist.move", ["name": playlist, "from": from, "to": to])
     }
 
+    /// Rewrites the playlist's order on Dotty: by title, or newest first.
+    func sort(_ playlist: String, byDateAdded: Bool) async {
+        await edit("music.playlist.sort", ["name": playlist, "by": byDateAdded ? "added" : "name"])
+    }
+
     func remove(_ song: String, from playlist: String) async {
         await edit("music.playlist.remove", ["name": playlist, "song": song])
     }

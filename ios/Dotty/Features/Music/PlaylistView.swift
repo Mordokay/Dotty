@@ -103,8 +103,20 @@ struct PlaylistView: View {
                 Button("Add songs", systemImage: "plus") { adding = true }
                     .buttonStyle(.quiet())
                     .disabled(model.songs.isEmpty)
-                Spacer()
-                if songs.count > 1 || editMode.isEditing {
+            }
+            if songs.count > 1 || editMode.isEditing {
+                HStack(spacing: Spacing.s) {
+                    Spacer()
+                    Menu {
+                        Button("Name (A–Z)", systemImage: "textformat") { Task { await model.sort(name, byDateAdded: false) } }
+                        Button("Date added (newest first)", systemImage: "calendar") { Task { await model.sort(name, byDateAdded: true) } }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
+                            .font(.lpCallout.weight(.semibold))
+                            .foregroundStyle(Color.inkMuted)
+                            .frame(minHeight: 40)
+                    }
+                    .disabled(editMode.isEditing)
                     Button(editMode.isEditing ? "Done" : "Edit") {
                         withAnimation { editMode = editMode.isEditing ? .inactive : .active }
                     }
@@ -112,7 +124,7 @@ struct PlaylistView: View {
                 }
             }
             if editMode.isEditing {
-                Text("Drag ≡ to reorder, tap ⊖ to remove a song.")
+                Text("Drag ≡ to reorder, tap ⊖ to remove a song. Sort ↑↓ puts the whole list in order.")
                     .font(.lpCaption).foregroundStyle(Color.inkMuted)
             }
         }
