@@ -313,9 +313,18 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   sag: music/Wi-Fi read 40-80 mV low, ~5-10 % in the flat middle of the curve). External
   power = USB host, or the battery voltage jumping ≥ 40 mV between samples with no wake-lock
   change in the last 15 s (on USB, Q5 takes the system off the battery and the charger
-  lifts it), or ≥ 4.20 V. Unplugged = a ≥ 40 mV drop, or (no USB host) the voltage not
-  rising ≥ 8 mV in 5 min while below 4.15 V (4.09 V once full): pulling the cable makes
-  it relax over minutes, not in one step, so the first version kept "Charging" forever. While charging the % uses the curve
+  lifts it), or ≥ 4.20 V. Unplugged = a ≥ 40 mV drop, the **load check**, or (backup) the
+  voltage not rising ≥ 8 mV in 5 min while below 4.15 V (4.09 V once full). Pulling the cable
+  makes the voltage relax over minutes, not in one step (the first version kept "Charging"
+  for 5-7 min).
+- **Load check** (`loadSag`): CPU spin on core 0 + an async Wi-Fi scan for 100 ms, 256-sample
+  ADC reads before/during/after, two cycles averaged. On USB the battery carries no load (Q5),
+  so it doesn't dip (measured −3..+3 mV); on battery it does (Wi-Fi alone 3-11 mV, ~8).
+  ≥ 5 mV dip = on battery. Runs only while believed on a charger without a USB host (every
+  20 s awake, every minute wake locked: the charger pays, at most one check on battery), and
+  on battery only when the voltage rises ≥ 15 mV above its low (≤ 2 mV dip = a charger).
+  There's no hardware way: no GPIO sees VBUS/VSYS/STAT (Espressif: the S3 USB PHY can't
+  detect VBUS); the user doesn't want to solder a VSYS divider onto J1 pins 1/2/6. While charging the % uses the curve
   80 mV lower, capped at 99 until ≥ 4.17 V for 10 min ("Fully charged").
 - Lock screen on external power: big battery + bolt + "86%" instead of the padlock,
   bottom line "Charging"/"Fully charged"; ≤ 10 % on battery: "Battery low - charge soon".

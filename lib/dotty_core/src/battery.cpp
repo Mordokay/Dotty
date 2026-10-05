@@ -1,5 +1,7 @@
 #include "battery.h"
 
+#include <WiFi.h>
+
 #include "board_pins.h"
 #include "log.h"
 #include "power.h"
@@ -27,6 +29,18 @@ constexpr uint32_t kRiseWindowMs = 5 * 60 * 1000;
 constexpr int32_t kRiseMv = 8;
 constexpr uint32_t kChargingLevelMv = 4150;  // charging, the battery reads above this soon
 constexpr uint32_t kFullFloorMv = 4090;      // the charger tops up again before it gets here
+// The load check: on USB power the board runs from the cable and the battery carries no
+// load (Q5), so a burst of work doesn't move its voltage; on battery it dips. Measured with
+// a Wi-Fi scan: 3-11 mV dip on battery (~8 mean), -3..+3 on USB. The CPU spinning too and
+// two cycles averaged make it clearer. It only runs while Dotty believes it's on a charger
+// (no computer attached), so it costs the battery at most one check after unplugging.
+constexpr uint32_t kLoadCheckMs = 20000;  // while awake; every wake while locked
+constexpr int32_t kLoadSagMv = 5;
+// On battery the voltage only falls; a rise this far above its low since unplugging is a
+// charger that slipped past the jump check: confirm with the load check (no dip = cable).
+constexpr int32_t kSuspiciousRiseMv = 15;
+constexpr int32_t kNoSagMv = 2;
+constexpr uint32_t kRiseCheckMs = 60000;
 
 float smoothed = 0;
 uint32_t lastRaw = 0;
@@ -42,6 +56,9 @@ uint32_t lowerSince = 0;
 uint32_t emptySince = 0;
 float riseRef = 0;       // smoothed voltage at the start of the current rise window
 uint32_t riseSince = 0;
+uint32_t lastLoadCheck = 0;
+float lowSinceBattery = 0;  // lowest smoothed voltage since running on battery
+volatile bool spinning = false;
 
 uint8_t curve(int32_t mv) {
   struct Point {
@@ -69,6 +86,7 @@ void setExternal(bool on, uint32_t raw, const char *why) {
   fullSince = 0;
   isFull = false;
   smoothed = raw;  // the old level no longer applies
+  lowSinceBattery = raw;
   riseRef = raw;
   riseSince = millis();
   LOGI("battery", "%s (%s, %lu mV)", on ? "external power" : "on battery", why, raw);
@@ -93,6 +111,39 @@ void updateShown(uint32_t now) {
   } else {
     lowerSince = 0;
   }
+}
+
+uint32_t readPrecise() {
+  uint32_t sum = 0;
+  for (int i = 0; i < 256; i++) sum += analogReadMilliVolts(PIN_VBAT_ADC);
+  return sum / 256 * 2;
+}
+
+void spin(void *) {
+  while (spinning) {
+  }
+  vTaskDelete(nullptr);
+}
+
+// How far the battery voltage dips under a short burst of load (mV), two cycles averaged.
+int32_t loadSag() {
+  int32_t total = 0;
+  for (int cycle = 0; cycle < 2; cycle++) {
+    const int32_t before = readPrecise();
+    spinning = true;
+    xTaskCreatePinnedToCore(spin, "load-check", 2048, nullptr, 1, nullptr, 0);
+    WiFi.mode(WIFI_STA);
+    WiFi.scanNetworks(true);  // async: the radio listens and sends probe requests
+    delay(100);
+    const int32_t loaded = readPrecise();
+    spinning = false;
+    WiFi.scanDelete();
+    WiFi.mode(WIFI_OFF);
+    delay(40);
+    const int32_t after = readPrecise();
+    total += (before + after) / 2 - loaded;
+  }
+  return total / 2;
 }
 
 }  // namespace
@@ -143,18 +194,39 @@ void poll() {
     setExternal(false, raw, "voltage dropped");
   }
 
+  // Believed on a charger (no computer to vouch for it): check with a burst of load.
+  // Skipped while Wi-Fi is in use for real (transfers, downloads).
+  if (onExternal && !host && now - lastLoadCheck >= kLoadCheckMs &&
+      !(locks & power::kWakeLockNetwork)) {
+    lastLoadCheck = millis();
+    const int32_t sag = loadSag();
+    LOGI("battery", "load check: %ld mV dip", static_cast<long>(sag));
+    if (sag >= kLoadSagMv) {
+      setExternal(false, raw, "voltage dips under load");
+      return updateShown(now);
+    }
+  } else if (!onExternal && smoothed >= lowSinceBattery + kSuspiciousRiseMv &&
+             now - lastLoadCheck >= kRiseCheckMs && !(locks & power::kWakeLockNetwork)) {
+    lastLoadCheck = millis();
+    const int32_t sag = loadSag();
+    LOGI("battery", "rising on battery? load check: %ld mV dip", static_cast<long>(sag));
+    if (sag <= kNoSagMv) setExternal(true, raw, "no dip under load");
+    lowSinceBattery = smoothed;  // either way, judge further rises from here
+  }
+
   smoothed = smoothed * 0.75f + raw * 0.25f;
+  if (!onExternal && smoothed < lowSinceBattery) lowSinceBattery = smoothed;
   if (onExternal && !host) {
     // No longer charging? (A computer is trusted while it's attached.)
     if (smoothed >= riseRef + kRiseMv) {
       riseRef = smoothed;
-      riseSince = now;
-    } else if (now - riseSince >= kRiseWindowMs) {
+      riseSince = millis();
+    } else if (millis() - riseSince >= kRiseWindowMs) {  // riseSince may be newer than `now`
       if (isFull ? smoothed < kFullFloorMv : smoothed < kChargingLevelMv) {
         setExternal(false, static_cast<uint32_t>(smoothed), "stopped rising");
       } else {
         riseRef = smoothed;  // holding at the top: still plugged in
-        riseSince = now;
+        riseSince = millis();
       }
     }
   }
