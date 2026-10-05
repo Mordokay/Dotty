@@ -27,6 +27,9 @@ final class TapeModel {
         var elapsed = 0
         var playing: String?
         var paused = false
+        /// Paused tape: its parts (BOOT holds) and the last one's length (what Undo removes).
+        var parts = 0
+        var lastPart = 0.0
     }
 
     private(set) var recordings: [Recording] = []
@@ -88,6 +91,8 @@ final class TapeModel {
         deck.elapsed = message["elapsed"] as? Int ?? 0
         deck.playing = message["playing"] as? String
         deck.paused = message["paused"] as? Bool ?? false
+        deck.parts = message["parts"] as? Int ?? 0
+        deck.lastPart = message["lastPart"] as? Double ?? 0
         self.deck = deck
         // A tape was just saved (0.1.0 firmware didn't send tape.list for it).
         if wasTaping && deck.state == "idle" { Task { try? await loadList() } }
@@ -103,6 +108,22 @@ final class TapeModel {
 
     func playOnDotty(_ recording: Recording) async {
         do { apply(try await link.send("tape.play", ["name": recording.name])) } catch { report(error) }
+    }
+
+    /// The paused tape: drop its last part, save it, or throw it away.
+    func undoPart() async {
+        do { apply(try await link.send("tape.undo")) } catch { report(error) }
+    }
+
+    func saveTape() async {
+        do {
+            apply(try await link.send("tape.save"))
+            try await loadList()
+        } catch { report(error) }
+    }
+
+    func discardTape() async {
+        do { apply(try await link.send("tape.discard")) } catch { report(error) }
     }
 
     func stopOnDotty() async {

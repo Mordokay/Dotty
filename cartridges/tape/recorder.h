@@ -33,6 +33,12 @@ State state();
 bool record();  // starts a new tape or continues the paused one
 void pause();
 String finish();  // closes the tape; returns its name ("" if nothing was recorded)
+// Paused: removes the last part (everything since the last record()); the tape stays open,
+// maybe empty. Returns the milliseconds removed, 0 if there was nothing to undo.
+uint32_t undo();
+uint32_t lastPartMs();  // length of what undo() would remove
+int parts();            // parts on the open tape
+void discard();         // throws the open tape away
 uint32_t elapsedMs();
 uint8_t level();  // 0..100, loudness of the last fraction of a second
 String current();  // the open tape's name, "" when idle

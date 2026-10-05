@@ -3,6 +3,7 @@
 #include <SD_MMC.h>
 #include <freertos/semphr.h>
 #include <freertos/stream_buffer.h>
+#include <unistd.h>
 
 #include <algorithm>
 
@@ -29,6 +30,7 @@ volatile uint64_t framesCaptured = 0;  // on this tape, all its takes
 volatile uint32_t dataBytes = 0;       // on the card
 volatile uint8_t peak = 0;
 volatile uint32_t dropped = 0;
+std::vector<uint32_t> partStarts;  // dataBytes when each part (BOOT hold) began
 
 String dir() {
   return storage::myDataDir() + "/recordings";
@@ -171,8 +173,10 @@ bool record() {
     dataBytes = 0;
     framesCaptured = 0;
     dropped = 0;
+    partStarts.clear();
     LOGI("tape", "new tape %s", name.c_str());
   }
+  partStarts.push_back(static_cast<uint32_t>(dataBytes));  // settled: pause() waited for the card
   if (!audio->startCapture(kMicGainDb, kMicBoostDb)) return false;
   current_ = State::Recording;
   xTaskNotifyGive(readerTask);
@@ -195,6 +199,7 @@ String finish() {
   file.close();
   xSemaphoreGive(fileLock);
   current_ = State::Idle;
+  partStarts.clear();
   const String saved = name;
   name = "";
   if (dataBytes == 0) {  // nothing recorded: no empty file
@@ -204,6 +209,54 @@ String finish() {
   LOGI("tape", "saved %s: %lu s%s", saved.c_str(), static_cast<unsigned long>(dataBytes / 2 / kRate),
        dropped ? " (some sound dropped: the card was slow)" : "");
   return saved;
+}
+
+uint32_t lastPartMs() {
+  if (current_ != State::Paused || partStarts.empty()) return 0;
+  return static_cast<uint64_t>(dataBytes - partStarts.back()) * 1000 / (kRate * 2);
+}
+
+int parts() {
+  return partStarts.size();
+}
+
+uint32_t undo() {
+  if (current_ != State::Paused || partStarts.empty()) return 0;
+  const uint32_t removed = lastPartMs();
+  const uint32_t keep = partStarts.back();
+  partStarts.pop_back();
+  // Cut the file back to where that part began (FAT truncate through the VFS), then go on
+  // appending from there.
+  const String cardPath = dir() + "/" + name;
+  xSemaphoreTake(fileLock, portMAX_DELAY);
+  file.close();
+  if (truncate(("/sdcard" + cardPath).c_str(), kHeaderBytes + keep) != 0) {
+    LOGE("tape", "undo: truncate failed (errno %d)", errno);
+  }
+  file = SD_MMC.open(cardPath, "r+");
+  if (file) file.seek(file.size());
+  dataBytes = file ? file.size() - kHeaderBytes : 0;
+  framesCaptured = dataBytes / 2;
+  xSemaphoreGive(fileLock);
+  settle();  // header with the new length
+  LOGI("tape", "undo: removed %lu ms, %lu s left", static_cast<unsigned long>(removed),
+       static_cast<unsigned long>(elapsedMs() / 1000));
+  return removed;
+}
+
+void discard() {
+  if (current_ == State::Idle) return;
+  pause();
+  xSemaphoreTake(fileLock, portMAX_DELAY);
+  file.close();
+  xSemaphoreGive(fileLock);
+  SD_MMC.remove(dir() + "/" + name);
+  LOGI("tape", "discarded %s", name.c_str());
+  name = "";
+  partStarts.clear();
+  dataBytes = 0;
+  framesCaptured = 0;
+  current_ = State::Idle;
 }
 
 uint32_t elapsedMs() {

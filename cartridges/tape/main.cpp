@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.1.1");
+DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.2.0");
 
 namespace {
 
@@ -44,7 +44,9 @@ constexpr int16_t kRowH = 28;
 constexpr int kMenuRows = (kW - kNavH - 2) / kRowH;
 constexpr uint32_t kSavedMs = 3000;      // "Saved" under the cassette
 constexpr uint32_t kBootHoldMs = 120;    // BOOT this long = record (a click is not)
-constexpr int16_t kSaveTop = 164;        // the deck's ■ Save button (to the bottom)
+constexpr int16_t kSaveTop = 164;        // the deck's Undo · Save · Discard row (to the bottom)
+constexpr uint32_t kConfirmMs = 10000;   // "Discard this tape?" goes away by itself
+constexpr int16_t kAskTop = 74;          // its Yes / No buttons (where the cassette was)
 constexpr int16_t kButtonY = 114;        // the player's play button
 constexpr int16_t kVolumeY = 191;
 
@@ -58,6 +60,7 @@ std::vector<tape::Recording> recordings;  // newest first
 int playIndex = 0;                        // in recordings, for the player
 String savedName;                         // the tape just saved, shown for a moment
 uint32_t savedUntil = 0;
+uint32_t confirmDiscardUntil = 0;         // the trash was tapped: "Discard this tape?" until then
 bool stateDirty = true;
 bool listDirty = true;
 
@@ -97,6 +100,72 @@ void saveTape() {
   listDirty = true;
   stateDirty = true;
   notifyList();  // the app's list shows the new recording
+}
+
+// Paused: the last part goes (the tape stays open, maybe empty).
+void undoPart() {
+  tape::undo();
+  confirmDiscardUntil = 0;
+  stateDirty = true;
+}
+
+void discardTape() {
+  tape::discard();
+  confirmDiscardUntil = 0;
+  savedUntil = 0;
+  stateDirty = true;
+}
+
+bool askingDiscard() {
+  return confirmDiscardUntil && millis() < confirmDiscardUntil;
+}
+
+// The paused deck's buttons: undo arrow | Save | trash (x ranges, also used for taps).
+constexpr int16_t kUndoX = 2, kUndoW = 46, kSaveX = 54, kSaveW = 92, kDiscardX = 152, kDiscardW = 46;
+
+void button(int16_t x, int16_t y, int16_t w, int16_t h, const char *label, bool filled, bool enabled = true) {
+  const int16_t r = h / 2;
+  if (filled) {
+    epd.fillRoundRect(x, y, w, h, r, kBlack);
+  } else {
+    epd.drawRoundRect(x, y, w, h, r, kBlack);
+    if (enabled) epd.drawRoundRect(x + 1, y + 1, w - 2, h - 2, r - 1, kBlack);  // disabled: thin
+  }
+  if (!label) return;
+  epd.setFont(&FreeSansBold9pt7b);
+  epd.setTextColor(filled ? kWhite : kBlack);
+  epd.setCursor(x + (w - ui::textWidth(epd, label)) / 2, y + h / 2 + 6);
+  epd.print(label);
+  epd.setTextColor(kBlack);
+}
+
+void thick(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+  for (int d = 0; d < 2; d++) {
+    epd.drawLine(x0 + d, y0, x1 + d, y1, kBlack);
+    epd.drawLine(x0, y0 + d, x1, y1 + d, kBlack);
+  }
+}
+
+// Undo: an arc over the top, its left end an arrow head pointing down.
+void undoIcon(int16_t cx, int16_t cy) {
+  const int16_t ax = cx + 1, ay = cy + 3, r = 8;
+  for (int deg = 180; deg < 360; deg += 10) {
+    const float a0 = deg * PI / 180, a1 = (deg + 10) * PI / 180;
+    thick(ax + cosf(a0) * r, ay + sinf(a0) * r, ax + cosf(a1) * r, ay + sinf(a1) * r);
+  }
+  thick(ax + r, ay, ax + r, ay + 5);  // the tail on the right goes down a little
+  epd.fillTriangle(ax - r - 5, ay - 1, ax - r + 5, ay - 1, ax - r, ay + 6, kBlack);
+}
+
+// A bin: lid with a handle, body narrowing down, two ribs.
+void trashIcon(int16_t cx, int16_t cy) {
+  epd.fillRect(cx - 9, cy - 8, 19, 3, kBlack);  // lid
+  epd.fillRect(cx - 3, cy - 11, 7, 3, kBlack);  // handle
+  thick(cx - 7, cy - 4, cx - 5, cy + 9);        // body sides
+  thick(cx + 7, cy - 4, cx + 5, cy + 9);
+  epd.fillRect(cx - 5, cy + 8, 11, 2, kBlack);  // bottom
+  epd.drawFastVLine(cx - 1, cy - 2, 9, kBlack);  // ribs
+  epd.drawFastVLine(cx + 2, cy - 2, 9, kBlack);
 }
 
 void playAt(int index) {
@@ -140,7 +209,15 @@ void drawDeck() {
   }
   static bool spokes = false;
   spokes = s == tape::State::Recording ? !spokes : spokes;
-  drawCassette(kW / 2, kNavH + 4, spokes);  // to y 105
+  if (s == tape::State::Paused && askingDiscard()) {
+    // Where the cassette was: the question and Yes / No.
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, "Discard this tape?", kNavH + 20);
+    button(12, kAskTop, 84, 30, "Yes", true);
+    button(104, kAskTop, 84, 30, "No", false);
+  } else {
+    drawCassette(kW / 2, kNavH + 4, spokes);  // to y 105
+  }
 
   if (s == tape::State::Idle) {
     epd.setFont(&FreeSansBold9pt7b);
@@ -179,15 +256,16 @@ void drawDeck() {
     epd.setCursor((kW - timeW) / 2, 134);
     epd.print(time);
     epd.setFont(&FreeSans9pt7b);
-    ui::drawCentered(epd, "Hold BOOT to go on", 156);
-    // ■ Save
-    epd.fillRoundRect(44, kSaveTop + 2, kW - 88, 30, 15, kBlack);
-    epd.fillRect(72, kSaveTop + 12, 10, 10, kWhite);
-    epd.setTextColor(kWhite);
-    epd.setFont(&FreeSansBold9pt7b);
-    epd.setCursor(90, kSaveTop + 23);
-    epd.print("Save");
-    epd.setTextColor(kBlack);
+    // What Undo would take away, so it's never a surprise.
+    const uint32_t last = tape::lastPartMs();
+    ui::drawCentered(epd, tape::parts() > 0 ? "Undo takes the last " + clock(last) : String("Hold BOOT to go on"), 156);
+    if (askingDiscard()) return;  // Yes / No above; the row comes back after
+    const int16_t y = kSaveTop + 2;
+    button(kUndoX, y, kUndoW, 30, nullptr, false, tape::parts() > 0);
+    undoIcon(kUndoX + kUndoW / 2, y + 15);
+    button(kSaveX, y, kSaveW, 30, "Save", true);
+    button(kDiscardX, y, kDiscardW, 30, nullptr, false);
+    trashIcon(kDiscardX + kDiscardW / 2, y + 15);
   }
 }
 
@@ -293,8 +371,21 @@ bool onTap(uint16_t x, uint16_t y) {
       listPage = 0;
       return true;
     }
+    if (tape::state() == tape::State::Paused && askingDiscard()) {
+      if (y < kAskTop - 8 || y > kAskTop + 38) return false;
+      if (x < kW / 2) discardTape();  // Yes
+      else confirmDiscardUntil = 0;   // No
+      return true;
+    }
     if (tape::state() == tape::State::Paused && y >= kSaveTop) {
-      saveTape();
+      if (x < kSaveX - 2) {
+        if (tape::parts() == 0) return false;
+        undoPart();
+      } else if (x < kDiscardX - 2) {
+        saveTape();
+      } else {
+        confirmDiscardUntil = millis() + kConfirmMs;  // ask first
+      }
       return true;
     }
     return false;
@@ -345,6 +436,10 @@ void addState(JsonObject out) {
   const tape::State s = tape::state();
   out["state"] = s == tape::State::Recording ? "recording" : s == tape::State::Paused ? "paused" : "idle";
   out["elapsed"] = tape::elapsedMs() / 1000;
+  if (s == tape::State::Paused) {
+    out["parts"] = tape::parts();
+    out["lastPart"] = tape::lastPartMs() / 1000.0f;
+  }
   if (player.isPlaying() && !recordings.empty()) {
     out["playing"] = recordings[playIndex].name;
     out["paused"] = player.isPaused();
@@ -411,6 +506,24 @@ void registerCommands() {
     if (value < 0 || value > 100) return fail(reply, "value must be 0-100");
     player.setVolume(value);
     stateDirty = true;
+    addState(reply);
+  });
+  // The paused tape, from the app: undo the last part, save, or throw it away.
+  ble::on("tape.undo", [](JsonObjectConst, JsonObject reply) {
+    if (tape::state() != tape::State::Paused || tape::parts() == 0) return fail(reply, "nothing to undo");
+    reply["removed"] = tape::lastPartMs() / 1000.0f;
+    undoPart();
+    addState(reply);
+  });
+  ble::on("tape.save", [](JsonObjectConst, JsonObject reply) {
+    if (tape::state() != tape::State::Paused) return fail(reply, "no paused tape");
+    saveTape();
+    reply["name"] = savedName;
+    addState(reply);
+  });
+  ble::on("tape.discard", [](JsonObjectConst, JsonObject reply) {
+    if (tape::state() == tape::State::Idle) return fail(reply, "no tape");
+    discardTape();
     addState(reply);
   });
   ble::on("tape.rename", [](JsonObjectConst args, JsonObject reply) {
@@ -544,6 +657,11 @@ void loop() {
   if (input.gesture == Touch::Gesture::LongPress) full = true;
   if (savedUntil && millis() > savedUntil) {
     savedUntil = 0;
+    redraw = true;
+  }
+  // The question went unanswered, or BOOT took the tape on: back to the cassette.
+  if (confirmDiscardUntil && (millis() > confirmDiscardUntil || tape::state() != tape::State::Paused)) {
+    confirmDiscardUntil = 0;
     redraw = true;
   }
 

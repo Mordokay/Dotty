@@ -188,7 +188,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `DottyLink` and `ble_dotty.py`). Commands are written with response, max 512 bytes.
 - Register commands with `ble::on("<cartridge>.<verb>", handler)`; handlers run on the
   main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. Every
-  command counts as interaction: it restarts the auto-lock timer (unlocked only). A
+  command counts as interaction: it restarts the auto-lock timer (unlocked only). The app
+  pings (`core.ping`) every 45 s while it's in the foreground and connected (ContentView), so
+  Dotty doesn't lock — and drop Bluetooth — under an open app; in the background it stops. A
   handler that reboots must defer it until after its reply has been notified.
 - Pairing: Info is open; Command/Event/Data need encryption + authentication, so the
   first command makes iOS pair. Dotty is DISPLAY_ONLY: it shows a random 6-digit code
@@ -435,7 +437,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   recording: the deck stays up, `shell::wake()` every pass (no auto-lock); locking anyway
   pauses. Paused: may lock; the lock screen's bottom line says "Tape paused 0:42" (on a
   charger too — the big battery already shows charging); BOOT does nothing while locked;
-  unlocking with a tape open returns to the deck. ■ Save on the deck closes the tape.
+  unlocking with a tape open returns to the deck. Paused row: ↶ undo (drops the last part —
+  each BOOT hold is a part; the file is cut back with VFS `truncate("/sdcard/…")`, the hint
+  says "Undo takes the last 0:06"), Save, 🗑 (the cassette turns into "Discard this tape?"
+  Yes / No; gone after 10 s or when BOOT records again). Text labels didn't fit three wide.
 - Screens: deck (cassette, ● REC time + 20-bar dB meter -60..0 dBFS, or PAUSED + Save),
   recordings (paged, newest first, "Mon 6 Oct 09:14" + length), player (‹ › and swipes =
   previous/next, volume row). Dev keys: `r` toggles a simulated BOOT hold, `v` saves, `w`
@@ -443,7 +448,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - BLE: `tape.status` {state: idle|recording|paused, elapsed, playing?, paused?, position?,
   volume}, `tape.list` {recordings[{name, title, size, duration, added}], rate},
   `tape.play/toggle/stop`, `tape.volume {value}`, `tape.rename {name, to}`, `tape.delete
-  {name}`, `transfer.*`; events `tape.state`, `tape.list`.
+  {name}`, `tape.undo` / `tape.save` / `tape.discard` (paused tape; status then has `parts`,
+  `lastPart`), `transfer.*`; events `tape.state`, `tape.list` (also sent on save).
 - App (`Features/Tape/`): rows with ▶ (fetches the WAV over Wi-Fi — `transfer.start`, `GET
   /download?dir=recordings&name=…`, `/done` — into Caches/Recordings, then AVAudioPlayer),
   share/save (ShareLink), menu: play on Dotty, rename, delete; a deck card while Dotty

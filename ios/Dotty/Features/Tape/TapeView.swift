@@ -24,6 +24,7 @@ private struct TapeContent: View {
     @State private var renaming: TapeModel.Recording?
     @State private var newTitle = ""
     @State private var deleting: TapeModel.Recording?
+    @State private var discarding = false
 
     var body: some View {
         LightField {
@@ -85,11 +86,30 @@ private struct TapeContent: View {
         if deck.state != "idle" {
             GlassCard(light: deck.state == "recording" ? DottyLight.ember.color : nil) {
                 LightRow(title: deck.state == "recording" ? "Recording" : "Paused",
-                         subtitle: deck.state == "recording" ? "Let go of BOOT to pause"
-                                                             : "Hold BOOT to go on, or tap Save on Dotty",
+                         subtitle: deck.state == "recording" ? "Let go of BOOT to pause" : "Hold BOOT on Dotty to go on",
                          systemImage: deck.state == "recording" ? "record.circle" : "pause.circle") {
                     Text(Self.time(Double(deck.elapsed))).font(.lpCallout.monospacedDigit())
                 }
+                if deck.state == "paused" {
+                    HStack(spacing: Spacing.m) {
+                        Button { Task { await model.undoPart() } } label: {
+                            Label("Undo \(Self.time(deck.lastPart))", systemImage: "arrow.uturn.backward")
+                        }
+                        .buttonStyle(.quiet())
+                        .disabled(deck.parts == 0)
+                        Spacer()
+                        Button { discarding = true } label: { Image(systemName: "trash") }
+                            .buttonStyle(.quiet(DottyLight.ember.color))
+                            .accessibilityLabel("Discard")
+                        Button("Save") { Task { await model.saveTape() } }.buttonStyle(.light())
+                    }
+                    .padding([.horizontal, .bottom], Spacing.m)
+                }
+            }
+            .confirmationDialog("Discard this tape?", isPresented: $discarding, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) { Task { await model.discardTape() } }
+            } message: {
+                Text("Everything recorded on it since you started goes.")
             }
         } else if let playing = deck.playing, let recording = model.recordings.first(where: { $0.name == playing }) {
             GlassCard {
