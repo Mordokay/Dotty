@@ -31,6 +31,9 @@ constexpr uint32_t kLauncherComboMs = 1000;
 constexpr uint32_t kAutoLockMs = 2 * 60 * 1000;
 constexpr uint32_t kBatteryLogIntervalMs = 10 * 60 * 1000;
 constexpr uint32_t kPowerCardMs = 2500;
+constexpr uint32_t kPwrDebounceMs = 30;
+constexpr uint32_t kPwrLockoutMs = 600;  // after a lock or unlock, PWR is ignored this long
+uint32_t lastLockToggle = 0;
 // A cartridge's loop that doesn't come back for this long is stuck: the task watchdog
 // restarts Dotty (saving a core dump to flash). Well above the longest legit wait in a loop
 // pass (joining Wi-Fi, ~20 s; a locked minute of light sleep). Not in the launcher, whose
@@ -123,6 +126,7 @@ void wakePeripherals() {
 
 void unlock() {
   if (!isLocked) return;
+  lastLockToggle = millis();
   wakePeripherals();
   ble::start();
   isLocked = false;
@@ -152,7 +156,20 @@ void unlock() {
 // Short PWR press toggles the lock, a 2 s hold powers off, BOOT + PWR for 1 s goes
 // back to the launcher. Returns true on a BOOT click.
 bool handleButtons() {
-  const bool pwr = digitalRead(PIN_BTN_PWR) == LOW;
+  // PWR is debounced: its contacts chatter on release, and one bounce read as a second press
+  // toggled a fresh lock straight back to unlocked. A change counts once it holds 30 ms, and
+  // presses right after a lock/unlock are ignored.
+  static bool pwrStable = false;
+  static bool pwrRaw = false;
+  static uint32_t pwrRawSince = 0;
+  const bool rawPwr = digitalRead(PIN_BTN_PWR) == LOW;
+  if (rawPwr != pwrRaw) {
+    pwrRaw = rawPwr;
+    pwrRawSince = millis();
+  }
+  if (pwrRaw != pwrStable && millis() - pwrRawSince >= kPwrDebounceMs) pwrStable = pwrRaw;
+  const bool pwr = pwrStable;
+  const bool pwrPaused = millis() - lastLockToggle < kPwrLockoutMs;  // PWR handling waits
   const bool boot = digitalRead(PIN_BTN_BOOT) == LOW;
 
   if (pwr && boot) {
@@ -171,8 +188,11 @@ bool handleButtons() {
     bootClick = !comboUsed;
   }
 
-  if (!pwr) {
+  if (pwrPaused) {
+    // Right after a lock/unlock: neither a press nor a release counts yet.
+  } else if (!pwr) {
     if (pwrArmed && pwrPressedAt != 0 && !pwrLongHandled && !comboUsed) {
+      LOGI("ui", "PWR pressed");
       isLocked ? unlock() : lock();
     }
     pwrArmed = true;
@@ -238,10 +258,15 @@ void loopLock() {
   if (loopWatchdog) esp_task_wdt_reset();
   power::setAudioRail(true);
   delay(2);
-  if (byButton) {
+  // Only a real press unlocks: the button must still be down as we wake (a press lasts far
+  // longer than waking up). Anything else is logged and Dotty goes back to sleep next pass.
+  const bool held = digitalRead(PIN_BTN_PWR) == LOW;
+  if (byButton && held) {
     LOGI("power", "woken by PWR");
     pwrArmed = false;  // this press unlocks; its release must not lock again
     unlock();
+  } else if (byButton) {
+    LOGW("power", "woke for PWR, but it isn't pressed: staying locked");
   }
 }
 
@@ -465,6 +490,7 @@ void wake() {
 
 void lock() {
   if (isLocked) return;
+  lastLockToggle = millis();
   isLocked = true;
   nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
   if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock
