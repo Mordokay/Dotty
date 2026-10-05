@@ -104,8 +104,9 @@ Cartridges, one at a time, each built around a piece of Dotty's hardware
 - [x] **Album Viewer** (SD card + e-paper): photos from the iPhone, framed and dithered
   to 1-bit in the app, sorted into albums, browsed on Dotty; the lock screen becomes a
   slideshow (a new photo every minute) or one chosen photo
-- [ ] **Tape Recorder** (microphone): hold a side button to record and release to pause,
-  like a tape deck; a scrollable library of recordings to replay (swipe gestures)
+- [x] **Tape Recorder** (microphone): hold BOOT to record and let go to pause, like a tape
+  deck; recordings at 32 kHz on the SD card, played on Dotty (swipe between them) or
+  listened to, renamed and shared from the app
 
 ## Restoring the factory demo
 

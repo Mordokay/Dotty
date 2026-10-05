@@ -262,6 +262,47 @@ esp_err_t handleUpload(httpd_req_t *req) {
   return reply(req, "200 OK", json.c_str());
 }
 
+// GET /download?dir=&name=: a file from the cartridge's data folder to the phone (e.g. a
+// recording), in 16 KB chunks.
+esp_err_t handleDownload(httpd_req_t *req) {
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  const String dir = storage::safeName(queryValue(req, "dir"));
+  const String name = storage::safeName(queryValue(req, "name"));
+  const String path = storage::myDataDir() + (dir.length() ? "/" + dir : "") + "/" + name;
+  File in = name.length() ? SD_MMC.open(path) : File();
+  if (!in || in.isDirectory()) return reply(req, "404 Not Found", "{\"ok\":false,\"error\":\"no such file\"}");
+  const size_t total = in.size();
+  setCurrentFile(name.c_str());
+  currentTotal = total;
+  currentDone = 0;
+  LOGI("transfer", "sending %s/%s (%u bytes)", dir.c_str(), name.c_str(), static_cast<unsigned>(total));
+  // Chunked: the server sends the headers with the first chunk (the app knows the size
+  // from the cartridge's own listing).
+  httpd_resp_set_type(req, "application/octet-stream");
+  // The server handles one request at a time, so an upload block is free to borrow.
+  char *chunk = reinterpret_cast<char *>(blocks[0]);
+  constexpr size_t kChunk = kBlock;
+  bool ok = true;
+  size_t sent = 0;
+  while (ok && sent < total) {
+    const size_t n = in.read(reinterpret_cast<uint8_t *>(chunk), kChunk);
+    if (n == 0) break;
+    ok = httpd_resp_send_chunk(req, chunk, n) == ESP_OK;
+    sent += n;
+    currentDone = sent;
+    lastActivity = millis();
+  }
+  if (ok) ok = httpd_resp_send_chunk(req, nullptr, 0) == ESP_OK;
+  in.close();
+  setCurrentFile("");
+  currentTotal = 0;
+  currentDone = 0;
+  lastActivity = millis();
+  LOGI("transfer", "%s: %u of %u bytes", ok && sent == total ? "sent" : "send FAILED", static_cast<unsigned>(sent),
+       static_cast<unsigned>(total));
+  return ok ? ESP_OK : ESP_FAIL;
+}
+
 // POST /done: the phone has sent everything (BLE is paused, so this comes over HTTP).
 esp_err_t handleDone(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
@@ -307,6 +348,11 @@ bool startServer(String &error) {
   httpd_register_uri_handler(server, &upload);
   upload.method = HTTP_PUT;  // older apps
   httpd_register_uri_handler(server, &upload);
+  httpd_uri_t download = {};
+  download.uri = "/download";
+  download.method = HTTP_GET;
+  download.handler = handleDownload;
+  httpd_register_uri_handler(server, &download);
   httpd_uri_t done = {};
   done.uri = "/done";
   done.method = HTTP_POST;

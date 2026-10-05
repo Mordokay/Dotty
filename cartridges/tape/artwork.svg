@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Tape Recorder artwork for the iOS app (the e-paper icon is icon.png): a cassette under
+     the app icon's night sky, a firefly glowing in its window. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.7"/><stop offset="0.35" stop-color="#B8E04E" stop-opacity="0.25"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="shell" x1="0" y1="300" x2="0" y2="740" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#F6F1E3"/><stop offset="1" stop-color="#D6CFBC"/>
+  </linearGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="150" cy="170" r="5" opacity="0.9"/><circle cx="290" cy="100" r="3" opacity="0.6"/>
+  <circle cx="880" cy="140" r="4" opacity="0.8"/><circle cx="940" cy="420" r="3" opacity="0.5"/>
+  <circle cx="80" cy="520" r="3" opacity="0.5"/><circle cx="560" cy="70" r="2.5" opacity="0.5"/>
+  <circle cx="950" cy="760" r="4" opacity="0.7"/><circle cx="100" cy="860" r="2.5" opacity="0.4"/>
+  <circle cx="230" cy="950" r="3" opacity="0.5"/><circle cx="880" cy="930" r="3.5" opacity="0.6"/>
+</g>
+<circle cx="512" cy="512" r="430" fill="url(#halo)" opacity="0.5"/>
+<!-- cassette -->
+<rect x="172" y="300" width="680" height="440" rx="40" fill="url(#shell)"/>
+<rect x="232" y="350" width="560" height="140" rx="16" fill="#E9B94F"/>
+<rect x="232" y="350" width="560" height="38" rx="16" fill="#D9A23A"/>
+<rect x="312" y="420" width="400" height="120" rx="60" fill="#1B2232"/>
+<circle cx="400" cy="480" r="46" fill="#F6F1E3"/><circle cx="400" cy="480" r="18" fill="#1B2232"/>
+<circle cx="624" cy="480" r="46" fill="#F6F1E3"/><circle cx="624" cy="480" r="18" fill="#1B2232"/>
+<path d="M300 740 L340 640 L684 640 L724 740 Z" fill="#C7BFAA"/>
+<circle cx="380" cy="700" r="12" fill="#1B2232"/><circle cx="644" cy="700" r="12" fill="#1B2232"/>
+<!-- firefly in the window -->
+<circle cx="512" cy="470" r="70" fill="url(#halo)"/><circle cx="512" cy="470" r="7" fill="#FFFBD2"/>
+<!-- fireflies -->
+<circle cx="200" cy="230" r="70" fill="url(#halo)"/><circle cx="200" cy="230" r="7" fill="#FFFBD2"/>
+<circle cx="860" cy="840" r="60" fill="url(#halo)"/><circle cx="860" cy="840" r="6" fill="#FFFBD2"/>
+</svg>

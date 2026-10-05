@@ -1,0 +1,4 @@
+{
+  "description": "A pocket tape deck: hold BOOT to record, let go to pause, tap Save. Play recordings on Dotty, or listen, rename and share them from the app.",
+  "requires": ["sd", "wifi"]
+}

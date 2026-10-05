@@ -29,6 +29,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Touch coordinates map 1:1 onto the display (no rotation/mirroring).
 - Audio pins (from Waveshare's codec_board config): I2S MCLK 14, BCLK 15, WS 38,
   DOUT 45, DIN 16; amplifier enable GPIO46 (HIGH). ES8311 at I2C 0x18.
+- Microphone: analog, into the ES8311 ADC → I2S DIN, left slot of the stereo frames.
+  `Es8311::setMicrophone(on, gainDb)` = reg 0x0A bit 6 (ADC port mute) + reg 0x16 (PGA,
+  0..7 = 0..42 dB; 30 dB like Waveshare's default). Measured with a 0.5-16 kHz sweep from
+  the Mac speakers: strong response up to ~13.5 kHz, rolling off near 16 kHz; quiet room
+  ≈ -60 dBFS. So 32 kHz sampling is worth it (16 kHz would cut the 8-16 kHz "s" sounds).
 - Buttons are active-low with pull-ups. The PWR button is still held down right after a
   battery power-on, so ignore it until it has been released once.
 - Battery: `analogReadMilliVolts(4) * 2`.
@@ -277,6 +282,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   starts. Wi-Fi signal matters most (small antenna): at −85 dBm a stress test ran at 95–166
   KB/s; next to an iPhone hotspot the user measured > 500 KB/s. `transfer.start` replies
   `rssi`; below −75 dBm the app suggests the hotspot.
+- Downloads (Tape): `GET <url>/download?dir=&name=` with the token streams a data-folder file
+  in 16 KB chunked responses, borrowing an upload block (a static 16 KB buffer left the tape
+  cartridge without internal RAM for the upload blocks: "not enough memory for the transfer").
+  Measured 100 KB/s at −45 dBm; at −82 dBm only ~10 KB/s.
 - `esp_http_server` rejects URIs over 512 characters (`CONFIG_HTTPD_MAX_URI_LEN`) before any
   handler runs, so Dotty never logs it. iOS gives **decomposed** (NFD) file names — Korean
   ~1.7× longer — so the app sends `SongOutbox.storedName` (NFC, ≤ 120 bytes), keeping
@@ -403,6 +412,35 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - App: `Features/Album/` — tabs Photos (On Dotty card with the slideshow interval, grid with multi-select: add to album /
   delete) · Albums (covers; album page: show, lock-screen slideshow choice, add new or
   existing photos, drag a photo onto another to reorder, rename, delete).
+
+## Tape Recorder cartridge (`cartridges/tape/`)
+
+- `recorder.*`: a tape = one WAV (32 kHz, 16-bit mono, ~3.8 MB/min) in `data/recordings/`,
+  named after its start time (`20261006-091412.wav`; a rename keeps `.wav`). record() and
+  pause() alternate on the same tape; finish() closes it (an empty tape is deleted). A
+  reader task (core 0) pulls `AudioPlayer::capture()` blocks into a 128 KB PSRAM stream
+  buffer, a writer task (core 1) moves them to the card; pausing writes the header length
+  so a power cut keeps everything up to the last pause; boot repairs headers that disagree
+  with the file size. The I2S port runs at 32 kHz for the whole cartridge (TX and RX share
+  its clock: `AudioPlayer::begin(rate)`).
+- Controls: **BOOT held ≥ 120 ms = record, released = pause** (PWR is untouched: short =
+  lock, 2 s = off — the user first thought of PWR, which can't double as record). While
+  recording: the deck stays up, `shell::wake()` every pass (no auto-lock); locking anyway
+  pauses. Paused: may lock; the lock screen's bottom line says "Tape paused 0:42" (on a
+  charger too — the big battery already shows charging); BOOT does nothing while locked;
+  unlocking with a tape open returns to the deck. ■ Save on the deck closes the tape.
+- Screens: deck (cassette, ● REC time + 20-bar dB meter -60..0 dBFS, or PAUSED + Save),
+  recordings (paged, newest first, "Mon 6 Oct 09:14" + length), player (‹ › and swipes =
+  previous/next, volume row). Dev keys: `r` toggles a simulated BOOT hold, `v` saves, `w`
+  dumps the newest recording over serial as hex between `#WAV <size> <name>` / `#END`, `l`.
+- BLE: `tape.status` {state: idle|recording|paused, elapsed, playing?, paused?, position?,
+  volume}, `tape.list` {recordings[{name, title, size, duration, added}], rate},
+  `tape.play/toggle/stop`, `tape.volume {value}`, `tape.rename {name, to}`, `tape.delete
+  {name}`, `transfer.*`; events `tape.state`, `tape.list`.
+- App (`Features/Tape/`): rows with ▶ (fetches the WAV over Wi-Fi — `transfer.start`, `GET
+  /download?dir=recordings&name=…`, `/done` — into Caches/Recordings, then AVAudioPlayer),
+  share/save (ShareLink), menu: play on Dotty, rename, delete; a deck card while Dotty
+  records or plays.
 
 ## SD library + Wi-Fi fetch (launcher)
 

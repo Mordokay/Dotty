@@ -99,6 +99,13 @@ void Es8311::setVolume(uint8_t percent) {
   write(kRegDacVolume, reg);
 }
 
+void Es8311::setMicrophone(bool on, uint8_t gainDb) {
+  // Register 0x16: mic PGA, 0..7 = 0..42 dB. Register 0x0A bit 6 mutes the ADC port.
+  write(0x16, min<uint8_t>(gainDb, 42) / 6);
+  const uint8_t port = read(kRegSdpOut);
+  write(kRegSdpOut, on ? port & ~0x40 : port | 0x40);
+}
+
 void Es8311::setMute(bool mute) {
   const uint8_t value = read(kRegDacMute) & 0x9F;
   write(kRegDacMute, mute ? value | 0x60 : value);

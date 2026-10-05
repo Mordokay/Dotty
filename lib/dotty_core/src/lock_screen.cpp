@@ -91,10 +91,12 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
     art::drawPadlock(gfx, kW / 2, 100);
   }
 
-  // Bottom line: battery news first, then what's playing, or how to unlock.
+  // Bottom line: what's playing (or a paused recording) first — on a charger the big
+  // battery already says so — then battery news, or how to unlock.
   gfx.drawFastHLine(20, 166, kW - 40, kBlack);
   gfx.setFont(&FreeSans9pt7b);
-  if (info.externalPower) {
+  const bool chargerShown = info.externalPower && !widgetShown;
+  if (info.externalPower && (info.nowPlaying.isEmpty() || !chargerShown)) {
     ui::drawCentered(gfx, info.charging ? "Charging" : "Fully charged", 190);
   } else if (info.batteryLow) {
     ui::drawCentered(gfx, "Battery low - charge soon", 190);

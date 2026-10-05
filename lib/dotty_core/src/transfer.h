@@ -18,6 +18,8 @@
 //      nothing escapes it), written to <name>.part and renamed when complete.
 //      An upload with no data for 30 s is abandoned (its .part file deleted; leftovers
 //      from reboots are cleared when a session starts).
+//      The other way: GET <url>/download?dir=<folder>&name=<file> (same header) streams a
+//      file from the data folder to the phone (chunked).
 //   3. POST <url>/done (same header), BLE transfer.stop, or 1 minute without uploads ends
 //      the session: server and Wi-Fi off, BLE back on (the phone reconnects by itself).
 // Events (while BLE is on): transfer.received {dir, name, size} after each file.

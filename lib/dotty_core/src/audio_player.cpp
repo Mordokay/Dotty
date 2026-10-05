@@ -13,7 +13,6 @@
 namespace {
 
 constexpr size_t kInputBufferLen = 8 * 1024;
-constexpr uint32_t kDefaultSampleRate = 44100;
 
 I2SClass i2s;
 Es8311 codec;
@@ -42,18 +41,20 @@ size_t id3v2Size(File &f) {
 
 }  // namespace
 
-bool AudioPlayer::begin() {
+bool AudioPlayer::begin(uint32_t sampleRate) {
   pinMode(PIN_PA_EN, OUTPUT);
   digitalWrite(PIN_PA_EN, LOW);
   delay(50);
 
-  // Start I2S first so the codec sees MCLK while it is configured.
+  // Start I2S first so the codec sees MCLK while it is configured. TX and RX share the
+  // port's clock, so recording happens at this rate.
+  sampleRate_ = captureRate_ = sampleRate;
   i2s.setPins(PIN_I2S_BCLK, PIN_I2S_WS, PIN_I2S_DOUT, PIN_I2S_DIN, PIN_I2S_MCLK);
-  if (!i2s.begin(I2S_MODE_STD, kDefaultSampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) {
+  if (!i2s.begin(I2S_MODE_STD, sampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) {
     LOGE("audio", "I2S init failed");
     return false;
   }
-  if (!codec.begin(Wire, I2C_ADDR_ES8311, kDefaultSampleRate)) return false;
+  if (!codec.begin(Wire, I2C_ADDR_ES8311, sampleRate)) return false;
   codec.setVolume(volume_);
   digitalWrite(PIN_PA_EN, HIGH);
 
@@ -68,10 +69,27 @@ bool AudioPlayer::begin() {
 
 bool AudioPlayer::play(const char *path) {
   stop();
+  if (capturing_) return false;
   file = SD_MMC.open(path);
   if (!file) {
     LOGE("audio", "Cannot open %s", path);
     return false;
+  }
+  String lower = path;
+  lower.toLowerCase();
+  wav_ = lower.endsWith(".wav");
+  if (wav_) {
+    if (!openWav()) {
+      LOGE("audio", "%s: not a 16-bit PCM WAV", path);
+      file.close();
+      return false;
+    }
+    samplesPlayed_ = 0;
+    codec.setMute(false);
+    paused_ = false;
+    stopRequested_ = false;
+    playing_ = true;
+    return true;
   }
   const size_t audioBytes = file.size() - id3v2Size(file);
 
@@ -136,6 +154,101 @@ uint32_t AudioPlayer::positionMs() const {
   return sampleRate_ ? samplesPlayed_ * 1000 / sampleRate_ : 0;
 }
 
+// RIFF/WAVE: walks the chunks to "fmt " (PCM, 16-bit, 1-2 channels) and "data", and
+// leaves the file at the first sample.
+bool AudioPlayer::openWav() {
+  uint8_t riff[12];
+  if (file.read(riff, 12) != 12 || memcmp(riff, "RIFF", 4) != 0 || memcmp(riff + 8, "WAVE", 4) != 0) return false;
+  uint32_t rate = 0;
+  uint16_t channels = 0, bits = 0, format = 0;
+  for (;;) {
+    uint8_t header[8];
+    if (file.read(header, 8) != 8) return false;
+    uint32_t size;
+    memcpy(&size, header + 4, 4);
+    if (memcmp(header, "fmt ", 4) == 0) {
+      uint8_t fmt[16];
+      if (size < 16 || file.read(fmt, 16) != 16) return false;
+      memcpy(&format, fmt, 2);
+      memcpy(&channels, fmt + 2, 2);
+      memcpy(&rate, fmt + 4, 4);
+      memcpy(&bits, fmt + 14, 2);
+      file.seek(file.position() + size - 16 + (size & 1));
+    } else if (memcmp(header, "data", 4) == 0) {
+      if (format != 1 || bits != 16 || channels < 1 || channels > 2 || rate == 0) return false;
+      // A recording that never got its final header (power cut) says 0 or too much: use the file.
+      const uint32_t available = file.size() - file.position();
+      wavRemaining_ = size == 0 || size > available ? available : size;
+      wavChannels_ = channels;
+      durationMs_ = static_cast<uint64_t>(wavRemaining_) * 1000 / (rate * channels * 2);
+      if (rate != sampleRate_) {
+        sampleRate_ = rate;
+        i2s.configureTX(rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+        codec.setSampleRate(rate);
+      }
+      return true;
+    } else {
+      file.seek(file.position() + size + (size & 1));
+    }
+  }
+}
+
+// One block of WAV samples to the speaker (mono doubled to both sides).
+void AudioPlayer::playWav() {
+  const size_t frameBytes = wavChannels_ * 2;
+  const size_t want = min<size_t>(wavRemaining_, 512 * frameBytes);
+  const size_t got = want ? file.read(reinterpret_cast<uint8_t *>(pcm), want) : 0;
+  const size_t frames = got / frameBytes;
+  if (frames == 0) {
+    file.close();
+    playing_ = false;  // end of file
+    return;
+  }
+  wavRemaining_ -= frames * frameBytes;
+  if (wavChannels_ == 1) {
+    for (int i = frames - 1; i >= 0; i--) pcm[2 * i] = pcm[2 * i + 1] = pcm[i];
+  }
+  i2s.write(reinterpret_cast<uint8_t *>(pcm), frames * 2 * sizeof(int16_t));
+  samplesPlayed_ += frames;
+}
+
+bool AudioPlayer::startCapture(uint8_t gainDb) {
+  stop();
+  if (sampleRate_ != captureRate_) {  // a WAV at another rate played last
+    sampleRate_ = captureRate_;
+    i2s.configureTX(captureRate_, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    codec.setSampleRate(captureRate_);
+  }
+  digitalWrite(PIN_PA_EN, LOW);  // the amplifier only adds hiss to the microphone
+  codec.setMicrophone(true, gainDb);
+  // Drop what the DMA buffers held from before.
+  static int16_t discard[256 * 2];
+  for (int i = 0; i < 8; i++) i2s.readBytes(reinterpret_cast<char *>(discard), sizeof(discard));
+  capturing_ = true;
+  return true;
+}
+
+// The microphone arrives on the left slot of the stereo frames.
+size_t AudioPlayer::capture(int16_t *mono, size_t frames) {
+  static int16_t stereo[256 * 2];
+  size_t done = 0;
+  while (capturing_ && done < frames) {
+    const size_t want = min<size_t>(frames - done, 256);
+    const size_t got = i2s.readBytes(reinterpret_cast<char *>(stereo), want * 4) / 4;
+    if (got == 0) break;
+    for (size_t i = 0; i < got; i++) mono[done + i] = stereo[2 * i];
+    done += got;
+  }
+  return done;
+}
+
+void AudioPlayer::stopCapture() {
+  if (!capturing_) return;
+  capturing_ = false;
+  codec.setMicrophone(false);
+  if (!suspended_) digitalWrite(PIN_PA_EN, HIGH);
+}
+
 void AudioPlayer::taskEntry(void *arg) {
   static_cast<AudioPlayer *>(arg)->run();
 }
@@ -154,6 +267,10 @@ void AudioPlayer::run() {
     }
     if (!playing_ || paused_) {
       writeSilence();  // keeps I2S clocked and the DMA free of stale samples
+      continue;
+    }
+    if (wav_) {
+      playWav();
       continue;
     }
 
