@@ -41,19 +41,6 @@ struct MusicLibraryPage: View {
                 Text(model.songs.count == 1 ? "1 song" : "\(model.songs.count) songs")
                     .font(.lpTitle).foregroundStyle(Color.ink)
                 Spacer()
-                if model.songs.count > 1 {
-                    Menu {
-                        Picker("Sort by", selection: $sort) {
-                            ForEach(LibrarySort.allCases, id: \.self) { Label($0.title, systemImage: $0.symbol) }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(width: 40, height: 40)
-                    }
-                    .accessibilityLabel("Sort by \(sort.title)")
-                }
                 if !model.songs.isEmpty {
                     Button(selection == nil ? "Select" : "Done") {
                         withAnimation(.settle) { selection = selection == nil ? [] : nil }
@@ -63,6 +50,16 @@ struct MusicLibraryPage: View {
             }
             .padding(.horizontal, Spacing.m)
             .padding(.top, Spacing.s)
+
+            if model.songs.count > 1 {
+                // Shows the current order; a tap switches to the other one.
+                MorphButton(faces: LibrarySort.allCases.map(\.face),
+                            initial: LibrarySort.allCases.firstIndex(of: sort) ?? 0) { index in
+                    withAnimation(.settle) { sort = LibrarySort.allCases[index] }
+                }
+                .padding(.horizontal, Spacing.s)
+                .padding(.top, Spacing.s)
+            }
 
             if model.songs.count > 6 {
                 HStack(spacing: Spacing.s) {
@@ -131,8 +128,13 @@ struct MusicLibraryPage: View {
 enum LibrarySort: String, CaseIterable {
     case name, added
 
-    var title: String { self == .name ? "Name" : "Date added" }
-    var symbol: String { self == .name ? "textformat" : "calendar" }
+    /// The sort button's face for this order (MorphButton cycles through them).
+    var face: MorphFace {
+        switch self {
+        case .name: MorphFace(light: DottyLight.lagoon.color, title: "Sort by name", systemImage: "textformat")
+        case .added: MorphFace(light: DottyLight.amber.color, title: "Sort by date", systemImage: "calendar")
+        }
+    }
 
     func sorted(_ songs: [MusicModel.Song]) -> [MusicModel.Song] {
         switch self {

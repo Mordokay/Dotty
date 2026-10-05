@@ -90,20 +90,15 @@ struct PlaylistView: View {
                     .disabled(model.songs.isEmpty)
             }
             if songs.count > 1 {
-                HStack(spacing: Spacing.s) {
-                    Text("Drag ≡ to reorder · swipe left to remove")
-                        .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                    Spacer()
-                    Menu {
-                        Button("Name (A–Z)", systemImage: "textformat") { Task { await model.sort(name, byDateAdded: false) } }
-                        Button("Date added (newest first)", systemImage: "calendar") { Task { await model.sort(name, byDateAdded: true) } }
-                    } label: {
-                        Label("Sort", systemImage: "arrow.up.arrow.down")
-                            .font(.lpCallout.weight(.semibold))
-                            .foregroundStyle(Color.inkMuted)
-                            .frame(minHeight: 40)
-                    }
+                // Shows how the playlist was last sorted; a tap re-sorts it the other way.
+                MorphButton(faces: LibrarySort.allCases.map(\.face),
+                            initial: LibrarySort.allCases.firstIndex(of: lastSort) ?? 0) { index in
+                    let order = LibrarySort.allCases[index]
+                    UserDefaults.standard.set(order.rawValue, forKey: sortKey)
+                    Task { await model.sort(name, byDateAdded: order == .added) }
                 }
+                Text("Drag ≡ to reorder · swipe left to remove")
+                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
             }
         }
     }
@@ -128,6 +123,13 @@ struct PlaylistView: View {
     private func remove(_ song: String) {
         withAnimation(.settle) { songs.removeAll { $0 == song } }
         Task { await model.remove(song, from: name) }
+    }
+
+    private var sortKey: String { "music.playlistSort.\(name)" }
+
+    /// The order last applied to this playlist from this phone (name by default).
+    private var lastSort: LibrarySort {
+        UserDefaults.standard.string(forKey: sortKey).flatMap(LibrarySort.init(rawValue:)) ?? .name
     }
 
     private func title(_ song: String) -> String {

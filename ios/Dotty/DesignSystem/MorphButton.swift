@@ -14,7 +14,14 @@ struct MorphButton: View {
     let faces: [MorphFace]
     var action: (Int) -> Void = { _ in }
 
-    @State private var index = 0
+    @State private var index: Int
+
+    /// `initial` = the face shown first (e.g. a remembered setting).
+    init(faces: [MorphFace], initial: Int = 0, action: @escaping (Int) -> Void = { _ in }) {
+        self.faces = faces
+        self.action = action
+        _index = State(initialValue: min(max(initial, 0), faces.count - 1))
+    }
     @State private var widths: [Int: CGFloat] = [:]
     @State private var stretches = 0
 
