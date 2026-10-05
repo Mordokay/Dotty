@@ -5,6 +5,9 @@
 #include <Wire.h>
 
 #include "battery.h"
+
+#include <esp_core_dump.h>
+#include <esp_task_wdt.h>
 #include "board_pins.h"
 #include "cartridge.h"
 #include "core_ble.h"
@@ -28,6 +31,12 @@ constexpr uint32_t kLauncherComboMs = 1000;
 constexpr uint32_t kAutoLockMs = 2 * 60 * 1000;
 constexpr uint32_t kBatteryLogIntervalMs = 10 * 60 * 1000;
 constexpr uint32_t kPowerCardMs = 2500;
+// A cartridge's loop that doesn't come back for this long is stuck: the task watchdog
+// restarts Dotty (saving a core dump to flash). Well above the longest legit wait in a loop
+// pass (joining Wi-Fi, ~20 s; a locked minute of light sleep). Not in the launcher, whose
+// Bluetooth installs can block longer.
+constexpr uint32_t kLoopWatchdogMs = 90000;
+bool loopWatchdog = false;
 constexpr int kPartialRefreshesPerFull = 50;
 constexpr int16_t kW = EpdDisplay::kSize;
 
@@ -224,7 +233,9 @@ void loopLock() {
     sleepMs = min<uint32_t>(sleepMs, max<int32_t>(untilApp, 100));
   }
   power::setAudioRail(false);
+  if (loopWatchdog) esp_task_wdt_reset();  // a minute asleep is not a stuck loop
   const bool byButton = power::lightSleep(sleepMs);
+  if (loopWatchdog) esp_task_wdt_reset();
   power::setAudioRail(true);
   delay(2);
   if (byButton) {
@@ -282,6 +293,24 @@ void handlePairing() {
   }
 }
 
+// After a crash or watchdog restart: say so in the log, with the summary of the core dump
+// the crash left in flash (the full dump stays there for espcoredump until the next crash).
+void reportPreviousCrash() {
+  const esp_reset_reason_t why = esp_reset_reason();
+  if (why != ESP_RST_PANIC && why != ESP_RST_TASK_WDT && why != ESP_RST_INT_WDT && why != ESP_RST_WDT) return;
+  LOGW("boot", "the last run crashed (reset reason %d)", static_cast<int>(why));
+  auto *summary = static_cast<esp_core_dump_summary_t *>(malloc(sizeof(esp_core_dump_summary_t)));
+  if (summary && esp_core_dump_image_check() == ESP_OK && esp_core_dump_get_summary(summary) == ESP_OK) {
+    char bt[16 * 11 + 1] = "";
+    for (uint32_t i = 0; i < summary->exc_bt_info.depth && i < 16; i++) {
+      snprintf(bt + strlen(bt), sizeof(bt) - strlen(bt), " 0x%08lx", static_cast<unsigned long>(summary->exc_bt_info.bt[i]));
+    }
+    LOGW("crash", "task %s, pc 0x%08lx, backtrace%s", summary->exc_task,
+         static_cast<unsigned long>(summary->exc_pc), bt);
+  }
+  free(summary);
+}
+
 void logBattery() {
   static uint32_t lastLog = 0;
   if (lastLog != 0 && millis() - lastLog < kBatteryLogIntervalMs) return;
@@ -321,6 +350,16 @@ void begin(const Config &config) {
   const CartridgeInfo &me = cartridge::self();
   LOGI("boot", "=== Dotty %s %s === PSRAM %lu KB, heap %lu KB", me.name, me.version,
        ESP.getPsramSize() / 1024, ESP.getFreeHeap() / 1024);
+  reportPreviousCrash();
+  if (!cartridge::isLauncher()) {
+    esp_task_wdt_config_t wdt = {};
+    wdt.timeout_ms = kLoopWatchdogMs;
+    wdt.idle_core_mask = 1 << 0;  // as the core sets it up: CPU0's idle task
+    wdt.trigger_panic = true;
+    esp_task_wdt_reconfigure(&wdt);
+    enableLoopWDT();  // Arduino feeds it after every loop()
+    loopWatchdog = true;
+  }
 
   // The unpowered codec would hold the shared I2C bus down: switch the audio rail on first.
   power::setAudioRail(true);
