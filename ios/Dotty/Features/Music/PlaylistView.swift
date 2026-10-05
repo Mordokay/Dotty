@@ -13,7 +13,6 @@ struct PlaylistView: View {
     @State private var confirmDelete = false
     @State private var renaming = false
     @State private var newName = ""
-    @State private var editMode = EditMode.inactive
 
     init(model: MusicModel, name: String) {
         self.model = model
@@ -22,42 +21,28 @@ struct PlaylistView: View {
 
     var body: some View {
         LightField {
-            List {
-                header
-                    .moveDisabled(true)
-                    .deleteDisabled(true)
-                    .plainRow()
-                if loading {
-                    HStack { Spacer(); FireflyLoader(size: 64, label: "Loading"); Spacer() }
-                        .padding(.vertical, Spacing.l)
-                        .moveDisabled(true)
-                        .deleteDisabled(true)
-                        .plainRow()
-                } else if songs.isEmpty {
-                    LightRow(title: "No songs yet", subtitle: "Add some from your library", systemImage: "music.note")
-                        .glassSurface(cornerRadius: Radius.soft)
-                        .moveDisabled(true)
-                        .deleteDisabled(true)
-                        .plainRow()
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.l) {
+                    header
+                    if loading {
+                        HStack { Spacer(); FireflyLoader(size: 64, label: "Loading"); Spacer() }
+                            .padding(.vertical, Spacing.l)
+                    } else if songs.isEmpty {
+                        LightRow(title: "No songs yet", subtitle: "Add some from your library", systemImage: "music.note")
+                            .glassSurface(cornerRadius: Radius.soft)
+                    } else {
+                        ReorderableSongList(
+                            songs: songs,
+                            title: title,
+                            isPlaying: { model.now.queue == name && model.now.song == $0 && model.now.playing },
+                            onPlay: { song in Task { await model.play(playlist: name, song: song) } },
+                            onMove: move,
+                            onRemove: remove)
+                    }
+                    footer
                 }
-                ForEach(Array(songs.enumerated()), id: \.element) { index, song in
-                    LightRow(title: title(song), subtitle: "\(index + 1)",
-                             systemImage: model.now.queue == name && model.now.song == song && model.now.playing
-                                 ? "speaker.wave.2.fill" : "music.note",
-                             action: editMode.isEditing ? nil : { Task { await model.play(playlist: name, song: song) } })
-                        .glassSurface(cornerRadius: Radius.soft)
-                        .plainRow()
-                }
-                .onMove(perform: move)
-                .onDelete(perform: remove)
-                footer
-                    .moveDisabled(true)
-                    .deleteDisabled(true)
-                    .plainRow()
+                .padding(.horizontal, Spacing.l)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.editMode, $editMode)
         }
         .navigationTitle("")
         .task(id: model.libraryVersion) {
@@ -104,8 +89,10 @@ struct PlaylistView: View {
                     .buttonStyle(.quiet())
                     .disabled(model.songs.isEmpty)
             }
-            if songs.count > 1 || editMode.isEditing {
+            if songs.count > 1 {
                 HStack(spacing: Spacing.s) {
+                    Text("Drag ≡ to reorder · swipe left to remove")
+                        .font(.lpCaption).foregroundStyle(Color.inkMuted)
                     Spacer()
                     Menu {
                         Button("Name (A–Z)", systemImage: "textformat") { Task { await model.sort(name, byDateAdded: false) } }
@@ -116,16 +103,7 @@ struct PlaylistView: View {
                             .foregroundStyle(Color.inkMuted)
                             .frame(minHeight: 40)
                     }
-                    .disabled(editMode.isEditing)
-                    Button(editMode.isEditing ? "Done" : "Edit") {
-                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
-                    }
-                    .buttonStyle(.quiet())
                 }
-            }
-            if editMode.isEditing {
-                Text("Drag ≡ to reorder, tap ⊖ to remove a song. Sort ↑↓ puts the whole list in order.")
-                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
             }
         }
     }
@@ -142,31 +120,18 @@ struct PlaylistView: View {
     }
 
     /// Reorders here at once, then on Dotty (which reloads the list when done).
-    private func move(from source: IndexSet, to destination: Int) {
-        guard let from = source.first else { return }
-        songs.move(fromOffsets: source, toOffset: destination)
-        let to = destination > from ? destination - 1 : destination
-        guard to != from else { return }
+    private func move(from: Int, to: Int) {
+        withAnimation(.settle) { songs.insert(songs.remove(at: from), at: to) }
         Task { await model.move(in: name, from: from, to: to) }
     }
 
-    private func remove(at offsets: IndexSet) {
-        let removed = offsets.map { songs[$0] }
-        songs.remove(atOffsets: offsets)
-        Task { for song in removed { await model.remove(song, from: name) } }
+    private func remove(_ song: String) {
+        withAnimation(.settle) { songs.removeAll { $0 == song } }
+        Task { await model.remove(song, from: name) }
     }
 
     private func title(_ song: String) -> String {
         model.songs.first { $0.name == song }?.title ?? song
-    }
-}
-
-private extension View {
-    /// A list row without the list's own background, separator or insets.
-    func plainRow() -> some View {
-        listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: Spacing.xs, leading: Spacing.l, bottom: Spacing.xs, trailing: Spacing.l))
     }
 }
 
