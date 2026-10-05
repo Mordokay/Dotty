@@ -61,6 +61,73 @@ extension LightRow where Trailing == EmptyView {
     }
 }
 
+/// One option of a single choice (only one row of the group is chosen): no chevron, because
+/// tapping chooses instead of opening a screen. The chosen row's mark is a small light, like a
+/// switch that's on; `busy` shows a spinner there while the choice is being applied.
+struct ChoiceRow<Trailing: View>: View {
+    let title: String
+    var subtitle: String?
+    var systemImage: String?
+    var chosen: Bool
+    var busy = false
+    var light: Color = DottyLight.firefly.color
+    let action: () -> Void
+    /// Extra controls before the mark (e.g. a Remove button).
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.m) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color.glassStrong))
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.lpHeadline).foregroundStyle(Color.ink)
+                    if let subtitle {
+                        Text(subtitle).font(.lpCaption).foregroundStyle(Color.inkMuted)
+                    }
+                }
+                Spacer(minLength: Spacing.s)
+                trailing
+                mark
+            }
+            .padding(.horizontal, Spacing.m)
+            .padding(.vertical, Spacing.s)
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(RowButtonStyle())
+        .sensoryFeedback(Haptic.select, trigger: chosen)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+
+    @ViewBuilder private var mark: some View {
+        ZStack {
+            Circle().strokeBorder(chosen ? light.opacity(0.5) : Color.glassEdge, lineWidth: 1.5)
+            if busy {
+                ProgressView().controlSize(.small).tint(Color.ink)
+            } else if chosen {
+                LightOrb(color: light, size: 14)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .frame(width: 26, height: 26)
+        .animation(.settle, value: chosen)
+    }
+}
+
+extension ChoiceRow where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil, systemImage: String? = nil, chosen: Bool, busy: Bool = false,
+         light: Color = DottyLight.firefly.color, action: @escaping () -> Void) {
+        self.init(title: title, subtitle: subtitle, systemImage: systemImage, chosen: chosen, busy: busy,
+                  light: light, action: action) { EmptyView() }
+    }
+}
+
 private struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

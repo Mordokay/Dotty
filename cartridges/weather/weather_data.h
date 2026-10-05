@@ -43,18 +43,21 @@ struct Forecast {
   Day days[kDays];
 };
 
-// Settings (NVS "weather"). Location: automatic, or fixed at lat/lon with a name.
+// Settings (NVS "weather"). Location: automatic, or fixed at lat/lon with a name; `source`
+// says where a fixed one came from ("phone" = the iPhone's location, "city" = searched), so
+// the app can show which option is chosen.
 struct Settings {
   bool automatic = true;
   float lat = NAN, lon = NAN;
   String name;
+  String source;
   bool imperial = false;
 };
 
 void begin();  // settings + the cached forecast
 const Forecast &forecast();
 Settings settings();
-void setLocation(bool automatic, float lat, float lon, const String &name);
+void setLocation(bool automatic, float lat, float lon, const String &name, const String &source);
 void setImperial(bool imperial);
 
 struct FetchState {

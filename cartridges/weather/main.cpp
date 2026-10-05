@@ -26,7 +26,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.2.0");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.2.1");
 
 namespace {
 
@@ -372,6 +372,7 @@ void registerCommands() {
     loc["automatic"] = s.automatic;
     if (!s.automatic) {
       loc["name"] = s.name;
+      loc["source"] = s.source.length() ? s.source : String("city");
       loc["lat"] = s.lat;
       loc["lon"] = s.lon;
     }
@@ -393,7 +394,7 @@ void registerCommands() {
     reply["fetching"] = st.running;
     if (st.error.length()) reply["error"] = st.error;
   });
-  // {automatic: true} or {automatic: false, lat, lon, name}
+  // {automatic: true} or {automatic: false, lat, lon, name, source: phone|city}
   ble::on("weather.location", [](JsonObjectConst args, JsonObject reply) {
     const bool automatic = args["automatic"] | true;
     const float lat = args["lat"] | NAN, lon = args["lon"] | NAN;
@@ -402,7 +403,7 @@ void registerCommands() {
       reply["error"] = "lat and lon are needed";
       return;
     }
-    weather::setLocation(automatic, lat, lon, args["name"] | "");
+    weather::setLocation(automatic, lat, lon, args["name"] | "", args["source"] | "city");
   });
   ble::on("weather.units", [](JsonObjectConst args, JsonObject) {
     weather::setImperial(strcmp(args["units"] | "metric", "imperial") == 0);

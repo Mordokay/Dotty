@@ -328,9 +328,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Open-Meteo forecast (free, no key; `current` + 7 `daily` incl. max wind and its dominant
   direction, `timezone=auto`, imperial = `temperature_unit/wind_speed_unit/precipitation_unit`
   params) for a location that is automatic (ipwho.is from Dotty's public IP — off by a city on
-  a phone hotspot) or set from the app (iPhone location via CoreLocation, or a city from
-  Open-Meteo geocoding, searched on the phone). Settings in NVS `weather` (auto, lat, lon,
-  name, imperial). Fetched hourly (retry 10 min) by a background task (core 0, 12 KB), also
+  a phone hotspot) or set from the app: the iPhone's location (CoreLocation, named by MapKit
+  reverse geocoding) or any address/place picked on an Apple Maps sheet (`PlacePicker.swift`:
+  `MKLocalSearchCompleter` suggestions as you type, the map follows the best match after a
+  350 ms pause, MKLocalSearch resolves it). Open-Meteo takes any coordinates (gridded
+  models), so every MapKit result works; Dotty's title gets the town (`cityName`). Settings
+  in NVS `weather` (auto, lat, lon, name, source = phone|city, imperial). Fetched hourly (retry 10 min) by a background task (core 0, 12 KB), also
   while locked; the raw answer is cached as `data/forecast.json` + `forecast.meta`.
 - **No inside reading**: the board's SHTC3 (I2C 0x70) read 29 °C in a 21 °C room — Dotty's
   own heat, varying with Wi-Fi/charging/screen, so a fixed offset can't fix it. Removed in
@@ -348,9 +351,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   clouds are outlined by insetting each part, and a cloud over a sun/moon clears a gap of
   its own shape). Lock widget = a card: 48 px icon, "23°  19/26°", rain chance + words,
   sunset/sunrise.
-- BLE: `weather.status` {location{automatic, name?, lat?, lon?}, units, now?{place, temp,
+- BLE: `weather.status` {location{automatic, name?, lat?, lon?, source?}, units, now?{place, temp,
   feels, humidity, code, description, wind, uv, fetchedAt}, fetching, error?},
-  `weather.location {automatic, lat, lon, name}`, `weather.units {units: metric|imperial}`,
+  `weather.location {automatic, lat, lon, name, source: phone|city}`, `weather.units {units: metric|imperial}`,
   `weather.refresh`; event `weather.changed`. App: `Features/Weather/WeatherView.swift`
   (location permission text = `INFOPLIST_KEY_NSLocationWhenInUseUsageDescription`).
 
@@ -452,6 +455,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   it vanishes on reconnect. Controls that need Dotty use `.needsDotty(link)` (disabled +
   dimmed). Exceptions: no notice during a cartridge install or a Music sync (Dotty drops
   the link on purpose), and Music stays enabled while syncing.
+- Rows: `LightRow` with an action shows a chevron = opens something. A single choice
+  (Weather location, Wi-Fi preferred network) uses `ChoiceRow` instead: no chevron, a
+  ring on the right that lights up when chosen (spinner while applying), optional
+  trailing controls. Plain actions (e.g. "Update") are buttons in a row, not row taps.
 - The dashboard's NavigationStack uses a `NavigationPath` (a typed `[Route]` path silently
   ignored links to pushed screens' own destinations, e.g. a Music playlist).
 - Per-cartridge screens: `DashboardView.route(for:)` maps a running cartridge id to its

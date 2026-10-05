@@ -1,4 +1,5 @@
 import CoreLocation
+import MapKit
 import SwiftUI
 
 /// The Weather Station cartridge's screen: what Dotty shows now, where the forecast is for
@@ -9,11 +10,14 @@ struct WeatherView: View {
     @State private var status: Status?
     @State private var error: String?
     @State private var searching = false
-    @State private var locating = false
+    @State private var applying: Source?
     @State private var locator = OneShotLocation()
 
+    /// Where the forecast is for: one of the three, chosen in the Location card.
+    enum Source { case automatic, phone, city }
+
     struct Status {
-        var automatic = true
+        var source = Source.automatic
         var placeName = ""
         var imperial = false
         var place = ""
@@ -60,7 +64,7 @@ struct WeatherView: View {
             }
         }
         .sheet(isPresented: $searching) {
-            CitySearchSheet { city in Task { await setLocation(city) } }
+            PlacePicker { place in Task { await setLocation(place) } }
                 .presentationDetents([.large])
                 .presentationBackground(.clear)
         }
@@ -76,27 +80,38 @@ struct WeatherView: View {
             LightRow(title: "Feels like", subtitle: "With wind and humidity", systemImage: "thermometer.medium") {
                 Text(reading(s.feels, nil, imperial: s.imperial))
             }
-            LightRow(title: s.fetching ? "Updating…" : "Update now",
+            LightRow(title: s.fetching ? "Updating…" : "Forecast",
                      subtitle: s.fetchError.map { "Last try: \($0)" } ?? s.fetchedAt.map { "Updated \($0.formatted(.relative(presentation: .named))) · every hour" },
-                     systemImage: "arrow.clockwise",
-                     action: s.fetching ? nil : { Task { await refresh() } })
+                     systemImage: "arrow.clockwise") {
+                if s.fetching {
+                    ProgressView().controlSize(.small).tint(Color.ink)
+                } else {
+                    Button("Update") { Task { await refresh() } }.buttonStyle(.quiet())
+                }
+            }
         }
     }
 
     private func locationCard(_ s: Status) -> some View {
         GlassCard(title: "Location") {
-            LightRow(title: "Automatic", subtitle: "From Dotty's internet connection",
-                     systemImage: s.automatic ? "checkmark.circle.fill" : "circle",
-                     action: { Task { await setAutomatic() } })
-            LightRow(title: "This iPhone's location", subtitle: locating ? "Finding you…" : "Exact, sent to Dotty once",
-                     systemImage: "location",
-                     action: { Task { await useMyLocation() } })
-            LightRow(title: s.automatic ? "Choose a city" : s.placeName.isEmpty ? "Chosen place" : s.placeName,
-                     subtitle: s.automatic ? "Search by name" : "Tap to choose another",
-                     systemImage: s.automatic ? "magnifyingglass" : "checkmark.circle.fill",
-                     action: { searching = true })
-            if s.automatic {
-                Text("On your iPhone's hotspot the automatic place can be off by a city; pick one instead.")
+            ChoiceRow(title: "Automatic",
+                      subtitle: s.source == .automatic && !s.place.isEmpty ? "\(s.place), found from Dotty's internet"
+                                                                         : "Found from Dotty's internet connection",
+                      systemImage: "globe", chosen: s.source == .automatic, busy: applying == .automatic) {
+                Task { await setAutomatic() }
+            }
+            ChoiceRow(title: "This iPhone's location",
+                      subtitle: s.source == .phone ? "\(s.placeName) · tap to update" : "Sent to Dotty once",
+                      systemImage: "location", chosen: s.source == .phone, busy: applying == .phone) {
+                Task { await useMyLocation() }
+            }
+            ChoiceRow(title: s.source == .city ? s.placeName : "A place",
+                      subtitle: s.source == .city ? "Tap to choose another" : "Any address or city, on a map",
+                      systemImage: "map", chosen: s.source == .city, busy: applying == .city) {
+                searching = true
+            }
+            if s.source == .automatic {
+                Text("On your iPhone's hotspot the automatic place can be off by a city; choose one instead.")
                     .font(.lpCaption).foregroundStyle(Color.inkFaint)
                     .padding(.horizontal, Spacing.m).padding(.bottom, Spacing.s)
             }
@@ -132,7 +147,8 @@ struct WeatherView: View {
             let r = try await link.send("weather.status")
             var s = Status()
             let location = r["location"] as? [String: Any] ?? [:]
-            s.automatic = location["automatic"] as? Bool ?? true
+            let automatic = location["automatic"] as? Bool ?? true
+            s.source = automatic ? .automatic : (location["source"] as? String) == "phone" ? .phone : .city
             s.placeName = location["name"] as? String ?? ""
             s.imperial = (r["units"] as? String) == "imperial"
             if let now = r["now"] as? [String: Any] {
@@ -171,25 +187,41 @@ struct WeatherView: View {
     private func setUnits(imperial: Bool) async {
         await command("weather.units", ["units": imperial ? "imperial" : "metric"])
     }
-    private func setAutomatic() async { await command("weather.location", ["automatic": true]) }
-    private func setLocation(_ city: City) async {
-        await command("weather.location", ["automatic": false, "lat": city.latitude, "lon": city.longitude, "name": city.name])
+    private func setAutomatic() async {
+        applying = .automatic
+        defer { applying = nil }
+        await command("weather.location", ["automatic": true])
+    }
+
+    private func setLocation(_ city: City, source: Source = .city) async {
+        applying = source
+        defer { applying = nil }
+        await command("weather.location", ["automatic": false, "lat": city.latitude, "lon": city.longitude,
+                                           "name": city.name, "source": source == .phone ? "phone" : "city"])
     }
 
     private func useMyLocation() async {
-        locating = true
-        defer { locating = false }
+        applying = .phone
+        defer { applying = nil }
         do {
             let location = try await locator.current()
-            await setLocation(City(name: "My location", detail: "", latitude: location.coordinate.latitude,
-                                   longitude: location.coordinate.longitude))
+            let name = await Self.placeName(of: location) ?? "My location"
+            await setLocation(City(name: name, detail: "", latitude: location.coordinate.latitude,
+                                   longitude: location.coordinate.longitude), source: .phone)
         } catch {
             self.error = "Couldn't get this iPhone's location. Allow Location for Dotty in Settings."
         }
     }
+
+    /// The town at a location ("Lisbon"), so Dotty's title shows a name rather than "My location".
+    private static func placeName(of location: CLLocation) async -> String? {
+        guard let request = MKReverseGeocodingRequest(location: location),
+              let item = try? await request.mapItems.first else { return nil }
+        return item.addressRepresentations?.cityName ?? item.name
+    }
 }
 
-// MARK: - City search
+// MARK: - Places
 
 struct City: Identifiable, Hashable {
     var id: String { "\(name)\(latitude)\(longitude)" }
@@ -197,70 +229,6 @@ struct City: Identifiable, Hashable {
     let detail: String
     let latitude: Double
     let longitude: Double
-}
-
-/// Search a city by name with Open-Meteo's free geocoding (no key), from the phone.
-private struct CitySearchSheet: View {
-    var onPick: (City) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var results: [City] = []
-    @State private var failed = false
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.l) {
-            Text("Choose a city").font(.lpTitle).foregroundStyle(Color.ink)
-            TextField("City", text: $query)
-                .font(.lpBody)
-                .foregroundStyle(Color.ink)
-                .focused($focused)
-                .autocorrectionDisabled()
-                .padding(Spacing.l)
-                .glassSurface(cornerRadius: Radius.soft)
-            if failed {
-                Text("Couldn't search. Check your internet connection.").font(.lpCallout).foregroundStyle(DottyLight.ember.color)
-            }
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(results) { city in
-                        LightRow(title: city.name, subtitle: city.detail, systemImage: "mappin.and.ellipse",
-                                 action: { onPick(city); dismiss() })
-                    }
-                }
-            }
-            Button("Cancel") { dismiss() }.buttonStyle(.quiet())
-        }
-        .padding(Spacing.xl)
-        .glassSurface(cornerRadius: Radius.sheet, frosted: true)
-        .padding(Spacing.s)
-        .onAppear { focused = true }
-        .task(id: query) {
-            let text = query.trimmingCharacters(in: .whitespaces)
-            guard text.count >= 2 else { results = []; return }
-            try? await Task.sleep(for: .milliseconds(300))  // wait for typing to pause
-            guard !Task.isCancelled else { return }
-            await search(text)
-        }
-    }
-
-    private func search(_ text: String) async {
-        var components = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
-        components.queryItems = [URLQueryItem(name: "name", value: text), URLQueryItem(name: "count", value: "8")]
-        do {
-            let (data, _) = try await URLSession.shared.data(from: components.url!)
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            results = (json?["results"] as? [[String: Any]] ?? []).compactMap { r in
-                guard let name = r["name"] as? String, let lat = r["latitude"] as? Double,
-                      let lon = r["longitude"] as? Double else { return nil }
-                let detail = [r["admin1"] as? String, r["country"] as? String].compactMap { $0 }.joined(separator: ", ")
-                return City(name: name, detail: detail, latitude: lat, longitude: lon)
-            }
-            failed = false
-        } catch {
-            failed = true
-        }
-    }
 }
 
 // MARK: - One location reading

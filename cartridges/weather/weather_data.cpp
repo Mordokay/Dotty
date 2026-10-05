@@ -167,6 +167,7 @@ void begin() {
   prefs.lat = p.getFloat("lat", NAN);
   prefs.lon = p.getFloat("lon", NAN);
   prefs.name = p.getString("name", "");
+  prefs.source = p.getString("source", "");
   prefs.imperial = p.getBool("imperial", false);
   p.end();
   storage::makeDirs(storage::myDataDir());
@@ -181,17 +182,19 @@ Settings settings() {
   return prefs;
 }
 
-void setLocation(bool automatic, float lat, float lon, const String &name) {
+void setLocation(bool automatic, float lat, float lon, const String &name, const String &source) {
   prefs.automatic = automatic;
   prefs.lat = lat;
   prefs.lon = lon;
   prefs.name = name;
+  prefs.source = automatic ? String() : source;
   Preferences p;
   p.begin("weather", false);
   p.putBool("auto", automatic);
   p.putFloat("lat", lat);
   p.putFloat("lon", lon);
   p.putString("name", name);
+  p.putString("source", prefs.source);
   p.end();
   everTried = false;  // fetch for the new place right away
 }

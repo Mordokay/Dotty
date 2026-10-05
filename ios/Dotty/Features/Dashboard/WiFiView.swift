@@ -74,13 +74,15 @@ struct WiFiView: View {
     /// Saved networks, and which one Dotty uses: automatic (the strongest) or a picked one.
     private var savedCard: some View {
         GlassCard(title: "Saved on Dotty") {
-            LightRow(title: "Automatic", subtitle: "Joins the strongest saved network",
-                     systemImage: state.preferred.isEmpty ? "checkmark.circle.fill" : "circle",
-                     action: { Task { await prefer("") } })
+            ChoiceRow(title: "Automatic", subtitle: "Joins the strongest saved network",
+                      systemImage: "wifi", chosen: state.preferred.isEmpty) {
+                Task { await prefer("") }
+            }
             ForEach(state.saved, id: \.self) { name in
-                LightRow(title: name, subtitle: state.detail(for: name),
-                         systemImage: state.preferred == name ? "checkmark.circle.fill" : "circle",
-                         action: { Task { await prefer(name) } }) {
+                ChoiceRow(title: name, subtitle: state.detail(for: name), systemImage: "wifi.router",
+                          chosen: state.preferred == name) {
+                    Task { await prefer(name) }
+                } trailing: {
                     Button("Remove") { Task { await remove(name) } }
                         .buttonStyle(.quiet(DottyLight.ember.color))
                 }
