@@ -19,10 +19,11 @@
 #include "library.h"
 #include "log.h"
 #include "net.h"
+#include "storage.h"
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.5.5");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.6.0");
 
 namespace {
 
@@ -527,6 +528,13 @@ void setup() {
   shell::begin(config);
 
   hasCartridge = cartridge::readInstalled(installed);
+  // Removing the installed cartridge (storage.remove) empties the slot as well.
+  storage::onRemove([](const String &id) {
+    if (!hasCartridge || id != installed.id) return;
+    cartridge::eraseInstalled();
+    hasCartridge = false;
+    shell::showApp();
+  });
   if (hasCartridge) {
     LOGI("launcher", "installed: %s %s", installed.name, installed.version);
   } else {

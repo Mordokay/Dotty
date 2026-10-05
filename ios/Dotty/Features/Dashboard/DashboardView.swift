@@ -124,13 +124,6 @@ struct DashboardView: View {
                     Text(serial).font(.lpCaption.monospaced())
                 }
             }
-            HStack {
-                Spacer()
-                LightOrb(color: DottyLight.firefly.color, size: 72, pulse: link.connection == .connected)
-                    .opacity(link.connection == .connected ? 1 : 0.35)
-                    .padding(.vertical, Spacing.l)
-                Spacer()
-            }
         }
     }
 

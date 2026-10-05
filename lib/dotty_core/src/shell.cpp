@@ -11,6 +11,7 @@
 #include "lock_screen.h"
 #include "log.h"
 #include "net.h"
+#include "storage.h"
 #include "power.h"
 #include "ui.h"
 
@@ -298,6 +299,7 @@ void begin(const Config &config) {
   LOGI("boot", "rtc %s", rtc.begin(Wire) ? "ok" : "FAILED");
   ble::begin();
   net::registerCommands();
+  storage::registerCommands();
   lastInteraction = millis();
 }
 

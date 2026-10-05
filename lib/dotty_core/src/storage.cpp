@@ -1,15 +1,18 @@
 #include "storage.h"
 
+#include <Preferences.h>
 #include <SD_MMC.h>
 
 #include "board_pins.h"
 #include "cartridge.h"
+#include "core_ble.h"
 #include "log.h"
 
 namespace storage {
 namespace {
 
 bool mounted = false;
+std::function<void(const String &)> removeHook;
 constexpr size_t kMaxNameBytes = 120;
 
 bool isFirmwareFile(const String &name) {
@@ -49,7 +52,94 @@ void migrate() {
   removeTree("/music");
 }
 
+uint64_t treeBytes(const String &path) {
+  File dir = SD_MMC.open(path);
+  if (!dir || !dir.isDirectory()) return 0;
+  uint64_t total = 0;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    if (f.isDirectory()) {
+      const String child = path + "/" + f.name();
+      f.close();
+      total += treeBytes(child);
+    } else {
+      total += f.size();
+    }
+  }
+  return total;
+}
+
 }  // namespace
+
+std::vector<CartridgeFiles> cartridges() {
+  std::vector<CartridgeFiles> out;
+  if (!mounted) return out;
+  File root = SD_MMC.open(kRoot);
+  for (File dir = root ? root.openNextFile() : File(); dir; dir = root.openNextFile()) {
+    if (!dir.isDirectory()) continue;
+    CartridgeFiles c;
+    c.id = dir.name();
+    dir.close();
+    File fw = SD_MMC.open(firmwareDir(c.id));
+    for (File f = fw ? fw.openNextFile() : File(); f; f = fw.openNextFile()) {
+      const String name = f.name();
+      if (!f.isDirectory() && name.endsWith(".bin")) c.versions.push_back(name.substring(0, name.length() - 4));
+    }
+    c.dataBytes = treeBytes(dataDir(c.id));
+    if (!c.versions.empty() || c.dataBytes > 0) out.push_back(c);
+  }
+  return out;
+}
+
+bool removeCartridge(const String &id, bool withData, String &error) {
+  if (safeName(id) != id || id.isEmpty() || id == "launcher") {
+    error = "not a cartridge";
+    return false;
+  }
+  if (id == cartridge::self().id) {
+    error = "switch to the launcher first";
+    return false;
+  }
+  if (removeHook) removeHook(id);
+  if (mounted) {
+    removeTree(firmwareDir(id));
+    if (withData) removeTree(cartridgeDir(id));
+  }
+  if (withData) {
+    Preferences prefs;  // the cartridge's own settings (e.g. music/shuffle)
+    if (prefs.begin(id.c_str(), false)) {
+      prefs.clear();
+      prefs.end();
+    }
+  }
+  LOGI("storage", "removed %s (%s)", id.c_str(), withData ? "with its data" : "kept its data");
+  return true;
+}
+
+void onRemove(std::function<void(const String &id)> hook) {
+  removeHook = std::move(hook);
+}
+
+void registerCommands() {
+  ble::on("storage.list", [](JsonObjectConst, JsonObject reply) {
+    JsonArray list = reply["cartridges"].to<JsonArray>();
+    for (const CartridgeFiles &c : cartridges()) {
+      JsonObject o = list.add<JsonObject>();
+      o["id"] = c.id;
+      JsonArray versions = o["versions"].to<JsonArray>();
+      for (const String &v : c.versions) versions.add(v);
+      o["data"] = c.dataBytes;
+    }
+    if (mounted) reply["free"] = SD_MMC.totalBytes() - SD_MMC.usedBytes();
+  });
+  // {id, data}: data = true also deletes the cartridge's files and settings.
+  ble::on("storage.remove", [](JsonObjectConst args, JsonObject reply) {
+    String error;
+    if (!removeCartridge(args["id"] | "", args["data"] | false, error)) {
+      reply["ok"] = false;
+      reply["error"] = error;
+    }
+  });
+}
 
 bool begin() {
   if (mounted) return true;

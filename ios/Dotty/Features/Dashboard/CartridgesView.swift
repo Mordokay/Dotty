@@ -9,6 +9,15 @@ struct CartridgesView: View {
     @State private var install: InstallState?
     @State private var confirmOlder: CatalogCartridge?
     @State private var success: String?
+    /// What each cartridge has on Dotty's SD card (storage.list), by id.
+    @State private var onCard: [String: CardFiles] = [:]
+    @State private var confirmRemove: CatalogCartridge?
+    @State private var removing: String?
+
+    struct CardFiles {
+        let versions: [String]
+        let dataBytes: Int64
+    }
 
     /// How a catalog entry relates to what's on Dotty.
     enum Relation {
@@ -66,6 +75,22 @@ struct CartridgesView: View {
         .animation(.settle, value: success)
         .sensoryFeedback(.success, trigger: success) { _, new in new != nil }
         .task { await load() }
+        .task(id: link.info?.id) { await loadCard() }
+        .confirmationDialog(confirmRemove.map { "Remove \($0.name) from Dotty?" } ?? "",
+                            isPresented: Binding(get: { confirmRemove != nil }, set: { if !$0 { confirmRemove = nil } }),
+                            titleVisibility: .visible, presenting: confirmRemove) { cartridge in
+            let data = onCard[cartridge.id]?.dataBytes ?? 0
+            if data > 0 {
+                Button("Remove, keep \(dataName(cartridge)) (\(bytes(data)))") { Task { await remove(cartridge, withData: false) } }
+                Button("Remove everything", role: .destructive) { Task { await remove(cartridge, withData: true) } }
+            } else {
+                Button("Remove", role: .destructive) { Task { await remove(cartridge, withData: true) } }
+            }
+        } message: { cartridge in
+            Text((onCard[cartridge.id]?.dataBytes ?? 0) > 0
+                 ? "Its firmware is deleted from the SD card. Keep \(dataName(cartridge)) to have them back if you install it again."
+                 : "Its firmware is deleted from the SD card.")
+        }
         .confirmationDialog("Install an older version?", isPresented: Binding(
             get: { confirmOlder != nil }, set: { if !$0 { confirmOlder = nil } }), titleVisibility: .visible,
             presenting: confirmOlder) { cartridge in
@@ -101,6 +126,7 @@ struct CartridgesView: View {
                     }
                     actions(for: cartridge, relation: relation)
                         .padding(.top, Spacing.s)
+                    removeRow(for: cartridge, relation: relation)
                 }
             }
             .padding(Spacing.m)
@@ -137,6 +163,43 @@ struct CartridgesView: View {
                 .buttonStyle(.light())
                 .disabled(busy)
         }
+    }
+
+    /// "On Dotty: 2 versions · songs and playlists 85 MB" and Remove, for cartridges on Dotty.
+    @ViewBuilder
+    private func removeRow(for cartridge: CatalogCartridge, relation: Relation) -> some View {
+        let files = onCard[cartridge.id]
+        let installed: Bool = { if case .notInstalled = relation { return false } else { return true } }()
+        if (installed || files != nil), link.info?.supports("storage") == true {
+            HStack(spacing: Spacing.m) {
+                Text(cardSummary(cartridge, files: files, installed: installed))
+                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button(removing == cartridge.id ? "Removing…" : "Remove") { confirmRemove = cartridge }
+                    .buttonStyle(.quiet(DottyLight.ember.color))
+                    .disabled(removing != nil || (install != nil && install?.error == nil))
+            }
+            .padding(.top, Spacing.xs)
+        }
+    }
+
+    private func cardSummary(_ cartridge: CatalogCartridge, files: CardFiles?, installed: Bool) -> String {
+        var parts: [String] = []
+        if installed { parts.append("Installed") }
+        if let files, !files.versions.isEmpty {
+            parts.append(files.versions.count == 1 ? "1 copy on the card" : "\(files.versions.count) copies on the card")
+        }
+        if let files, files.dataBytes > 0 { parts.append("\(dataName(cartridge)) \(bytes(files.dataBytes))") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func dataName(_ cartridge: CatalogCartridge) -> String {
+        cartridge.id == "music" ? "songs and playlists" : "its data"
+    }
+
+    private func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 
     /// Compares with the running cartridge, or the installed one while the launcher is up.
@@ -180,6 +243,40 @@ struct CartridgesView: View {
         }
     }
 
+    private func loadCard() async {
+        guard link.connection == .connected, link.info?.supports("storage") == true,
+              let reply = try? await link.send("storage.list") else { return }
+        var found: [String: CardFiles] = [:]
+        for item in reply["cartridges"] as? [[String: Any]] ?? [] {
+            guard let id = item["id"] as? String else { continue }
+            found[id] = CardFiles(versions: item["versions"] as? [String] ?? [],
+                                  dataBytes: (item["data"] as? NSNumber)?.int64Value ?? 0)
+        }
+        onCard = found
+    }
+
+    /// Deletes the cartridge's firmware copies (and, with withData, its files and settings).
+    /// A running cartridge can't remove itself, so Dotty switches to the launcher first; the
+    /// launcher also empties the slot when the installed cartridge goes.
+    private func remove(_ cartridge: CatalogCartridge, withData: Bool) async {
+        removing = cartridge.id
+        defer { removing = nil }
+        do {
+            if let info = link.info, !info.isLauncher, info.id == cartridge.id {
+                try await link.ensureLauncher()
+            }
+            try await link.send("storage.remove", ["id": cartridge.id, "data": withData])
+            link.refreshInfo()
+            await loadCard()
+            success = withData ? "\(cartridge.name) was removed."
+                               : "\(cartridge.name) was removed. Its \(dataName(cartridge)) stay on the card."
+            try? await Task.sleep(for: .seconds(2.5))
+            success = nil
+        } catch {
+            loadError = "Couldn't remove \(cartridge.name): \(error.localizedDescription)"
+        }
+    }
+
     private func installCartridge(_ cartridge: CatalogCartridge) async {
         install = InstallState(cartridge: cartridge)
         do {
@@ -202,6 +299,7 @@ struct CartridgesView: View {
             try await link.waitForReconnect()
             // Short confirmation that goes away by itself.
             install = nil
+            await loadCard()
             success = "\(cartridge.name) \(cartridge.version) is installed."
             try? await Task.sleep(for: .seconds(2.5))
             success = nil

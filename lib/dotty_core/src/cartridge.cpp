@@ -41,6 +41,18 @@ bool readInstalled(CartridgeInfo &out) {
   return out.magic == kCartridgeMagic;
 }
 
+bool eraseInstalled() {
+  const esp_partition_t *part = slot();
+  const esp_partition_t *factory =
+      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
+  if (!part || !factory) return false;
+  if (esp_ota_set_boot_partition(factory) != ESP_OK) return false;
+  // Without its header the image is invalid: readInstalled() fails, the bootloader skips it.
+  const bool ok = esp_partition_erase_range(part, 0, 4096) == ESP_OK;
+  LOGI("cartridge", "installed cartridge erased: %s", ok ? "ok" : "FAILED");
+  return ok;
+}
+
 void rebootToLauncher() {
   const esp_partition_t *factory =
       esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);

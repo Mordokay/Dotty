@@ -203,6 +203,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   the launcher) and `data/` (the cartridge's own files; `storage::myDataDir()`).
 - `storage::begin()` mounts the card and migrates older layouts once (firmware files at
   the top of `/cartridges/<id>/` → `firmware/`, `/music/*` → music `data/library/`).
+- Removing a cartridge (`storage.remove {id, data}`, every firmware): deletes
+  `firmware/`; with `data` also `data/` and the NVS namespace named after the cartridge id
+  (cartridges keep their settings there, e.g. `music/shuffle`); without it the data stays
+  for a reinstall. A firmware can't remove itself (the app switches to the launcher first);
+  the launcher's `storage::onRemove` hook empties ota_0 (`cartridge::eraseInstalled`) when
+  the installed one goes. `storage.list` → {cartridges: [{id, versions, data}], free}.
+- The system clock follows the RTC (set on every `RtcClock::read/write`), so SD file dates
+  are local time; songs report them as `added`.
 - Names from the phone go through `storage::safeName` (one path segment, no dots first,
   ≤ 120 bytes keeping the extension and whole UTF-8 characters — cutting `.mp3` off hid
   long-named songs from the library). The app mirrors it in `SongOutbox.storedName`.
@@ -250,9 +258,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   song counts, current one inverted, paged with a `< 1/2 >` row); picking one plays it and
   pops back to the player.
   A receiving screen shows while a Wi-Fi transfer is active.
+- Screen text goes through `ui::printable` (fonts are ASCII only: curly quotes/dashes are
+  mapped, Korean/Chinese dropped with their empty brackets; all-foreign titles fall back
+  to "Song N"). Player title = one line + "4 / 15" below; the receiving screen wraps to 2
+  lines (`ui::drawWrapped`).
 - Commands: `music.status`, `music.toggle`, `music.next`, `music.prev`, `music.volume
   {value}`, `music.shuffle {on}`, `music.play {playlist?, index?, song?}`, `music.library` (songs + playlists),
-  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.rename {name, to}`, `music.playlist.add
+  `music.playlist {name}`, `music.playlist.create/delete {name}`, `music.playlist.rename {name, to}`, `music.playlist.move {name, from, to}`, `music.playlist.add
   {name, songs[]}`, `music.playlist.remove {name, song}`, `music.song.delete {name}`,
   plus `transfer.*`. Events: `music.state` (on change, every 5 s while playing),
   `music.library` (library or playlists changed).
