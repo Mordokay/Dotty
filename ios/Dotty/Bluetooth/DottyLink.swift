@@ -214,6 +214,15 @@ final class DottyLink: NSObject {
         let waiters = readyWaiters
         readyWaiters = []
         waiters.forEach { $0.resume() }
+        Task { await syncClock() }
+    }
+
+    /// Dotty's clock chip drifts and most cartridges have no other time source, so every
+    /// connection sets it to this iPhone's local time (seconds since 1970, zone applied).
+    private func syncClock() async {
+        let now = Date()
+        let local = Int(now.timeIntervalSince1970) + TimeZone.current.secondsFromGMT(for: now)
+        _ = try? await send("core.time", ["local": local])  // older firmware: "unknown command"
     }
 
     private func handle(_ message: DottyMessage) {

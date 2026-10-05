@@ -32,8 +32,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Buttons are active-low with pull-ups. The PWR button is still held down right after a
   battery power-on, so ignore it until it has been released once.
 - Battery: `analogReadMilliVolts(4) * 2`.
-- RTC PCF85063 at I2C 0x51 holds local time. Until Wi-Fi/BLE time sync exists, firmware
-  sets it to the build time (`__DATE__`/`__TIME__`) when it is invalid or older.
+- RTC PCF85063 at I2C 0x51 holds local time. Set by the phone on every connection
+  (`core.time`) and by Weather's SNTP; at boot firmware sets it to the build time
+  (`__DATE__`/`__TIME__`) when it is invalid or older.
 - SD card is **SDMMC 1-bit** (CLK 39, CMD 41, D0 40), not SPI.
 
 ## Toolchain decisions
@@ -179,7 +180,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (shell pairing screen) that the user types on the phone. Bonded, MITM, LE Secure
   Connections; bonds in NVS shared by all firmwares. `core.forget` deletes all bonds.
   bleak/macOS also gets a pairing prompt on the first command now.
-- Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only);
+- Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only),
+  `core.time {local}` (registered by the shell: local epoch seconds; sets the RTC when ≥ 2 s
+  off, replies `drift`; the app sends it on every connection — `DottyLink.syncClock`;
+  `ble_dotty.py cmd core.time` sends the Mac's time, taken after a ping so pairing doesn't
+  make it stale);
   launcher: `launcher.start`, `install.begin/end/abort`; music: see below.
 - Identity: advertisement = flags + service UUID + manufacturer data `0xFFFF` + 6-byte
   chip serial (factory MAC, e.g. 70:04:1D:D7:B1:00); name in the scan response. Info

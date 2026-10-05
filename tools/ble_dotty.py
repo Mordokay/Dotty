@@ -23,6 +23,7 @@ The first run asks macOS for Bluetooth permission for your terminal app.
 import argparse
 import asyncio
 import base64
+import calendar
 import hashlib
 import json
 import struct
@@ -126,6 +127,12 @@ async def command(args):
 
     async with await connect(args) as client:
         await client.start_notify(EVENT, whole_messages(on_event))
+        if message["cmd"] == "core.time" and "local" not in message:
+            # The Mac's local time, taken after connecting and pairing (a ping first), so it
+            # isn't stale by the time it arrives.
+            await client.write_gatt_char(COMMAND, b'{"cmd":"core.ping"}', response=True)
+            now = time.time()
+            message["local"] = calendar.timegm(time.localtime(now))
         await client.write_gatt_char(COMMAND, json.dumps(message).encode(), response=True)
         try:
             print(json.dumps(await asyncio.wait_for(reply, args.wait), indent=2))

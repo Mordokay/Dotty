@@ -90,7 +90,7 @@ Platform
 - [x] Launcher + cartridges, Dotty Core BLE service, catalog on GitHub Releases
 - [x] iOS app: pairing, dashboard, cartridges (install / update / remove), Wi-Fi setup
 - [x] Battery: steady percentage, low-battery shutdown, charging screen
-- [ ] Clock set from the iPhone
+- [x] Clock set from the iPhone (on every connection)
 
 Cartridges, one at a time, each built around a piece of Dotty's hardware
 - [x] **Music** (speaker): library and playlists on the SD card, songs sent from the

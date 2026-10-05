@@ -399,6 +399,24 @@ void begin(const Config &config) {
   ble::begin();
   net::registerCommands();
   storage::registerCommands();
+  // The phone sends its local time on every connection: the RTC drifts and has no other
+  // source in most firmwares. {local}: seconds since 1970 in local time (no zone).
+  ble::on("core.time", [](JsonObjectConst args, JsonObject reply) {
+    const time_t local = args["local"] | (time_t)0;
+    if (local < 1700000000) {
+      reply["ok"] = false;
+      reply["error"] = "local time needed";
+      return;
+    }
+    tm now;
+    time_t current = 0;
+    if (rtc.read(now)) {
+      now.tm_isdst = 0;
+      current = mktime(&now);  // TZ is unset (UTC), so this undoes gmtime_r exactly
+    }
+    reply["drift"] = (long)(current - local);
+    if (labs((long)(current - local)) >= 2) setLocalTime(local);
+  });
   lastInteraction = millis();
 }
 
