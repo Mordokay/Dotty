@@ -341,7 +341,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Screens: Today (place in the nav + "3h ago" when stale; 56 px icon, big temperature,
   condition; INSIDE | OUTSIDE; UV, wind, rain chance, next sunset/sunrise), then two
   "Next days" pages of 3 cards (tomorrow onward: 44 px icon, day + low/high, rain chance +
-  amount + UV added only while they fit). Swipe or nav arrows; BOOT cycles. Icons are drawn
+  the day's total in words: Dry < 0.2 mm, Light < 4, Moderate < 15, else Heavy — the user
+  found "1.6mm" meaningless and mixed rows of mm/UV untidy). Swipe or nav arrows; BOOT cycles. Icons are drawn
   from WMO codes (`weather_icons.*`). Lock widget = a card: 48 px icon, "23° out 29° in",
   rain chance, sunset/sunrise.
 - BLE: `weather.status` {location{automatic, name?, lat?, lon?}, units, insideOffset,

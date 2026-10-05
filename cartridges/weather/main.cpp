@@ -26,7 +26,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.1.0");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.1.1");
 
 namespace {
 
@@ -235,9 +235,20 @@ void drop(Adafruit_GFX &gfx, int16_t x, int16_t top) {
   gfx.fillCircle(x, top + 6, 3, kBlack);
 }
 
+// A day's total rain in words: people don't know what 1.6 mm looks like. Daily totals, so
+// the bands are wider than the usual hourly ones (light < 2.5 mm/h).
+const char *rainAmount(float amount, bool imperial) {
+  if (isnan(amount)) return "";
+  const float mm = imperial ? amount * 25.4f : amount;
+  if (mm < 0.2f) return "Dry";
+  if (mm < 4) return "Light";
+  if (mm < 15) return "Moderate";
+  return "Heavy";
+}
+
 // Three days per page, each a card: a big icon on the left, two lines on the right.
 //   Tue 6           19/23°
-//   (drop) 28%  0.8 mm  UV 4
+//   (drop) 28% Light
 void drawDays(int page) {
   const weather::Forecast &f = weather::forecast();
   epd.fillScreen(kWhite);
@@ -269,19 +280,12 @@ void drawDays(int page) {
     epd.print(temps);
     if (!isnan(d.tmax)) epd.drawCircle(epd.getCursorX() + 3, top + 11, 2, kBlack);
 
-    // Line 2: chance of rain, how much, UV.
+    // Line 2: chance of rain and how much, in words.
     epd.setFont(&FreeSans9pt7b);
     drop(epd, kText + 3, top + 31);
-    // Parts are added while they fit: chance, amount, then UV.
-    String line = d.rainChance < 0 ? String("--") : String(d.rainChance) + "%";
-    const int16_t room = kW - 6 - (kText + 10);
-    auto add = [&](const String &part) {
-      if (rawWidth(epd, line + " " + part) <= room) line += " " + part;
-    };
-    if (!isnan(d.rain) && d.rain > 0) add(String(d.rain, d.rain < 10 ? 1 : 0) + (f.imperial ? "in" : "mm"));
-    if (!isnan(d.uvMax)) add("UV " + String(lroundf(d.uvMax)));
     epd.setCursor(kText + 10, top + 44);
-    epd.print(line);
+    epd.print((d.rainChance < 0 ? String("--") : String(d.rainChance) + "%") + " " +
+              rainAmount(d.rain, f.imperial));
 
     if (row < 2) {
       for (int16_t dx = 6; dx < kW - 6; dx += 4) epd.drawPixel(dx, top + kRowH - 1, kBlack);  // dotted line
