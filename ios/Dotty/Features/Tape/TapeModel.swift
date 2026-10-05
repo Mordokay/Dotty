@@ -82,12 +82,15 @@ final class TapeModel {
     }
 
     private func apply(_ message: DottyMessage) {
+        let wasTaping = self.deck.state != "idle"
         var deck = Deck()
         deck.state = message["state"] as? String ?? "idle"
         deck.elapsed = message["elapsed"] as? Int ?? 0
         deck.playing = message["playing"] as? String
         deck.paused = message["paused"] as? Bool ?? false
         self.deck = deck
+        // A tape was just saved (0.1.0 firmware didn't send tape.list for it).
+        if wasTaping && deck.state == "idle" { Task { try? await loadList() } }
     }
 
     func reconnected() async {

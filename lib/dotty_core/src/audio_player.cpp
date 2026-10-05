@@ -212,7 +212,7 @@ void AudioPlayer::playWav() {
   samplesPlayed_ += frames;
 }
 
-bool AudioPlayer::startCapture(uint8_t gainDb) {
+bool AudioPlayer::startCapture(uint8_t gainDb, float digitalDb) {
   stop();
   if (sampleRate_ != captureRate_) {  // a WAV at another rate played last
     sampleRate_ = captureRate_;
@@ -220,7 +220,7 @@ bool AudioPlayer::startCapture(uint8_t gainDb) {
     codec.setSampleRate(captureRate_);
   }
   digitalWrite(PIN_PA_EN, LOW);  // the amplifier only adds hiss to the microphone
-  codec.setMicrophone(true, gainDb);
+  codec.setMicrophone(true, gainDb, digitalDb);
   // Drop what the DMA buffers held from before.
   static int16_t discard[256 * 2];
   for (int i = 0; i < 8; i++) i2s.readBytes(reinterpret_cast<char *>(discard), sizeof(discard));

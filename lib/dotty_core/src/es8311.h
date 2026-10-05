@@ -15,8 +15,9 @@ class Es8311 {
   void setMute(bool mute);
 
   // Microphone samples on the ADC serial port (I2S DIN), with analog gain 0..42 dB (6 dB
-  // steps). Off = the port is muted (begin() leaves it off).
-  void setMicrophone(bool on, uint8_t gainDb = 30);
+  // steps) and a digital volume on top (0.5 dB steps, up to +32). Off = the port is muted
+  // (begin() leaves it off).
+  void setMicrophone(bool on, uint8_t gainDb = 30, float digitalDb = 0);
 
  private:
   void write(uint8_t reg, uint8_t value);

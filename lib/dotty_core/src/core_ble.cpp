@@ -301,16 +301,21 @@ const String &serial() {
   return serialText;
 }
 
-void poll() {
-  if (!isRunning) return;
+int poll() {
+  if (!isRunning) return 0;
+  int ran = 0;
   QueuedCommand cmd;
-  while (xQueueReceive(queue, &cmd, 0) == pdTRUE) run(cmd.json);
+  while (xQueueReceive(queue, &cmd, 0) == pdTRUE) {
+    run(cmd.json);
+    ran++;
+  }
 
   static uint32_t lastInfo = 0;
   if (millis() - lastInfo >= kInfoRefreshMs) {
     lastInfo = millis();
     refreshInfo();
   }
+  return ran;
 }
 
 // Messages longer than one notification go out in pieces: every piece but the last starts

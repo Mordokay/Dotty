@@ -26,7 +26,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.2.4");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.2.5");
 
 namespace {
 
@@ -147,46 +147,46 @@ void drawToday() {
 
   // Top: the weather now.
   if (f.valid) {
-    icons::drawWeather(epd, f.now.code, f.now.isDay, 38, 64, 56);
+    icons::drawWeather(epd, f.now.code, f.now.isDay, 34, 73, 48);
     epd.setFont(&FreeSansBold24pt7b);
-    printTemp(epd, 80, 72, f.now.temp, 0, true);
+    printTemp(epd, 70, 83, f.now.temp, 0, true);
     epd.setFont(&FreeSans9pt7b);
-    epd.setCursor(80, 92);
-    epd.print(ui::fitText(epd, weather::describe(f.now.code), kW - 84));
+    epd.setCursor(70, 101);
+    epd.print(ui::fitText(epd, weather::describe(f.now.code), kW - 74));
   } else {
     epd.setFont(&FreeSansBold9pt7b);
     const weather::FetchState s = weather::fetchState();
-    ui::drawCentered(epd, s.running ? "Getting the weather..." : "No forecast yet", 62);
+    ui::drawCentered(epd, s.running ? "Getting the weather..." : "No forecast yet", 70);
     epd.setFont(&FreeSans9pt7b);
     if (!s.running) {
-      ui::drawCentered(epd, net::saved().empty() ? "Add Wi-Fi in the app" : ui::fitText(epd, s.error, kW - 16), 84);
+      ui::drawCentered(epd, net::saved().empty() ? "Add Wi-Fi in the app" : ui::fitText(epd, s.error, kW - 16), 92);
     }
   }
 
   // Today's low/high | feels like (right column wider: "FEELS LIKE" is the longest label).
   constexpr int16_t kMidSplit = 92;
   const int16_t leftMid = kMidSplit / 2, rightMid = (kMidSplit + kW) / 2;
-  epd.drawFastHLine(6, 98, kW - 12, kBlack);
-  epd.drawFastVLine(kMidSplit, 102, 38, kBlack);
+  epd.drawFastHLine(6, 106, kW - 12, kBlack);
+  epd.drawFastVLine(kMidSplit, 109, 32, kBlack);
   epd.setFont(&FreeSans9pt7b);
-  epd.setCursor(leftMid - ui::textWidth(epd, "TODAY") / 2, 116);
+  epd.setCursor(leftMid - ui::textWidth(epd, "TODAY") / 2, 122);
   epd.print("TODAY");
-  epd.setCursor(rightMid - ui::textWidth(epd, "FEELS LIKE") / 2, 116);
+  epd.setCursor(rightMid - ui::textWidth(epd, "FEELS LIKE") / 2, 122);
   epd.print("FEELS LIKE");
   epd.setFont(&FreeSansBold9pt7b);
   const weather::Day &today = f.days[0];
   const float low = f.valid ? today.tmin : NAN, high = f.valid ? today.tmax : NAN;
   const int16_t rangeW = tempWidth(epd, low, 0) + rawWidth(epd, " / ") + tempWidth(epd, high, 0);
-  int16_t x = printTemp(epd, leftMid - rangeW / 2, 136, low, 0);
-  epd.setCursor(x, 136);
+  int16_t x = printTemp(epd, leftMid - rangeW / 2, 140, low, 0);
+  epd.setCursor(x, 140);
   epd.print(" / ");
-  printTemp(epd, epd.getCursorX(), 136, high, 0);
+  printTemp(epd, epd.getCursorX(), 140, high, 0);
   const float feels = f.valid ? f.now.feels : NAN;
-  printTemp(epd, rightMid - tempWidth(epd, feels, 0) / 2, 136, feels, 0);
+  printTemp(epd, rightMid - tempWidth(epd, feels, 0) / 2, 140, feels, 0);
   epd.setFont(&FreeSans9pt7b);
 
   // UV, wind, rain, sun.
-  epd.drawFastHLine(6, 144, kW - 12, kBlack);
+  epd.drawFastHLine(6, 145, kW - 12, kBlack);
   // Left column narrower: "UV 1 low" / "Rain 8%" are short, "SW 14 km/h" / "Sunset 19:13" aren't.
   constexpr int16_t kSplit = 84;
   epd.drawFastVLine(kSplit, 148, 46, kBlack);
@@ -251,36 +251,36 @@ void drawDays(int page) {
     ui::drawCentered(epd, "No forecast yet", 110);
     return;
   }
-  constexpr int16_t kRowH = 56, kText = 62;
+  constexpr int16_t kRowH = 51, kText = 58;
   for (int row = 0; row < 3; row++) {
     const int index = 1 + page * 3 + row;  // tomorrow onwards
     if (index >= weather::kDays) break;
     const weather::Day &d = f.days[index];
     const int16_t top = nav::kHeight + 1 + row * kRowH;
-    icons::drawWeather(epd, d.code, true, 30, top + kRowH / 2, 44);
+    icons::drawWeather(epd, d.code, true, 27, top + kRowH / 2, 40);
 
     // Line 1: day and date, low/high on the right.
     epd.setFont(&FreeSansBold9pt7b);
     const char *dayOfMonth = strlen(d.date) == 10 ? d.date + 8 : "";
-    epd.setCursor(kText, top + 17);
+    epd.setCursor(kText, top + 15);
     epd.print(dayName(d.date, index) + " " + String(atoi(dayOfMonth)));
     const String low = isnan(d.tmin) ? String("--") : String(lroundf(d.tmin));
     const String high = isnan(d.tmax) ? String("--") : String(lroundf(d.tmax));
     const String temps = low + "/" + high;
-    epd.setCursor(kW - 6 - 7 - ui::textWidth(epd, temps), top + 17);
+    epd.setCursor(kW - 6 - 7 - ui::textWidth(epd, temps), top + 15);
     epd.print(temps);
-    if (!isnan(d.tmax)) epd.drawCircle(epd.getCursorX() + 3, top + 6, 2, kBlack);
+    if (!isnan(d.tmax)) epd.drawCircle(epd.getCursorX() + 3, top + 4, 2, kBlack);
 
     // Line 2: chance of rain and how much, in words.
     epd.setFont(&FreeSans9pt7b);
-    drop(epd, kText + 3, top + 21);
-    epd.setCursor(kText + 10, top + 34);
+    drop(epd, kText + 3, top + 19);
+    epd.setCursor(kText + 10, top + 31);
     epd.print((d.rainChance < 0 ? String("--") : String(d.rainChance) + "%") + " " +
               rainAmount(d.rain, f.imperial));
 
     // Line 3: the day's strongest wind.
-    windSign(epd, kText - 2, top + 40);
-    epd.setCursor(kText + 14, top + 51);
+    windSign(epd, kText - 2, top + 36);
+    epd.setCursor(kText + 14, top + 47);
     epd.print(windText(d.windMax, d.windDir, f.imperial));
 
     if (row < 2) {

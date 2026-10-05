@@ -31,7 +31,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   DOUT 45, DIN 16; amplifier enable GPIO46 (HIGH). ES8311 at I2C 0x18.
 - Microphone: analog, into the ES8311 ADC → I2S DIN, left slot of the stereo frames.
   `Es8311::setMicrophone(on, gainDb)` = reg 0x0A bit 6 (ADC port mute) + reg 0x16 (PGA,
-  0..7 = 0..42 dB; 30 dB like Waveshare's default). Measured with a 0.5-16 kHz sweep from
+  0..7 = 0..42 dB; 30 dB like Waveshare's default) + reg 0x17 (ADC digital volume, 0xBF =
+  0 dB, 0.5 dB steps). Tape uses 30 dB + 2.5 dB digital: a normal voice was a bit low. Measured with a 0.5-16 kHz sweep from
   the Mac speakers: strong response up to ~13.5 kHz, rolling off near 16 kHz; quiet room
   ≈ -60 dBFS. So 32 kHz sampling is worth it (16 kHz would cut the 8-16 kHz "s" sounds).
 - Buttons are active-low with pull-ups. The PWR button is still held down right after a
@@ -89,6 +90,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - PWR is debounced (30 ms) and ignored for 600 ms after a lock/unlock; a light-sleep wake
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
+- **Taps without a finger**: serial keys `1`-`9` tap a 3x3 grid like a phone keypad (`1` =
+  the nav bar's left corner, `3` its right corner, `5` the middle). Send keys with a short
+  wait before closing the port (`write; flush; sleep 0.3`): closing at once left the byte
+  queued in macOS until the next open, where the screenshot's `s` overwrote it.
 - **Screenshots without a camera**: send `s` over serial (only while a computer has the
   port) → Dotty prints `#SCREEN 200 200`, the framebuffer as hex lines, `#END`;
   `.venv/bin/python tools/screenshot.py [out.png]` does it and saves a 2× PNG. Other
@@ -118,8 +123,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
   (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
   switch boot partitions.
-- Shared UI in dotty_core once two cartridges needed it: `nav_bar.*` (black top bar,
-  corner icons incl. stars, `nav::hit`), the off pictures (`images/sleep_*.h`), touch
+- Shared UI in dotty_core once two cartridges needed it: `nav_bar.*` (black top bar, 45 px
+  since the user kept missing the 30 px bar's arrows; corner icons incl. stars; `nav::hit`
+  and `nav::kTouch` = a third of the width per corner, the title isn't a button), the off pictures (`images/sleep_*.h`), touch
   swipes (`Touch::Gesture::Swipe*`, fired on release past 35 px; the e-paper can't follow a
   finger, so scroll by pages), and the lock-screen widget (`shell::Config::drawLockWidget`
   draws into its own 200x80 canvas and returns its height; the clock row — clock + a
@@ -181,7 +187,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   but the last starts with byte `0x1E`; clients append pieces until one doesn't (done in
   `DottyLink` and `ble_dotty.py`). Commands are written with response, max 512 bytes.
 - Register commands with `ble::on("<cartridge>.<verb>", handler)`; handlers run on the
-  main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. A
+  main loop via `ble::poll()` (called by `shell::update`), never on the BLE task. Every
+  command counts as interaction: it restarts the auto-lock timer (unlocked only). A
   handler that reboots must defer it until after its reply has been notified.
 - Pairing: Info is open; Command/Event/Data need encryption + authentication, so the
   first command makes iOS pair. Dotty is DISPLAY_ONLY: it shows a random 6-digit code

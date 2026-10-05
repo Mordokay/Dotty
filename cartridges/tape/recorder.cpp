@@ -173,7 +173,7 @@ bool record() {
     dropped = 0;
     LOGI("tape", "new tape %s", name.c_str());
   }
-  if (!audio->startCapture(kMicGainDb)) return false;
+  if (!audio->startCapture(kMicGainDb, kMicBoostDb)) return false;
   current_ = State::Recording;
   xTaskNotifyGive(readerTask);
   return true;

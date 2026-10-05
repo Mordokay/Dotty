@@ -14,6 +14,9 @@ namespace tape {
 
 constexpr uint32_t kRate = 32000;  // see CLAUDE.md: the mic has content above 8 kHz
 constexpr uint8_t kMicGainDb = 30;
+// +2.5 dB (x1.33) digital: a normal speaking voice sounded a bit low (the user asked for
+// 20-30 % more; projecting was already right, so not the next 6 dB analog step).
+constexpr float kMicBoostDb = 2.5f;
 
 enum class State { Idle, Recording, Paused };
 

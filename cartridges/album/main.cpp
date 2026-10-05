@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.1");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.2.2");
 
 namespace {
 
@@ -39,7 +39,7 @@ constexpr int16_t kW = EpdDisplay::kSize;
 constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 constexpr int16_t kNavH = nav::kHeight;
-constexpr int16_t kNavButton = nav::kButton;
+constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
 constexpr int16_t kRowH = 28;  // album menu rows, from kNavH + 2
 constexpr int kMenuRows = (kW - kNavH - 2) / kRowH;
 constexpr int16_t kInfoH = 26;           // the viewer's bottom strip (position + date)

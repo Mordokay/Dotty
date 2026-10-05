@@ -451,11 +451,19 @@ bool update(Input &input) {
   battery::poll();
   if (battery::empty()) batteryEmptyOff();
   logBattery();
-  ble::poll();
+  if (ble::poll() > 0 && !isLocked) lastInteraction = millis();  // the app in use: no auto-lock
   handlePairing();
   power::setWakeLock(power::kWakeLockBle, ble::connected());
   const bool bootClick = handleButtons();
-  const Touch::Gesture gesture = touch.poll();
+  Touch::Gesture gesture = touch.poll();
+  // Developer aid: serial keys 1-9 tap a 3x3 grid like a phone keypad (1 = top left, the
+  // nav bar's left corner; 3 = its right corner), to drive screens from the computer.
+  if (key >= '1' && key <= '9' && !isLocked) {
+    const int cell = key - '1';
+    touch.simulate(cell % 3 * 66 + 22, cell / 3 == 0 ? 20 : cell / 3 * 66 + 33);
+    gesture = Touch::Gesture::Tap;
+    input.key = 0;
+  }
 
   if (isLocked) {
     // Locked: touch and BOOT are ignored, only PWR unlocks. The lock screen shows power

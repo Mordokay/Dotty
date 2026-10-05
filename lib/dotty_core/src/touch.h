@@ -23,6 +23,8 @@ class Touch {
 
   // Where the finger went down (panel coordinates, same as the display's).
   uint16_t x() const { return x_; }
+  // Developer aid: the position the next "tap" reports (serial keys 1-9, see shell.cpp).
+  void simulate(uint16_t x, uint16_t y) { x_ = x; y_ = y; }
   uint16_t y() const { return y_; }
 
  private:

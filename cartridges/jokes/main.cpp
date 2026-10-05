@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.9");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.1.10");
 
 namespace {
 
@@ -40,8 +40,8 @@ constexpr int16_t kTextX = 8;
 constexpr int16_t kTextW = kW - 16;
 constexpr int16_t kLineH = 19;
 constexpr int16_t kFirstBaseline = nav::kHeight + 19;
-constexpr int kVisibleLines = 8;
-constexpr int kScrollLines = 6;  // a swipe moves this many lines (e-paper can't follow a finger)
+constexpr int kVisibleLines = (EpdDisplay::kSize - 4 - kFirstBaseline) / kLineH + 1;  // 7
+constexpr int kScrollLines = kVisibleLines - 2;  // a swipe moves this many lines (e-paper can't follow a finger)
 constexpr int16_t kRowH = 28;    // favourites list
 constexpr int kListRows = (EpdDisplay::kSize - nav::kHeight - 2) / kRowH;
 
@@ -132,9 +132,9 @@ void drawCategoryIcon(int category, int16_t cx, int16_t cy) {
 
 void cellRect(int i, int16_t &x, int16_t &y, int16_t &w, int16_t &h) {
   w = 96;
-  h = 80;
+  h = 72;
   x = 2 + (i % 2) * 100;
-  y = nav::kHeight + 4 + (i / 2) * 84;
+  y = nav::kHeight + 4 + (i / 2) * (h + 4);
 }
 
 void drawGrid() {
@@ -145,10 +145,10 @@ void drawGrid() {
     cellRect(i, x, y, w, h);
     epd.drawRoundRect(x, y, w, h, 8, kBlack);
     epd.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 7, kBlack);
-    drawCategoryIcon(kGrid[i], x + w / 2, y + 30);
+    drawCategoryIcon(kGrid[i], x + w / 2, y + 27);
     epd.setFont(&FreeSansBold9pt7b);
     const String name = label(kGrid[i]);
-    epd.setCursor(x + (w - ui::textWidth(epd, name)) / 2, y + 66);
+    epd.setCursor(x + (w - ui::textWidth(epd, name)) / 2, y + 61);
     epd.print(name);
   }
 }
@@ -319,7 +319,7 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
         screen = Screen::Favourites;
       } else if (y > nav::kHeight) {
         const int col = x < kW / 2 ? 0 : 1;
-        const int row = y < nav::kHeight + 4 + 84 ? 0 : 1;
+        const int row = y < nav::kHeight + 4 + 76 ? 0 : 1;
         openJoke(kGrid[row * 2 + col]);
       } else {
         return;

@@ -42,12 +42,12 @@ void drawIcon(Adafruit_GFX &gfx, Icon icon, int16_t cx, int16_t cy, uint16_t col
   const uint16_t back = color == kWhite ? kBlack : kWhite;
   switch (icon) {
     case Icon::Back:
-      thickLine(gfx, cx + 4, cy - 8, cx - 4, cy, color);
-      thickLine(gfx, cx - 4, cy, cx + 4, cy + 8, color);
+      thickLine(gfx, cx + 5, cy - 10, cx - 5, cy, color);
+      thickLine(gfx, cx - 5, cy, cx + 5, cy + 10, color);
       break;
     case Icon::Forward:
-      thickLine(gfx, cx - 4, cy - 8, cx + 4, cy, color);
-      thickLine(gfx, cx + 4, cy, cx - 4, cy + 8, color);
+      thickLine(gfx, cx - 5, cy - 10, cx + 5, cy, color);
+      thickLine(gfx, cx + 5, cy, cx - 5, cy + 10, color);
       break;
     case Icon::Shuffle:  // crossing arrows
       thickLine(gfx, cx - 11, cy - 7, cx + 6, cy + 6, color);
@@ -83,7 +83,7 @@ void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right) {
   gfx.fillRect(0, 0, kW, kHeight, kBlack);
   gfx.setFont(&FreeSans9pt7b);
   gfx.setTextColor(kWhite);
-  ui::drawCentered(gfx, ui::fitText(gfx, title, kW - 2 * kButton), 20);
+  ui::drawCentered(gfx, ui::fitText(gfx, title, kW - 2 * kButton), kHeight / 2 + 7);
   gfx.setTextColor(kBlack);
   drawIcon(gfx, left, kButton / 2, kHeight / 2, kWhite);
   drawIcon(gfx, right, kW - kButton / 2, kHeight / 2, kWhite);
@@ -91,8 +91,8 @@ void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right) {
 
 int hit(uint16_t x, uint16_t y) {
   if (y >= kHeight) return 0;
-  if (x < kButton) return -1;
-  if (x > kW - kButton) return 1;
+  if (x < kTouch) return -1;
+  if (x > kW - kTouch) return 1;
   return 0;
 }
 

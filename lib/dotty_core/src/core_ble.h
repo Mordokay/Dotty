@@ -46,8 +46,10 @@ void onData(DataHandler handler);
 // Chip serial, "70:04:1D:D7:B1:00" (the factory MAC; stable, unique per board).
 const String &serial();
 
-// Runs queued commands and refreshes the Info value. Call from the main loop.
-void poll();
+// Runs queued commands and refreshes the Info value. Call from the main loop. Returns how
+// many commands ran (the shell counts them as interaction: no auto-lock while the app is
+// being used).
+int poll();
 
 // Sends a JSON event to the connected app (no-op when nothing is connected).
 void notify(JsonDocument &event);

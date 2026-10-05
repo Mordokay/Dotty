@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.1.0");
+DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.1.1");
 
 namespace {
 
@@ -39,14 +39,14 @@ constexpr int16_t kW = EpdDisplay::kSize;
 constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 constexpr int16_t kNavH = nav::kHeight;
-constexpr int16_t kNavButton = nav::kButton;
+constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
 constexpr int16_t kRowH = 28;
 constexpr int kMenuRows = (kW - kNavH - 2) / kRowH;
 constexpr uint32_t kSavedMs = 3000;      // "Saved" under the cassette
 constexpr uint32_t kBootHoldMs = 120;    // BOOT this long = record (a click is not)
 constexpr int16_t kSaveTop = 164;        // the deck's ■ Save button (to the bottom)
-constexpr int16_t kButtonY = 112;        // the player's play button
-constexpr int16_t kVolumeY = 186;
+constexpr int16_t kButtonY = 114;        // the player's play button
+constexpr int16_t kVolumeY = 191;
 
 AudioPlayer player;
 bool sdReady = false;
@@ -89,11 +89,14 @@ void pauseRecording() {
   stateDirty = true;
 }
 
+void notifyList();
+
 void saveTape() {
   savedName = tape::finish();
   savedUntil = savedName.length() ? millis() + kSavedMs : 0;
   listDirty = true;
   stateDirty = true;
+  notifyList();  // the app's list shows the new recording
 }
 
 void playAt(int index) {
@@ -109,20 +112,20 @@ void playAt(int index) {
 
 // A cassette: shell, label window and two reels (turning = spokes at another angle).
 void drawCassette(int16_t cx, int16_t top, bool turning) {
-  const int16_t w = 116, h = 62, x = cx - w / 2;
+  const int16_t w = 104, h = 56, x = cx - w / 2;
   epd.fillRoundRect(x, top, w, h, 7, kBlack);
   epd.fillRoundRect(x + 4, top + 4, w - 8, h - 8, 4, kWhite);
-  epd.drawRoundRect(x + 16, top + 15, w - 32, 28, 12, kBlack);  // window
+  epd.drawRoundRect(x + 14, top + 13, w - 28, 26, 12, kBlack);  // window
   for (int side = -1; side <= 1; side += 2) {
-    const int16_t rx = cx + side * 28, ry = top + 29;
-    epd.fillCircle(rx, ry, 11, kBlack);
+    const int16_t rx = cx + side * 25, ry = top + 26;
+    epd.fillCircle(rx, ry, 10, kBlack);
     epd.fillCircle(rx, ry, 4, kWhite);
     for (int k = 0; k < 3; k++) {
       const float a = (turning ? 0.5f : 0.0f) + k * 2.094f;
-      epd.drawLine(rx, ry, rx + cosf(a) * 9, ry + sinf(a) * 9, kWhite);
+      epd.drawLine(rx, ry, rx + cosf(a) * 8, ry + sinf(a) * 8, kWhite);
     }
   }
-  epd.fillRect(x + 28, top + h - 11, w - 56, 7, kBlack);  // the bottom notch
+  epd.fillRect(x + 26, top + h - 10, w - 52, 6, kBlack);  // the bottom notch
 }
 
 void drawDeck() {
@@ -137,7 +140,7 @@ void drawDeck() {
   }
   static bool spokes = false;
   spokes = s == tape::State::Recording ? !spokes : spokes;
-  drawCassette(kW / 2, kNavH + 6, spokes);  // to y 98
+  drawCassette(kW / 2, kNavH + 4, spokes);  // to y 105
 
   if (s == tape::State::Idle) {
     epd.setFont(&FreeSansBold9pt7b);
@@ -233,7 +236,7 @@ void drawPlayer() {
   if (count == 0) return;
   const tape::Recording &r = recordings[playIndex];
   epd.setFont(&FreeSansBold9pt7b);
-  ui::drawWrapped(epd, ui::printable(tape::displayName(r.name)), 54, kW - 16, 2, 18);
+  ui::drawWrapped(epd, ui::printable(tape::displayName(r.name)), 64, kW - 16, 2, 18);
 
   const int16_t cx = kW / 2, cy = kButtonY;
   epd.fillCircle(cx, cy, 24, kBlack);
@@ -249,11 +252,11 @@ void drawPlayer() {
 
   const uint32_t pos = player.isPlaying() ? player.positionMs() : 0;
   const uint32_t dur = r.durationMs;
-  const int16_t barX = 15, barY = 144, barW = kW - 30, barH = 8;
+  const int16_t barX = 15, barY = 148, barW = kW - 30, barH = 8;
   epd.drawRect(barX, barY, barW, barH, kBlack);
   if (dur > 0) epd.fillRect(barX + 2, barY + 2, static_cast<int64_t>(barW - 4) * min(pos, dur) / dur, barH - 4, kBlack);
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, clock(pos) + " / " + clock(dur), 168);
+  ui::drawCentered(epd, clock(pos) + " / " + clock(dur), 171);
   // Volume:  -   vol 80%   +
   epd.fillRect(16, kVolumeY - 6, 14, 3, kBlack);
   epd.fillRect(kW - 30, kVolumeY - 6, 14, 3, kBlack);

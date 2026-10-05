@@ -4,11 +4,14 @@
 #include <Arduino.h>
 
 // The black bar across the top of cartridge screens: an icon button in each corner and a
-// title in the middle. Corners are kButton wide; taps with y < kHeight hit the bar.
+// title in the middle. Icons sit kButton from the edges; a tap with y < kHeight hits a
+// corner when it lands in the outer kTouch (a third of the width each side: the title
+// isn't a button, so the corners can be generous — the user missed the 30 px bar's arrows).
 namespace nav {
 
-constexpr int16_t kHeight = 30;
+constexpr int16_t kHeight = 45;
 constexpr int16_t kButton = 44;
+constexpr int16_t kTouch = 66;
 
 enum class Icon { None, Back, Forward, Shuffle, InOrder, Playlists, Star, StarFilled };
 

@@ -28,7 +28,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.10.2");
+DOTTY_CARTRIDGE("music", "Music", "0.10.3");
 
 namespace {
 
@@ -44,13 +44,13 @@ constexpr uint16_t kBlack = EpdDisplay::kBlack;
 constexpr uint16_t kWhite = EpdDisplay::kWhite;
 
 constexpr int16_t kNavH = nav::kHeight;
-constexpr int16_t kNavButton = nav::kButton;
+constexpr int16_t kNavButton = nav::kTouch;  // corner tap width
 constexpr int16_t kRowH = 28;     // playlist menu rows, from kNavH + 2
 constexpr int kMenuRows = (EpdDisplay::kSize - kNavH - 2) / kRowH;
-constexpr int16_t kButtonY = 100;
+constexpr int16_t kButtonY = 115;
 constexpr int16_t kPrevX = 38;
 constexpr int16_t kNextX = kW - 38;
-constexpr int16_t kVolumeY = 184;
+constexpr int16_t kVolumeY = 191;
 
 AudioPlayer player;
 bool sdReady = false;
@@ -220,9 +220,9 @@ void drawPlayer() {
   }
   // One line, then the position in the queue; titles with no Latin letters (the fonts have
   // nothing else) get a stand-in.
-  ui::drawCentered(epd, ui::fitText(epd, displayTitle(currentSong(), "Song " + String(queueIndex + 1)), kW - 12), 50);
+  ui::drawCentered(epd, ui::fitText(epd, displayTitle(currentSong(), "Song " + String(queueIndex + 1)), kW - 12), 63);
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, String(queueIndex + 1) + " / " + String(queue.size()), 69);
+  ui::drawCentered(epd, String(queueIndex + 1) + " / " + String(queue.size()), 83);
 
   // Previous | play/pause | next.
   const int16_t cx = kW / 2, cy = kButtonY;
@@ -245,12 +245,12 @@ void drawPlayer() {
   // Progress + time.
   const uint32_t pos = player.isPlaying() ? player.positionMs() : 0;
   const uint32_t dur = player.isPlaying() ? player.durationMs() : 0;
-  const int16_t barX = 15, barY = 134, barW = kW - 30, barH = 8;
+  const int16_t barX = 15, barY = 147, barW = kW - 30, barH = 8;
   epd.drawRect(barX, barY, barW, barH, kBlack);
   if (dur > 0) {
     epd.fillRect(barX + 2, barY + 2, static_cast<int64_t>(barW - 4) * min(pos, dur) / dur, barH - 4, kBlack);
   }
-  ui::drawCentered(epd, ui::formatDuration(pos) + " / " + ui::formatDuration(dur), 160);
+  ui::drawCentered(epd, ui::formatDuration(pos) + " / " + ui::formatDuration(dur), 170);
 
   // Volume:  -   vol 80%   +
   epd.fillRect(16, kVolumeY - 6, 14, 3, kBlack);

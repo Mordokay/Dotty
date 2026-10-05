@@ -30,7 +30,7 @@ class AudioPlayer {
 
   // Microphone, at the rate given to begin() (stops playback; the speaker is off while
   // capturing). capture() blocks until `frames` mono samples have arrived.
-  bool startCapture(uint8_t gainDb = 30);
+  bool startCapture(uint8_t gainDb = 30, float digitalDb = 0);
   size_t capture(int16_t *mono, size_t frames);
   void stopCapture();
   bool isCapturing() const { return capturing_; }
