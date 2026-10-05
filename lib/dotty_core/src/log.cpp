@@ -55,6 +55,13 @@ void replayHistory() {
 void drainTask(void *) {
   char chunk[256];
   for (;;) {
+    // No computer attached: leave the USB serial port alone. Its driver can end up in an
+    // interrupt storm (interrupt watchdog reset on CPU1) when it's fed on battery with the
+    // cable gone; the lines wait in the ring and stream once a host is back.
+    if (!HWCDC::isPlugged()) {
+      vTaskDelay(pdMS_TO_TICKS(kDrainIntervalMs));
+      continue;
+    }
     // Serial commands: 'd' replays the whole history.
     while (Serial.available()) {
       if (Serial.read() == 'd') {

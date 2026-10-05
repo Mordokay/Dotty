@@ -53,6 +53,9 @@ bool lightSleep(uint32_t ms) {
   esp_light_sleep_start();
 
   gpio_wakeup_disable(static_cast<gpio_num_t>(PIN_BTN_PWR));
+  // wakeup_disable leaves the pin's interrupt type at "low level" (seen in its register);
+  // put it back so nothing can turn holding PWR into an interrupt storm.
+  gpio_set_intr_type(static_cast<gpio_num_t>(PIN_BTN_PWR), GPIO_INTR_DISABLE);
   for (gpio_num_t pin : kHeldDuringSleep) gpio_hold_dis(pin);
   return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
 }
