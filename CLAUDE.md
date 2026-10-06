@@ -92,7 +92,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
 - **Taps without a finger**: serial keys `1`-`9` tap a 3x3 grid like a phone keypad (`1` =
-  the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right. Send keys with a short
+  the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right;
+  `k` locks / unlocks (while locked it's read only when Dotty is awake: a locked Dotty without
+  a reading program light-sleeps until the next minute). Send keys with a short
   wait before closing the port (`write; flush; sleep 0.3`): closing at once left the byte
   queued in macOS until the next open, where the screenshot's `s` overwrote it.
 - **Screenshots without a camera**: send `s` over serial (only while a computer has the
@@ -213,6 +215,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   first command makes iOS pair. Dotty is DISPLAY_ONLY: it shows a random 6-digit code
   (shell pairing screen) that the user types on the phone. Bonded, MITM, LE Secure
   Connections; bonds in NVS shared by all firmwares. `core.forget` deletes all bonds.
+  Each `ble::start` logs "N bonded devices stored"; a failed encryption logs its status
+  (custom GAP handler). Once (2026-10-06, after a failed app backup) Dotty refused the bonded
+  iPhone *and* Mac ("pairing failed (bonded 0)", macOS: "Failed to encrypt the connection")
+  across a reset, although the NVS bond records were byte-identical to the working state
+  (decoded with a quick parser of `read-flash 0x9000 0x5000`); reflashing the cartridge fixed
+  it and it didn't come back. If it recurs, read those log lines before reflashing.
   bleak/macOS also gets a pairing prompt on the first command now.
 - Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only),
   `core.time {local}` (registered by the shell: local epoch seconds; sets the RTC when ≥ 2 s

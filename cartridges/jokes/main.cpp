@@ -25,7 +25,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.2.3");
+DOTTY_CARTRIDGE("jokes", "Joke Factory", "0.2.4");
 
 namespace {
 

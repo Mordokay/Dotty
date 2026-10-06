@@ -236,9 +236,23 @@ void begin() {
   start();
 }
 
+// Why a bonded phone's encryption failed (onAuthenticationComplete only says "failed"):
+// once, after a failed backup, Dotty refused every bonded phone and Mac until reflashed,
+// although its stored keys were intact. Runs on the BLE host task: log only.
+static int logSecurityEvents(ble_gap_event *event, void *) {
+  if (event->type == BLE_GAP_EVENT_ENC_CHANGE && event->enc_change.status != 0) {
+    LOGW("ble", "encryption failed: status 0x%x", event->enc_change.status);
+  } else if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
+    LOGW("ble", "a bonded device asked to pair again");
+  }
+  return 0;
+}
+
 void start() {
   if (isRunning) return;
   NimBLEDevice::init(deviceName.c_str());
+  NimBLEDevice::setCustomGapHandler(logSecurityEvents);
+  LOGI("ble", "%d bonded devices stored", NimBLEDevice::getNumBonds());
   NimBLEDevice::setMTU(517);
   // Bonded, MITM-protected (passkey), LE Secure Connections; Dotty can only display.
   NimBLEDevice::setSecurityAuth(true, true, true);

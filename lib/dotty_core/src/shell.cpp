@@ -225,6 +225,10 @@ bool handleButtons() {
 // no computer attached) the CPU light-sleeps between the minute updates.
 void loopLock() {
   static uint32_t lastCheck = 0;
+  if (dlog::takeKey() == 'k') {  // developer aid: serial k unlocks (and locks, in update())
+    unlock();
+    return;
+  }
   const bool canSleep = power::wakeLocks() == 0 && !power::usbHostConnected();
 
   if (!canSleep) {
@@ -482,6 +486,10 @@ bool update(Input &input) {
   const char key = dlog::takeKey();
   if (key == 's') sendScreenshot();
   input.key = key == 's' ? 0 : key;
+  if (key == 'k' && !isLocked) {
+    lock();
+    return false;
+  }
   if (key == 'p' && !isLocked) {  // developer aid: the pairing screens (code, then the result)
     static int step = 0;
     if (step % 3 == 0) drawPairing(123456);
