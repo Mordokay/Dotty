@@ -288,6 +288,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (whole-card mode, launcher only: `GET /card/list`, `GET /download?path=`, `POST
   /upload?path=` with absolute card paths, no ".."), checks every size, `POST /done`. The
   Mac must be on Dotty's Wi-Fi, and the iPhone app must not hold Dotty's one BLE link.
+  Default = data only (`--with-firmware` adds the cartridge copies; the catalog has them all).
+  **Smart restore**: `GET /card/list?hash=1` (streamed with chunked responses — fingerprinting
+  160 MB takes minutes, a silent reply looks dead) gives every file's SHA-256; only new or
+  changed files are sent, files the backup lacks are deleted (`POST /card/delete?path=`),
+  never the launcher's copies, hidden files, or firmware copies for a data-only backup.
+  `--dry-run` shows the plan. First backup: 180 files (85 + the Mac's Spotlight files),
+  167 MB in 472 s (362 KB/s); a restore after deleting one file sent just that file.
+  ArduinoJson `serializeJson(doc, String&)` *replaces* the string (the first listing broke).
+  `ble::bondCount()` caches the count: reading NimBLE's store while BLE is off (locked, or
+  paused for Wi-Fi) asserts in ble_hs_lock — it crashed the launcher mid-restore.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,

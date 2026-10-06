@@ -368,8 +368,12 @@ const String &name() {
   return deviceName;
 }
 
+// NimBLE's store can't be read while the stack is off (locked, or paused for a Wi-Fi
+// transfer: it asserts in ble_hs_lock), so the count is kept from when it last ran.
 int bondCount() {
-  return NimBLEDevice::getNumBonds();
+  static int known = -1;
+  if (isRunning || known < 0) known = isRunning ? NimBLEDevice::getNumBonds() : known;
+  return known < 0 ? 1 : known;  // never read yet: don't greet a paired Dotty as new
 }
 
 bool pairingCode(uint32_t &code) {

@@ -2,7 +2,17 @@
 """Copies Dotty's whole SD card to this Mac, or back onto Dotty, over Wi-Fi.
 
   .venv/bin/python tools/card_backup.py backup [folder]   # default ~/Dotty Backups/<date time>
-  .venv/bin/python tools/card_backup.py restore <folder>
+  .venv/bin/python tools/card_backup.py backup --with-firmware   # also the cartridge copies
+  .venv/bin/python tools/card_backup.py restore <folder> [--dry-run]
+
+A restore makes the card match the backup but only moves what differs: Dotty lists its
+files with their SHA-256 (GET /card/list?hash=1), and only new or changed files are sent;
+files the backup doesn't have are deleted. Never deleted: the launcher's copies (Rescue
+needs them), hidden files, and the firmware copies when the backup has only data.
+
+By default only the data is copied (songs, photos, recordings, jokes…): the cartridge
+firmware copies (/cartridges/<id>/firmware/) come back from the catalog, and Rescue keeps
+the launcher's through a factory reset.
 
 Dotty switches to the launcher (whole-card transfers run there), joins its Wi-Fi and opens
 its transfer server in whole-card mode (transfer.start {scope: card}); Bluetooth pauses
@@ -12,6 +22,7 @@ POST /upload?path=), every size is checked, and the session ends with POST /done
 
 import argparse
 import datetime
+import hashlib
 import json
 import subprocess
 import sys
@@ -29,8 +40,8 @@ def ble(*args, wait=60):
     for attempt in range(3):
         out = subprocess.run(BLE + list(args), capture_output=True, text=True, timeout=wait + 30).stdout
         start = out.find("{")
-        if start >= 0:
-            return json.loads(out[start:])
+        if start >= 0:  # the first JSON object (anything after it is other output)
+            return json.JSONDecoder().raw_decode(out[start:])[0]
         time.sleep(3)  # Dotty may still be restarting
     return None
 
@@ -40,9 +51,9 @@ def ensure_launcher():
     if info and info.get("role") == "launcher":
         return
     print("switching Dotty to the launcher…")
-    ble("cmd", "core.toLauncher")
-    for _ in range(20):
-        time.sleep(2)
+    for _ in range(6):  # a command can get lost while the Mac (re)pairs: ask again
+        ble("cmd", "core.toLauncher")
+        time.sleep(8)  # it restarts into the launcher
         info = ble("info")
         if info and info.get("role") == "launcher":
             return
@@ -52,7 +63,7 @@ def ensure_launcher():
 def open_session():
     ensure_launcher()
     print("Dotty is joining Wi-Fi…")
-    reply = ble("cmd", "transfer.start", "scope=card", "--wait", "60", wait=60)
+    reply = ble("cmd", "transfer.start", "scope=card", "--wait", "120", wait=120)
     if not reply or not reply.get("ok"):
         sys.exit(f"Dotty couldn't open the transfer: {reply and reply.get('error')}")
     print(f"  on {reply.get('ssid')} ({reply.get('rssi')} dBm) at {reply['url']}")
@@ -71,10 +82,12 @@ def finish(url, token):
         pass  # Dotty ends an idle session by itself after a minute
 
 
-def backup(folder):
+def backup(folder, with_firmware=False):
     url, token = open_session()
     try:
         files = json.loads(request(f"{url}/card/list", token).read())
+        if not with_firmware:
+            files = [f for f in files if "/firmware/" not in f["path"]]
         total = sum(f["size"] for f in files)
         print(f"{len(files)} files, {total / 1048576:.1f} MB → {folder}")
         done = 0
@@ -92,29 +105,71 @@ def backup(folder):
             rate = done / 1024 / max(1, time.time() - started)
             print(f"  {i}/{len(files)} {f['path']} ({rate:.0f} KB/s)")
         (folder / "dotty-backup.json").write_text(json.dumps(
-            {"made": datetime.datetime.now().isoformat(timespec="seconds"), "files": files}, indent=2))
+            {"made": datetime.datetime.now().isoformat(timespec="seconds"),
+             "scope": "all" if with_firmware else "data", "files": files}, indent=2))
         print(f"done: {len(files)} files in {time.time() - started:.0f} s")
     finally:
         finish(url, token)
 
 
-def restore(folder):
-    files = [p for p in sorted(folder.rglob("*")) if p.is_file() and p.name != "dotty-backup.json"
-             and not p.name.startswith(".")]
-    if not files:
+def hidden(path):
+    return any(part.startswith(".") for part in Path(path).parts)
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def restore(folder, dry_run=False):
+    manifest = folder / "dotty-backup.json"
+    scope = json.loads(manifest.read_text()).get("scope", "all") if manifest.exists() else "all"
+    local = {"/" + p.relative_to(folder).as_posix(): p for p in sorted(folder.rglob("*"))
+             if p.is_file() and p != manifest and not hidden(p.relative_to(folder))}
+    if not local:
         sys.exit(f"nothing to restore in {folder}")
     url, token = open_session()
     try:
+        print("Dotty is fingerprinting its files…")
+        with request(f"{url}/card/list?hash=1", token, timeout=600) as r:
+            remote = {f["path"]: f for f in json.loads(r.read())}
+        send, same = [], 0
+        for path, p in local.items():
+            there = remote.get(path)
+            if there and there["size"] == p.stat().st_size and there.get("sha256") == sha256(p):
+                same += 1
+            else:
+                send.append(path)
+
+        def keep(path):  # what a restore never deletes
+            return (hidden(path) or path.startswith("/cartridges/launcher/")
+                    or (scope == "data" and "/firmware/" in path))
+
+        delete = [path for path in remote if path not in local and not keep(path)]
+        size = sum(local[p].stat().st_size for p in send)
+        print(f"{same} files already match, {len(send)} to send ({size / 1048576:.1f} MB), {len(delete)} to delete")
+        if dry_run:
+            for path in send:
+                print(f"  send   {path}")
+            for path in delete:
+                print(f"  delete {path}")
+            return
         started = time.time()
-        for i, p in enumerate(files, 1):
-            path = "/" + p.relative_to(folder).as_posix()
+        for i, path in enumerate(send, 1):
             query = urllib.parse.urlencode({"path": path}, quote_via=urllib.parse.quote)
-            with request(f"{url}/upload?{query}", token, method="POST", data=p.read_bytes(), timeout=180) as r:
+            with request(f"{url}/upload?{query}", token, method="POST", data=local[path].read_bytes(), timeout=180) as r:
                 reply = json.loads(r.read())
             if not reply.get("ok"):
                 sys.exit(f"{path}: {reply.get('error')}")
-            print(f"  {i}/{len(files)} {path}")
-        print(f"done: {len(files)} files in {time.time() - started:.0f} s")
+            print(f"  sent {i}/{len(send)} {path}")
+        for path in delete:
+            query = urllib.parse.urlencode({"path": path}, quote_via=urllib.parse.quote)
+            request(f"{url}/card/delete?{query}", token, method="POST", data=b"").read()
+            print(f"  deleted {path}")
+        print(f"done in {time.time() - started:.0f} s")
     finally:
         finish(url, token)
 
@@ -124,15 +179,17 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     b = sub.add_parser("backup")
     b.add_argument("folder", nargs="?", type=Path)
+    b.add_argument("--with-firmware", action="store_true", help="also the cartridge firmware copies")
     r = sub.add_parser("restore")
     r.add_argument("folder", type=Path)
+    r.add_argument("--dry-run", action="store_true", help="only show what would change")
     args = parser.parse_args()
     if args.action == "backup":
         folder = args.folder or Path.home() / "Dotty Backups" / datetime.datetime.now().strftime("%Y-%m-%d %H%M")
         folder.mkdir(parents=True, exist_ok=True)
-        backup(folder)
+        backup(folder, args.with_firmware)
     else:
-        restore(args.folder)
+        restore(args.folder, args.dry_run)
 
 
 if __name__ == "__main__":

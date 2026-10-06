@@ -2,6 +2,7 @@
 
 #include <SD_MMC.h>
 #include <esp_http_server.h>
+#include <mbedtls/sha256.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
@@ -322,23 +323,54 @@ esp_err_t handleDownload(httpd_req_t *req) {
   return ok ? ESP_OK : ESP_FAIL;
 }
 
-// Whole-card mode: GET /card/list → [{"path": "/…", "size": n}, …], every file on the card.
-void listCard(const String &folder, String &json, bool &first) {
+// Whole-card mode: GET /card/list[?hash=1] → [{"path": "/…", "size": n, "sha256"?: "…"}, …],
+// every file on the card, streamed as it goes (fingerprinting 160 MB takes a while: a
+// silent response would look dead to the phone). The SHA-256s let a restore send only what
+// changed.
+struct CardLister {
+  httpd_req_t *req;
+  bool hash;
+  bool first = true;
+  bool ok = true;
+};
+
+String fileSha256(File &f) {
+  uint8_t *buffer = blocks[0];  // the server handles one request at a time: borrow a block
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  size_t n;
+  while ((n = f.read(buffer, kBlock)) > 0) {
+    mbedtls_sha256_update(&sha, buffer, n);
+    lastActivity = millis();
+  }
+  uint8_t digest[32];
+  mbedtls_sha256_finish(&sha, digest);
+  mbedtls_sha256_free(&sha);
+  char hex[65];
+  for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+  return hex;
+}
+
+void listCard(const String &folder, CardLister &out) {
   File dir = SD_MMC.open(folder.length() ? folder : String("/"));
-  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+  for (File f = dir ? dir.openNextFile() : File(); f && out.ok; f = dir.openNextFile()) {
     const String path = folder + "/" + f.name();
     if (f.isDirectory()) {
       f.close();
-      listCard(path, json, first);
+      listCard(path, out);
       continue;
     }
     JsonDocument item;
     item["path"] = path;
     item["size"] = f.size();
+    if (out.hash) item["sha256"] = fileSha256(f);
     f.close();
-    if (!first) json += ",";
-    first = false;
-    serializeJson(item, json);
+    String json;
+    serializeJson(item, json);  // into a String it replaces the content, so separately
+    const String entry = (out.first ? "" : ",") + json;
+    out.first = false;
+    out.ok = httpd_resp_send_chunk(out.req, entry.c_str(), entry.length()) == ESP_OK;
     lastActivity = millis();
   }
 }
@@ -346,11 +378,26 @@ void listCard(const String &folder, String &json, bool &first) {
 esp_err_t handleCardList(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
   if (!cardScope) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"not in whole-card mode\"}");
-  String json = "[";
-  bool first = true;
-  listCard("", json, first);
-  json += "]";
-  return reply(req, "200 OK", json.c_str());
+  httpd_resp_set_type(req, "application/json");
+  CardLister out{req, queryValue(req, "hash") == "1"};
+  httpd_resp_send_chunk(req, "[", 1);
+  listCard("", out);
+  if (out.ok) httpd_resp_send_chunk(req, "]", 1);
+  httpd_resp_send_chunk(req, nullptr, 0);
+  return out.ok ? ESP_OK : ESP_FAIL;
+}
+
+// Whole-card mode: POST /card/delete?path= removes a file (a restore drops what the backup
+// doesn't have).
+esp_err_t handleCardDelete(httpd_req_t *req) {
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  String folder, name;
+  if (!cardPath(req, folder, name)) return reply(req, "400 Bad Request", "{\"ok\":false,\"error\":\"bad path\"}");
+  const String path = (folder == "/" ? String() : folder) + "/" + name;
+  lastActivity = millis();
+  if (!SD_MMC.remove(path)) return reply(req, "404 Not Found", "{\"ok\":false,\"error\":\"no such file\"}");
+  LOGI("transfer", "deleted %s", path.c_str());
+  return reply(req, "200 OK", "{\"ok\":true}");
 }
 
 // POST /done: the phone has sent everything (BLE is paused, so this comes over HTTP).
@@ -408,6 +455,11 @@ bool startServer(String &error) {
   list.method = HTTP_GET;
   list.handler = handleCardList;
   httpd_register_uri_handler(server, &list);
+  httpd_uri_t remove = {};
+  remove.uri = "/card/delete";
+  remove.method = HTTP_POST;
+  remove.handler = handleCardDelete;
+  httpd_register_uri_handler(server, &remove);
   httpd_uri_t done = {};
   done.uri = "/done";
   done.method = HTTP_POST;
