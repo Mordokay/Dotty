@@ -258,6 +258,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   otadata of {seq 1 ota_0 VALID, seq 2 ota_1 NEW}) → rolled back → Rescue put 0.9.1 back.
   Info has `launcher` (its version) in every cartridge. Only one Dotty exists (the
   prototype, never released): no compatibility with layout 1 is needed.
+- **A firmware on trial can't write flash**: `esp_ota_begin` returns
+  `ESP_ERR_OTA_ROLLBACK_INVALID_STATE` while the running app is PENDING_VERIFY. The launcher
+  is on trial for its first 5 s after every switch from a cartridge, and the app installs
+  right after switching, so the first install failed ("flash busy", the old message for any
+  esp_ota_begin error) and a retry worked. installer/library now call
+  `cartridge::confirmHealthy()` before `esp_ota_begin` and report the real error name.
 - **Update outcomes reach the user**: Rescue writes NVS `rescue/result` ("failed" with
   `reason`, or "rolledBack") + `resultVer`, and `rescue/trying` for an update on trial, which
   the launcher turns into "updated" once it has run 8 s. The launcher's Info has `update`

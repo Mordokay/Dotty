@@ -5,6 +5,7 @@
 #include <freertos/stream_buffer.h>
 #include <mbedtls/sha256.h>
 
+#include "cartridge.h"
 #include "log.h"
 
 namespace installer {
@@ -95,9 +96,17 @@ bool start(const Meta &meta, String &error) {
     error = "image too big for the cartridge slot";
     return false;
   }
+  // A launcher just switched to is on trial for its first seconds (bootloader rollback),
+  // and esp_ota_begin refuses to write while the running app is unconfirmed
+  // (ESP_ERR_OTA_ROLLBACK_INVALID_STATE). The app installs right after switching, so the
+  // first install used to fail with "flash busy" and the second worked. Being asked to
+  // install over Bluetooth is proof enough that this launcher runs: confirm it now.
+  cartridge::confirmHealthy();
   // Sequential mode erases each sector just before writing it, so starting is instant.
-  if (esp_ota_begin(target, OTA_WITH_SEQUENTIAL_WRITES, &ota) != ESP_OK) {
-    error = "flash busy";
+  const esp_err_t err = esp_ota_begin(target, OTA_WITH_SEQUENTIAL_WRITES, &ota);
+  if (err != ESP_OK) {
+    LOGE("install", "esp_ota_begin: %s", esp_err_to_name(err));
+    error = String("can't write the cartridge slot (") + esp_err_to_name(err) + ")";
     return false;
   }
   reset();

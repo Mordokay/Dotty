@@ -7,6 +7,7 @@
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
 
+#include "cartridge.h"
 #include "installer.h"
 #include "log.h"
 #include "storage.h"
@@ -225,8 +226,11 @@ bool install(const Entry &entry, Progress progress, String &error) {
   // The size is known, so erase the whole region up front: large block erases are far
   // faster than the 4 KB sector-by-sector erasing of OTA_WITH_SEQUENTIAL_WRITES.
   esp_ota_handle_t ota;
-  if (esp_ota_begin(part, entry.size, &ota) != ESP_OK) {
-    error = "flash busy";
+  cartridge::confirmHealthy();  // a launcher on trial can't write flash (see installer::start)
+  const esp_err_t err = esp_ota_begin(part, entry.size, &ota);
+  if (err != ESP_OK) {
+    LOGE("library", "esp_ota_begin: %s", esp_err_to_name(err));
+    error = String("can't write the cartridge slot (") + esp_err_to_name(err) + ")";
     return false;
   }
 
