@@ -22,7 +22,10 @@ final class DottyLink: NSObject {
     }
 
     private(set) var radio: Radio = .unknown
-    private(set) var connection: Connection = .idle
+    private(set) var connection: Connection = .idle {
+        didSet { if connection == .connecting && oldValue != .connecting { connectingSince = Date() } }
+    }
+    @ObservationIgnored private var connectingSince = Date()
     private(set) var isScanning = false
     private(set) var nearby: [Nearby] = []
     private(set) var info: DottyInfo?
@@ -107,6 +110,25 @@ final class DottyLink: NSObject {
         attach(known)
         connection = .connecting
         central.connect(known)
+    }
+
+    /// Called every few seconds while the app is in front. A pending connection normally
+    /// waits forever and links up as soon as Dotty advertises, but it can get stuck: a failed
+    /// attempt ("encryption timed out" while Dotty was restarting) used to leave the app on
+    /// "Searching for Dotty…" until it was reopened. So: idle → ask again; connecting for too
+    /// long (or connected at the radio level but never set up) → start over.
+    func nudge() {
+        guard paired != nil, radio == .ready else { return }
+        switch connection {
+        case .idle:
+            reconnect()
+        case .connecting where Date().timeIntervalSince(connectingSince) > 30:
+            if let peripheral { central.cancelPeripheralConnection(peripheral) }
+            connection = .idle
+            reconnect()
+        default:
+            break
+        }
     }
 
     func disconnect() {
@@ -305,6 +327,13 @@ extension DottyLink: @preconcurrency CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         connection = .idle
         failReadyWaiters(error ?? DottyError.notConnected)
+        // Paired: try again shortly (e.g. "encryption timed out" while Dotty was restarting).
+        if let paired, peripheral.identifier == paired.identifier {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                self?.reconnect()
+            }
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {

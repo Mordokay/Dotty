@@ -32,7 +32,15 @@ struct ContentView: View {
                 _ = try? await link.send("core.ping")
             }
         }
-    } 
+        // Watchdog: while the app is in front, make sure a connection attempt is under way.
+        .task(id: scenePhase == .active) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                link.nudge()
+            }
+        }
+    }
 }
 
 #Preview {

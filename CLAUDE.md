@@ -658,7 +658,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   main queue with `@preconcurrency` delegate conformances; scan with serial from the
   manufacturer data, `pair` → `remember`, `reconnect` on foreground, pending reconnect
   after any disconnect while paired, `send(cmd, args) async throws` matching replies by
-  "cmd", `ensureLauncher`, `waitForReconnect`), `Bluetooth/DottyProtocol.swift` (UUIDs,
+  "cmd", `ensureLauncher`, `waitForReconnect`; `didFailToConnect` retries after 2 s and
+  ContentView calls `nudge()` every 10 s while in front: idle → reconnect, "connecting" for
+  > 30 s → cancel and start over — a failed attempt used to leave "Searching for Dotty…" until
+  the app was reopened), `Bluetooth/DottyProtocol.swift` (UUIDs,
   DottyInfo, DottyMessage, PairedDotty in UserDefaults), `Catalog/Catalog.swift` (GitHub
   catalog, 1-bit icons → pixel-art Image), `Features/Pairing` (scan + pairing sheet),
   `Features/Dashboard` (status, cartridges via `library.fetch`, Wi-Fi via
