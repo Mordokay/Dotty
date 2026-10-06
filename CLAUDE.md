@@ -296,6 +296,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `--dry-run` shows the plan. First backup: 180 files (85 + the Mac's Spotlight files),
   167 MB in 472 s (362 KB/s); a restore after deleting one file sent just that file.
   ArduinoJson `serializeJson(doc, String&)` *replaces* the string (the first listing broke).
+  **In the app**: Dashboard › Settings › Backups (`Features/Backup/`): back up (data only, or
+  with cartridge copies) into Documents/Backups/<yyyy-MM-dd HHmm>/ with the same
+  dotty-backup.json as the Mac tool (Files app: `UIFileSharingEnabled` +
+  `LSSupportsOpeningDocumentsInPlace` in Dotty-Info.plist), list them ("29 songs · 8 photos
+  · 2 recordings · 158 MB"), restore with the same smart diff (the iPhone's SHA-256s are
+  computed off the main thread), delete. The cartridge that was running starts again after.
   `ble::bondCount()` caches the count: reading NimBLE's store while BLE is off (locked, or
   paused for Wi-Fi) asserts in ble_hs_lock — it crashed the launcher mid-restore.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into

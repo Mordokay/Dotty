@@ -15,7 +15,7 @@ struct DashboardView: View {
     @State private var wifi: WiFiState?
 
     enum Route: Hashable {
-        case cartridges, wifi, music, jokes, weather, album, tape
+        case cartridges, wifi, music, jokes, weather, album, tape, backups
 
         /// The screen of the cartridge Dotty is running, if it has one (and its firmware
         /// has the commands that screen needs).
@@ -67,6 +67,8 @@ struct DashboardView: View {
                         GlassCard(title: "Settings") {
                             LightRow(title: "Forget this Dotty", systemImage: "xmark.circle",
                                      action: { confirmForget = true })
+                            LightRow(title: "Backups", subtitle: "Copy Dotty's SD card to this iPhone, or put a copy back",
+                                     systemImage: "externaldrive", action: { path.append(Route.backups) })
                             LightRow(title: "Factory reset", subtitle: "Erase everything and start fresh",
                                      systemImage: "arrow.counterclockwise.circle", action: { confirmReset = true })
                                 .needsDotty(link)
@@ -93,6 +95,7 @@ struct DashboardView: View {
                 case .weather: WeatherView()
                 case .album: AlbumView()
                 case .tape: TapeView()
+                case .backups: BackupView()
                 }
             }
         }
@@ -166,6 +169,7 @@ struct DashboardView: View {
         case .weather: "Location and units"
         case .album: "Photos, albums and the lock screen"
         case .tape: "Your recordings: listen, share, rename"
+        case .backups: "Copies of Dotty's SD card"
         default: ""
         }
     }
@@ -177,6 +181,7 @@ struct DashboardView: View {
         case .weather: "cloud.sun"
         case .album: "photo.on.rectangle"
         case .tape: "recordingtape"
+        case .backups: "externaldrive"
         default: "square.stack.3d.up"
         }
     }
