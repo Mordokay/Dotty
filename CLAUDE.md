@@ -223,8 +223,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   it and it didn't come back. If it recurs, read those log lines before reflashing.
   bleak/macOS also gets a pairing prompt on the first command now.
 - Core commands: `core.ping`, `core.info`, `core.forget`, `core.toLauncher` (cartridges only),
-  `core.time {local}` (registered by the shell: local epoch seconds; sets the RTC when ≥ 2 s
-  off, replies `drift`; the app sends it on every connection — `DottyLink.syncClock`;
+  `core.time {local, utcOffset?}` (registered by the shell: local epoch seconds; sets the RTC
+  when ≥ 2 s off, replies `drift`; `utcOffset` = the phone's seconds east of UTC, kept in NVS
+  `clock/utcOffset` → `shell::utcOffset()`, since Dotty's clock is local and UTC-dated things
+  like news need the offset; the app sends it on every connection — `DottyLink.syncClock`;
   `ble_dotty.py cmd core.time` sends the Mac's time, taken after a ping so pairing doesn't
   make it stale);
   launcher: `launcher.start`, `install.begin/end/abort`; music: see below.
@@ -587,6 +589,34 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   /download?dir=recordings&name=…`, `/done` — into Caches/Recordings, then AVAudioPlayer),
   share/save (ShareLink), menu: play on Dotty, rename, delete; a deck card while Dotty
   records or plays.
+
+## News cartridge (`cartridges/news/`)
+
+- Topics (max 12, managed in the app): BBC sections (`news::sections()`: top, world, uk,
+  business, politics, tech, science, health, culture, sport → feeds.bbci.co.uk RSS, headline +
+  one-sentence summary) or keywords (Google News search RSS, `when:2d`, en-GB: headline +
+  source, title's " - Source" suffix split off; no summary). ★ = favourite. Starter set: Top
+  stories ★, Tech ★, World, Science. Files in `data/`: `topics.json`, `stories.tsv` (topic key
+  `s:<id>`/`k:<query>`, published UTC, feed position, source, title, summary; parsed in place in
+  PSRAM like jokes.tsv).
+- Fetch task (`news_store.*`, core 0, 12 KB) every 30 min (also locked: the loop runs at every
+  minute wake, Network wake lock while fetching), 5 s after a topic add/remove, retry 10 min.
+  RSS is parsed while streaming (`<item>` by `<item>`; CDATA, entities, tags stripped), stopping
+  after 20 items (Google's feeds are 130 KB); a topic keeps its 10 best stories ≤ 48 h old; a
+  topic whose feed fails keeps its old stories. Measured: 4 topics, 36 stories in 11 s.
+- Ranking: score = feed position + 0.5 × hours old − 2 per extra topic carrying the same
+  title (a big story); Favourites = starred topics (all if none starred), deduplicated.
+- Dotty: menu (★ Favourites + each topic with counts, 38 px rows, paged), story screen
+  (headline bold, "BBC - 2h ago" with a rule under it, summary; swipe up/down scrolls with ▲▼,
+  swipe left/right / BOOT / the "3/10" corner = next/previous). Lock widget: a favourite
+  headline that fits 3 bold lines (measured, like jokes) + source/age, the top 12 taking turns
+  per 5-minute slot (partial refresh). Ages need the phone's UTC offset (core.time).
+- BLE: `news.status` {stories, fetching, done, total, fetchedAt (local), error?, topics[{key,
+  name, section|query, star, count}]}, `news.sections`, `news.topic.add {section | query,
+  name?, star?}`, `news.topic.remove {key}`, `news.topic.star {key, on}`, `news.topic.move
+  {from, to}`, `news.refresh`, `news.stories {topic?, limit?}`; event `news.changed`. Dev key
+  `r` fetches now. App: `Features/News/NewsView.swift` (topics with ★ and a menu, keyword
+  field, BBC sections to add, "Favourites on Dotty now").
 
 ## SD library + Wi-Fi fetch (launcher)
 

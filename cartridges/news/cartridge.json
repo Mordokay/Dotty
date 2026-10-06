@@ -1,0 +1,4 @@
+{
+  "description": "Short, recent news for the topics you follow (BBC sections and your own keywords), fetched every 30 minutes and readable offline. Star favourites for the lock screen.",
+  "requires": ["sd", "wifi"]
+}

@@ -3,6 +3,7 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
+#include <Preferences.h>
 #include <Wire.h>
 
 #include "battery.h"
@@ -26,6 +27,11 @@ Touch touch;
 RtcClock rtc;
 
 namespace {
+
+// The phone's UTC offset (core.time {utcOffset}, NVS clock/utcOffset), read on first use.
+constexpr int32_t kOffsetUnknown = INT32_MIN;     // not read from NVS yet
+constexpr int32_t kOffsetUnread = INT32_MIN + 1;  // no phone has sent one
+int32_t cachedOffset = kOffsetUnknown;
 
 constexpr uint32_t kPowerOffHoldMs = 2000;
 constexpr uint32_t kLauncherComboMs = 1000;
@@ -454,6 +460,17 @@ void begin(const Config &config) {
     }
     reply["drift"] = (long)(current - local);
     if (labs((long)(current - local)) >= 2) setLocalTime(local);
+    if (args["utcOffset"].is<int32_t>()) {
+      const int32_t offset = args["utcOffset"];
+      int32_t known = 0;
+      if (!utcOffset(known) || known != offset) {
+        Preferences p;
+        p.begin("clock", false);
+        p.putInt("utcOffset", offset);
+        p.end();
+        cachedOffset = offset;
+      }
+    }
   });
   lastInteraction = millis();
 }
@@ -584,6 +601,18 @@ void refresh(bool full, bool autoFull) {
 
 int partialsSinceFull() {
   return partials;
+}
+
+bool utcOffset(int32_t &seconds) {
+  if (cachedOffset == kOffsetUnknown) {
+    Preferences p;
+    p.begin("clock", true);
+    cachedOffset = p.getInt("utcOffset", kOffsetUnread);
+    p.end();
+  }
+  if (cachedOffset == kOffsetUnread) return false;
+  seconds = cachedOffset;
+  return true;
 }
 
 void setLocalTime(time_t local) {

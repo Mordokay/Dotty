@@ -29,7 +29,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.3.5");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.3.6");
 
 namespace {
 

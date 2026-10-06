@@ -63,6 +63,10 @@ struct Input {
 
 // Sets the clock (RTC and system time) to this local time, e.g. from internet time.
 void setLocalTime(time_t local);
+// Seconds to add to UTC for local time, as the phone last said (core.time {utcOffset}); kept
+// in NVS. False until a phone has sent it. Dotty's clock keeps local time, so anything dated in
+// UTC (e.g. news) needs it.
+bool utcOffset(int32_t &seconds);
 
 // Shared hardware, ready after begin().
 extern EpdDisplay epd;
