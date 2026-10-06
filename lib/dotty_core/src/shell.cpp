@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 #include <Wire.h>
 
@@ -279,25 +280,43 @@ void loopLock() {
 }
 
 // While an iPhone pairs, Dotty shows the code to type on the phone.
+// The black title bar of the pairing screens (the same height as the nav bar).
+void drawTitleBar(const char *title) {
+  epd.fillScreen(EpdDisplay::kWhite);
+  epd.fillRect(0, 0, kW, 45, EpdDisplay::kBlack);
+  epd.setTextColor(EpdDisplay::kWhite);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, title, 29);
+  epd.setTextColor(EpdDisplay::kBlack);
+}
+
 void drawPairing(uint32_t code) {
   char digits[8];
   snprintf(digits, sizeof(digits), "%03lu %03lu", code / 1000, code % 1000);
-  epd.fillScreen(EpdDisplay::kWhite);
-  ui::drawHeader(epd, "Pair with iPhone");
-  epd.setTextColor(EpdDisplay::kBlack);
+  drawTitleBar("Pairing");
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, "Type this code", 70);
-  ui::drawCentered(epd, "on your iPhone", 90);
+  ui::drawCentered(epd, "Type this code", 78);
+  ui::drawCentered(epd, "on your iPhone", 98);
   epd.setFont(&FreeSansBold24pt7b);
-  ui::drawCentered(epd, digits, 145);
+  ui::drawCentered(epd, digits, 152);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, ble::name(), 188);
 }
 
 void drawPairingResult(bool success) {
-  epd.fillScreen(EpdDisplay::kWhite);
-  ui::drawHeader(epd, "Pair with iPhone");
-  epd.setTextColor(EpdDisplay::kBlack);
+  drawTitleBar("Pairing");
+  if (success) {
+    // A tick in a circle.
+    epd.fillCircle(kW / 2, 92, 26, EpdDisplay::kBlack);
+    for (int d = -2; d <= 2; d++) {
+      epd.drawLine(kW / 2 - 12, 92 + d, kW / 2 - 3, 101 + d, EpdDisplay::kWhite);
+      epd.drawLine(kW / 2 - 3, 101 + d, kW / 2 + 13, 84 + d, EpdDisplay::kWhite);
+    }
+  }
+  epd.setFont(&FreeSansBold12pt7b);
+  ui::drawCentered(epd, success ? "Paired!" : "That didn't work", success ? 150 : 100);
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, success ? "Paired!" : "Pairing failed", 110);
+  ui::drawCentered(epd, success ? "Nice to meet you" : "Try again from the app", success ? 176 : 130);
 }
 
 void handlePairing() {
@@ -463,6 +482,14 @@ bool update(Input &input) {
   const char key = dlog::takeKey();
   if (key == 's') sendScreenshot();
   input.key = key == 's' ? 0 : key;
+  if (key == 'p' && !isLocked) {  // developer aid: the pairing screens (code, then the result)
+    static int step = 0;
+    if (step % 3 == 0) drawPairing(123456);
+    else drawPairingResult(step % 3 == 1);
+    step++;
+    refresh(false);
+    input.key = 0;
+  }
   battery::poll();
   if (battery::empty()) batteryEmptyOff();
   logBattery();

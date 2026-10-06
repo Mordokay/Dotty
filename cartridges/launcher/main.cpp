@@ -25,10 +25,11 @@
 #include "log.h"
 #include "net.h"
 #include "storage.h"
+#include "transfer.h"
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.4");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.6");
 
 namespace {
 
@@ -86,7 +87,65 @@ bool updateFailed() {
   return lastUpdate.status == "failed" || lastUpdate.status == "rolledBack";
 }
 
+// ---------- welcome (first steps after switching on, or a factory reset) ----------
+
+// Where setting Dotty up has got to: paired with a phone, on Wi-Fi, with a cartridge.
+enum class Setup { Welcome, WiFi, Cartridge, Ready };
+
+int previewStage = -1;  // developer aid (serial key 'w'): show a welcome step as if it were real
+
+Setup setupStage() {
+  if (previewStage >= 0) return static_cast<Setup>(previewStage);
+  if (ble::bondCount() == 0) return Setup::Welcome;
+  if (net::saved().empty()) return Setup::WiFi;
+  if (!hasCartridge) return Setup::Cartridge;
+  return Setup::Ready;
+}
+
+String joiningSsid;           // wifi.add is joining this network right now
+String joinFailedSsid;        // …and couldn't: said for a moment
+uint32_t joinFailedUntil = 0;
+
+// The firefly, a friendly title and two short lines: no jargon.
+void drawGreeting(const String &title, const String &line1, const String &line2) {
+  epd.fillScreen(kWhite);
+  epd.setTextColor(kBlack);
+  epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
+  ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
+  epd.setFont(&FreeSansBold12pt7b);
+  ui::drawCentered(epd, title, 146);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, ui::fitText(epd, line1, kW - 8), 170);
+  ui::drawCentered(epd, ui::fitText(epd, line2, kW - 8), 190);
+}
+
+// True if a welcome step took the home screen.
+bool drawWelcome() {
+  if (joiningSsid.length()) {
+    drawGreeting("One moment...", "Joining " + ui::printable(joiningSsid), "");
+    return true;
+  }
+  if (joinFailedUntil && millis() < joinFailedUntil) {
+    drawGreeting("Hmm, no luck", "Couldn't join " + ui::printable(joinFailedSsid), "Check the password in the app");
+    return true;
+  }
+  switch (setupStage()) {
+    case Setup::Welcome:
+      drawGreeting("Hi, I'm Dotty!", "Open the Dotty app", "and pick " + ble::name());
+      return true;
+    case Setup::WiFi:
+      drawGreeting("We're friends!", "Next, pick a Wi-Fi", "network in the app");
+      return true;
+    case Setup::Cartridge:
+      drawGreeting("All set!", "Choose a cartridge", "in the Dotty app");
+      return true;
+    default:
+      return false;
+  }
+}
+
 void drawHome(const char *hint = nullptr) {
+  if (!hint && drawWelcome()) return;
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
@@ -97,17 +156,16 @@ void drawHome(const char *hint = nullptr) {
 
   epd.setFont(&FreeSans9pt7b);
   if (hasCartridge) {
-    ui::drawCentered(epd, ui::fitText(epd, String(installed.name) + " " + installed.version, kW - 16),
-                     168);
+    ui::drawCentered(epd, ui::fitText(epd, String(installed.name) + " is ready", kW - 16), 168);
   } else {
-    ui::drawCentered(epd, "No cartridge installed", 168);
+    ui::drawCentered(epd, "No cartridge yet", 168);
   }
   if (hint) {
     ui::drawCentered(epd, hint, 192);
   } else if (updateFailed()) {
     ui::drawCentered(epd, ui::fitText(epd, "Update to " + lastUpdate.version + " failed", kW - 8), 192);
   } else if (hasCartridge) {
-    ui::drawCentered(epd, "BOOT: start", 192);
+    ui::drawCentered(epd, "Press BOOT to start", 192);
   }
 }
 
@@ -651,8 +709,26 @@ void startFactoryReset(const String &newerLauncher) {
   cartridge::rebootToRescue();
 }
 
+// A whole-card backup or restore over Wi-Fi (tools/card_backup.py).
+void drawCardTransfer() {
+  const transfer::Status s = transfer::status();
+  epd.fillScreen(kWhite);
+  epd.fillRect(0, 0, kW, 45, kBlack);
+  epd.setTextColor(kWhite);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, "SD card copy", 29);
+  epd.setTextColor(kBlack);
+  epd.setFont(&FreeSansBold9pt7b);
+  ui::drawCentered(epd, "Copying files", 80);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, ui::fitText(epd, ui::printable(s.file), kW - 16), 110);
+  ui::drawCentered(epd, "Keep me close to Wi-Fi", 170);
+}
+
 void drawApp() {
-  if (askResetUntil) {
+  if (transfer::active()) {
+    drawCardTransfer();
+  } else if (askResetUntil) {
     drawResetQuestion();
   } else if (job.stage == Stage::None) {
     drawHome();
@@ -751,6 +827,14 @@ void setup() {
     startRequested = true;  // started from loop() once this reply has gone out
   });
   registerBleInstallCommands();
+  transfer::registerCommands([](const transfer::Summary &) { shell::showApp(); });
+  // wifi.add blocks while it joins: say so first (the refresh runs meanwhile).
+  net::onJoining([](const String &ssid) {
+    if (job.stage != Stage::None || askResetUntil) return;
+    joiningSsid = ssid;
+    drawHome();
+    shell::refresh(false);
+  });
   registerLibraryCommands();
   registerFetchCommand();
   shell::showApp();
@@ -764,7 +848,39 @@ void loop() {
     remembered = true;
     rememberGoodLauncher();
   }
+  transfer::poll();
+  if (joiningSsid.length()) {  // wifi.add has returned (it ran inside shell::update)
+    const std::vector<String> known = net::saved();
+    if (std::find(known.begin(), known.end(), joiningSsid) == known.end()) {
+      joinFailedSsid = joiningSsid;
+      joinFailedUntil = millis() + 6000;
+    }
+    joiningSsid = "";
+    shell::showApp();
+  }
+  // The welcome steps follow along: pairing, Wi-Fi, the first cartridge.
+  static Setup shownStage = setupStage();
+  static bool failShown = false;
+  const bool failNow = joinFailedUntil && millis() < joinFailedUntil;
+  if ((setupStage() != shownStage || failShown != failNow) && job.stage == Stage::None && !askResetUntil &&
+      !transfer::active() && !epd.isBusy()) {
+    shownStage = setupStage();
+    failShown = failNow;
+    if (!failNow) joinFailedUntil = 0;
+    shell::showApp();
+  }
   if (!unlocked) return;
+  if (transfer::active()) {  // a card copy: show what's moving, and stay awake
+    static uint32_t lastDraw = 0;
+    if (millis() - lastDraw > 2000 && !epd.isBusy()) {
+      lastDraw = millis();
+      shell::wake();
+      drawCardTransfer();
+      shell::refresh(false);
+    }
+    delay(10);
+    return;
+  }
 
   // BOOT held 10 s on the home screen: ask about a factory reset. (BOOT held at power-on
   // can't be used: the chip would start in USB flashing mode.)
@@ -774,6 +890,10 @@ void loop() {
   else if (!bootDownAt) bootDownAt = millis();
   if (bootDown && bootDownAt && millis() - bootDownAt >= kResetHoldMs && job.stage == Stage::None && !askResetUntil) {
     askResetUntil = millis() + kResetAskMs;
+    shell::showApp();
+  }
+  if (input.key == 'w') {  // developer aid: step through the welcome screens, then back to normal
+    previewStage = previewStage >= static_cast<int>(Setup::Ready) ? -1 : previewStage + 1;
     shell::showApp();
   }
   if (input.key == 'f' && job.stage == Stage::None && !askResetUntil) {  // developer aid: the question

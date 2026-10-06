@@ -190,7 +190,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ## Dotty Core BLE service (`lib/dotty_core/src/core_ble.*`)
 
-- NimBLE-Arduino 2.x + ArduinoJson 7. Device name `Dotty-XXXX` (MAC suffix), the same
+- NimBLE-Arduino 2.x + ArduinoJson 7. Device name `Dotty-SP01` (fixed, `kDeviceName` in
+  core_ble.cpp; it was `Dotty-` + MAC suffix, "Dotty-B100"; Info has it as `device`), the same
   in every firmware, so the app sees one device across cartridge swaps.
 - Service `b9c10000-fbaa-4525-8400-055f7a543231`; characteristics `…0001` Info (read,
   JSON, refreshed every 10 s; **max 512 bytes** — a longer value is cut and the app can't
@@ -272,6 +273,21 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Dotty (`DottyLink.forgetAfterReset`) and the pairing screen asks to Forget This Device in
   iOS Settings › Bluetooth (apps can't remove iOS bonds). Not yet run for real on the
   prototype (it erases the user's songs, photos and recordings).
+- **Welcome flow** (launcher home, user-facing, no jargon): never paired (`ble::bondCount()`
+  0) → firefly + "Hi, I'm Dotty! / Open the Dotty app / and pick Dotty-SP01"; paired, no
+  Wi-Fi → "We're friends! / Next, pick a Wi-Fi network in the app"; `wifi.add` → "One
+  moment... / Joining Naru" (`net::onJoining` hook; the refresh runs while it blocks) and
+  "Hmm, no luck / Couldn't join … / Check the password in the app" for 6 s if it failed;
+  no cartridge → "All set! / Choose a cartridge in the Dotty app"; then the usual home
+  ("Music is ready / Press BOOT to start"). Pairing screens (shell, every firmware): black
+  title bar "Pairing", "Type this code on your iPhone", the code, the name; then a tick +
+  "Paired! / Nice to meet you" or "That didn't work / Try again from the app". Dev keys: `w`
+  steps through the welcome screens, `p` shows the pairing screens.
+- **SD card backup to the Mac** (`tools/card_backup.py backup [folder]` → `~/Dotty Backups/
+  <date time>/`, `restore <folder>`): switches to the launcher, `transfer.start {scope: card}`
+  (whole-card mode, launcher only: `GET /card/list`, `GET /download?path=`, `POST
+  /upload?path=` with absolute card paths, no ".."), checks every size, `POST /done`. The
+  Mac must be on Dotty's Wi-Fi, and the iPhone app must not hold Dotty's one BLE link.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,

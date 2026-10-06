@@ -50,11 +50,16 @@ def serial_from(adv):
     return ":".join(f"{b:02X}" for b in data) if data and len(data) == 6 else "?"
 
 
+def advertised_name(device, adv):
+    """The name Dotty advertises now (macOS caches device.name: Dotty-B100 after the rename)."""
+    return adv.local_name or device.name or ""
+
+
 async def find(name, timeout):
     devices = await BleakScanner.discover(timeout=timeout, service_uuids=[SERVICE], return_adv=True)
     wanted = (name or "").lower()
     found = [(d, adv) for d, adv in devices.values()
-             if not wanted or wanted in ((d.name or "").lower(), serial_from(adv).lower())]
+             if not wanted or wanted in (advertised_name(d, adv).lower(), serial_from(adv).lower())]
     if not found:
         sys.exit("No Dotty found. Is it unlocked (Bluetooth is off while locked and asleep)?")
     return found
@@ -78,7 +83,7 @@ def build_command(cmd, params):
 
 async def scan(args):
     for device, adv in await find(args.name, args.timeout):
-        print(f"{device.name or '?':12} serial {serial_from(adv)}  RSSI {adv.rssi} dBm")
+        print(f"{advertised_name(device, adv) or '?':12} serial {serial_from(adv)}  RSSI {adv.rssi} dBm")
 
 
 async def connect(args):
@@ -297,7 +302,7 @@ async def install(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--name", help="device name, e.g. Dotty-B100 (default: first found)")
+    parser.add_argument("--name", help="device name, e.g. Dotty-SP01 (default: first found)")
     parser.add_argument("--timeout", type=float, default=6, help="scan time in seconds")
     parser.add_argument("--catalog", default=CATALOG_URL, help="catalog.json URL")
     sub = parser.add_subparsers(dest="action", required=True)

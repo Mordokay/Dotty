@@ -68,4 +68,8 @@ bool download(const String &url, Sink sink, Progress progress, String &error);
 // BLE commands: wifi.scan, wifi.add, wifi.list, wifi.remove, wifi.prefer, wifi.status.
 void registerCommands();
 
+// Called just before wifi.add tries a network (it blocks while joining), e.g. to show
+// "Joining Naru…" on the screen.
+void onJoining(void (*hook)(const String &ssid));
+
 }  // namespace net

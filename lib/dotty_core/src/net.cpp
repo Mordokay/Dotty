@@ -315,6 +315,12 @@ bool download(const String &url, Sink sink, Progress progress, String &error) {
   return ok;
 }
 
+void (*joiningHook)(const String &) = nullptr;
+
+void onJoining(void (*hook)(const String &ssid)) {
+  joiningHook = hook;
+}
+
 void registerCommands() {
   begin();
 
@@ -335,6 +341,7 @@ void registerCommands() {
     const String name = args["ssid"] | "";
     const String password = args["password"] | "";
     String error;
+    if (name.length() && joiningHook) joiningHook(name);
     if (name.isEmpty()) error = "ssid is required";
     else if (!connectTo(name, password, error)) {
     } else if (!remember(name, password)) error = "Dotty already knows 8 networks";

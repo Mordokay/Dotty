@@ -45,6 +45,8 @@ struct DottyInfo: Decodable, Equatable, Sendable {
     let card: Bool?
     /// Cartridges only: the launcher's version (firmware from the launcher-updates era on).
     let launcher: String?
+    /// Dotty's Bluetooth name ("Dotty-SP01").
+    let device: String?
     /// Launcher only: how the last system update went, until the app has shown it.
     let update: UpdateResult?
 

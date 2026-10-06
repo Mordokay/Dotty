@@ -19,7 +19,7 @@
 // shows a 6-digit code on its screen (it is "display only") and the user types it on the
 // phone. Bonds live in NVS, shared by every firmware, so pairing survives cartridge swaps.
 //
-// Advertising carries the name "Dotty-XXXX" plus manufacturer data 0xFFFF + the
+// Advertising carries the name "Dotty-SP01" plus manufacturer data 0xFFFF + the
 // 6-byte chip serial (factory MAC), so an app can tell Dottys apart while scanning
 // (iOS hides real MAC addresses from apps).
 //
@@ -37,7 +37,7 @@ using InfoExtender = std::function<void(JsonObject info)>;
 // Receives Data characteristic writes. Runs on the BLE task: copy and return fast.
 using DataHandler = std::function<void(const uint8_t *data, size_t len)>;
 
-// Device name "Dotty-XXXX" (last MAC bytes). Starts advertising.
+// Device name "Dotty-SP01" (the prototype's name). Starts advertising.
 void begin();
 void on(const char *cmd, Handler handler);
 void extendInfo(InfoExtender extender);
@@ -55,6 +55,11 @@ int poll();
 void notify(JsonDocument &event);
 
 bool connected();
+
+// "Dotty-SP01": the name the iPhone lists.
+const String &name();
+// Phones paired with Dotty (0 after a factory reset: the welcome screen).
+int bondCount();
 
 // Pairing code to show while an iPhone is pairing (false when none is in progress).
 bool pairingCode(uint32_t &code);

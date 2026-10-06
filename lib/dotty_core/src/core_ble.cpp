@@ -9,6 +9,9 @@
 #include "cartridge.h"
 #include "log.h"
 
+// Dotty's Bluetooth name. SP01 = the first (and only) prototype.
+constexpr const char *kDeviceName = "Dotty-SP01";
+
 namespace ble {
 namespace {
 
@@ -129,6 +132,7 @@ void buildInfo(JsonDocument &doc, bool withCommands) {
   doc["name"] = me.name;
   doc["version"] = me.version;
   doc["serial"] = serialText;
+  doc["device"] = deviceName;  // the app keeps the name it shows in step
   if (!cartridge::isLauncher()) {  // the launcher's version, for "Dotty system" updates in the app
     static CartridgeInfo launcher = {};
     static bool read = cartridge::readLauncher(launcher);
@@ -225,9 +229,9 @@ void begin() {
   snprintf(text, sizeof(text), "%02X:%02X:%02X:%02X:%02X:%02X", serialBytes[0], serialBytes[1],
            serialBytes[2], serialBytes[3], serialBytes[4], serialBytes[5]);
   serialText = text;
-  char name[16];
-  snprintf(name, sizeof(name), "Dotty-%02X%02X", serialBytes[4], serialBytes[5]);
-  deviceName = name;
+  // The prototype's own name (it was "Dotty-" + the last MAC bytes, "Dotty-B100"). A fixed
+  // name survives a factory reset; a second device would need its own.
+  deviceName = kDeviceName;
   registerCoreCommands();
   start();
 }
@@ -358,6 +362,14 @@ void notify(JsonDocument &event) {
 
 bool connected() {
   return isConnected;
+}
+
+const String &name() {
+  return deviceName;
+}
+
+int bondCount() {
+  return NimBLEDevice::getNumBonds();
 }
 
 bool pairingCode(uint32_t &code) {

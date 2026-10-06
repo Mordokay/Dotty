@@ -5,6 +5,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
+#include "cartridge.h"
 #include "core_ble.h"
 #include "log.h"
 #include "net.h"
@@ -42,6 +43,9 @@ char lastDir[128] = {};
 char lastName[128] = {};
 size_t lastSize = 0;
 bool stopRequested = false;
+// Whole-card mode (backups, launcher only): ?path= may name any file on the card and
+// GET /card/list lists them all.
+bool cardScope = false;
 // Wi-Fi and BLE share the radio: with BLE on, uploads run at about half speed (measured
 // 130 vs 240 KB/s). So BLE pauses shortly after transfer.start has been answered and
 // comes back when the session ends.
@@ -158,16 +162,29 @@ void setCurrentFile(const char *name) {
   portEXIT_CRITICAL(&lock);
 }
 
+// Whole-card mode: an absolute path on the card ("/cartridges/music/data/x.mp3"), checked
+// so it stays on the card (no "..", no empty segments). False if it isn't usable.
+bool cardPath(httpd_req_t *req, String &folder, String &name) {
+  if (!cardScope) return false;
+  const String path = queryValue(req, "path");
+  if (!path.startsWith("/") || path.endsWith("/") || path.indexOf("..") >= 0 || path.indexOf("//") >= 0) return false;
+  const int slash = path.lastIndexOf('/');
+  folder = slash > 0 ? path.substring(0, slash) : String("/");
+  name = path.substring(slash + 1);
+  return name.length() > 0;
+}
+
 // POST (or PUT) /upload?dir=&name=. Replies {"ok":true,"name":<name as stored>}.
 // Phones should POST: iOS silently re-sends a PUT whose connection drops, so a failing
 // upload repeats without the app knowing.
 esp_err_t handleUpload(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
-  const String dir = storage::safeName(queryValue(req, "dir"));
-  const String name = storage::safeName(queryValue(req, "name"));
+  String dir = storage::safeName(queryValue(req, "dir"));
+  String name = storage::safeName(queryValue(req, "name"));
+  String folder = storage::myDataDir() + (dir.length() ? "/" + dir : "");
+  if (cardPath(req, folder, name)) dir = folder;  // a restore puts files back where they were
   if (name.isEmpty()) return reply(req, "400 Bad Request", "{\"ok\":false,\"error\":\"name is required\"}");
 
-  const String folder = storage::myDataDir() + (dir.length() ? "/" + dir : "");
   storage::makeDirs(folder);
   const String path = folder + "/" + name;
   File out = SD_MMC.open(path + ".part", FILE_WRITE);
@@ -267,8 +284,10 @@ esp_err_t handleUpload(httpd_req_t *req) {
 esp_err_t handleDownload(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
   const String dir = storage::safeName(queryValue(req, "dir"));
-  const String name = storage::safeName(queryValue(req, "name"));
-  const String path = storage::myDataDir() + (dir.length() ? "/" + dir : "") + "/" + name;
+  String name = storage::safeName(queryValue(req, "name"));
+  String path = storage::myDataDir() + (dir.length() ? "/" + dir : "") + "/" + name;
+  String folder;
+  if (cardPath(req, folder, name)) path = (folder == "/" ? String() : folder) + "/" + name;
   File in = name.length() ? SD_MMC.open(path) : File();
   if (!in || in.isDirectory()) return reply(req, "404 Not Found", "{\"ok\":false,\"error\":\"no such file\"}");
   const size_t total = in.size();
@@ -301,6 +320,37 @@ esp_err_t handleDownload(httpd_req_t *req) {
   LOGI("transfer", "%s: %u of %u bytes", ok && sent == total ? "sent" : "send FAILED", static_cast<unsigned>(sent),
        static_cast<unsigned>(total));
   return ok ? ESP_OK : ESP_FAIL;
+}
+
+// Whole-card mode: GET /card/list → [{"path": "/…", "size": n}, …], every file on the card.
+void listCard(const String &folder, String &json, bool &first) {
+  File dir = SD_MMC.open(folder.length() ? folder : String("/"));
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    const String path = folder + "/" + f.name();
+    if (f.isDirectory()) {
+      f.close();
+      listCard(path, json, first);
+      continue;
+    }
+    JsonDocument item;
+    item["path"] = path;
+    item["size"] = f.size();
+    f.close();
+    if (!first) json += ",";
+    first = false;
+    serializeJson(item, json);
+    lastActivity = millis();
+  }
+}
+
+esp_err_t handleCardList(httpd_req_t *req) {
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  if (!cardScope) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"not in whole-card mode\"}");
+  String json = "[";
+  bool first = true;
+  listCard("", json, first);
+  json += "]";
+  return reply(req, "200 OK", json.c_str());
 }
 
 // POST /done: the phone has sent everything (BLE is paused, so this comes over HTTP).
@@ -353,6 +403,11 @@ bool startServer(String &error) {
   download.method = HTTP_GET;
   download.handler = handleDownload;
   httpd_register_uri_handler(server, &download);
+  httpd_uri_t list = {};
+  list.uri = "/card/list";
+  list.method = HTTP_GET;
+  list.handler = handleCardList;
+  httpd_register_uri_handler(server, &list);
   httpd_uri_t done = {};
   done.uri = "/done";
   done.method = HTTP_POST;
@@ -368,6 +423,7 @@ void stop(bool appFinished) {
   stopWriter();
   net::disconnect();
   blePauseAt = 0;
+  cardScope = false;
   if (blePaused && !shell::locked()) ble::start();  // locked: the shell restarts it on unlock
   blePaused = false;
   power::setWakeLock(power::kWakeLockNetwork, false);
@@ -388,9 +444,12 @@ void stop(bool appFinished) {
 void registerCommands(std::function<void(const Summary &)> onFinished) {
   finishedCallback = std::move(onFinished);
 
-  ble::on("transfer.start", [](JsonObjectConst, JsonObject reply) {
+  // {scope?: "card"}: whole-card mode (backups and restores; the launcher only).
+  ble::on("transfer.start", [](JsonObjectConst args, JsonObject reply) {
     String error;
-    if (!storage::available()) error = "no SD card";
+    const bool wholeCard = strcmp(args["scope"] | "", "card") == 0;
+    if (wholeCard && !cartridge::isLauncher()) error = "whole-card transfers run in the launcher";
+    else if (!storage::available()) error = "no SD card";
     else if (!server && !net::connect(error)) {
     } else if (!server && !startServer(error)) {
       net::disconnect();
@@ -403,6 +462,7 @@ void registerCommands(std::function<void(const Summary &)> onFinished) {
     if (token[0] == 0 || filesReceived == 0) {
       for (int i = 0; i < 16; i++) snprintf(token + 2 * i, 3, "%02x", static_cast<unsigned>(esp_random() & 0xFF));
     }
+    cardScope = wholeCard;
     power::setWakeLock(power::kWakeLockNetwork, true);
     lastActivity = millis();
     reply["url"] = "http://" + net::ip();

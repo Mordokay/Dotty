@@ -364,6 +364,12 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
         switch characteristic.uuid {
         case DottyUUID.info:
             info = try? JSONDecoder().decode(DottyInfo.self, from: value)
+            // Dotty was renamed (Dotty-B100 → Dotty-SP01): keep the name the app shows in step.
+            if let device = info?.device, var dotty = paired, dotty.name != device {
+                dotty.name = device
+                dotty.save()
+                paired = dotty
+            }
             becameReadyIfComplete()
         case DottyUUID.event:
             if value.first == 0x1E {
