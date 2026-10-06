@@ -309,7 +309,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   dotty-backup.json as the Mac tool (Files app: `UIFileSharingEnabled` +
   `LSSupportsOpeningDocumentsInPlace` in Dotty-Info.plist), list them ("29 songs · 8 photos
   · 2 recordings · 158 MB"), restore with the same smart diff (the iPhone's SHA-256s are
-  computed off the main thread), delete. The cartridge that was running starts again after.
+  computed off the main thread), delete. **Local paths are NFC-normalized**
+  (`localFiles`): iOS enumerates the backup folder with decomposed names, which put a Korean
+  song's upload URL at 562 characters (> 512, rejected by esp_http_server with no log) and
+  stalled the first real restore after a factory reset; NFD paths also never match Dotty's, so
+  the diff would resend and delete them. A file Dotty refuses (non-200) is skipped and listed
+  instead of ending the restore; 409 still means cancelled on Dotty. The cartridge that was running starts again after.
   **Dotty's screen during a backup/restore** (launcher `drawCardTransfer`): title Backup /
   Restore, "20 of 50", a bar by size and the file without its extension. Dotty can't know
   the plan by itself (the client picks the files), so each request carries headers

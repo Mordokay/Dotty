@@ -222,6 +222,7 @@ final class BackupModel {
             }
             let started = Date()
             var done: Int64 = 0
+            var refused: [String] = []  // one bad file shouldn't sink the whole restore
             for (i, path) in send.sorted().enumerated() {
                 try Task.checkCancellation()
                 self.stage = "Sending \(i + 1) of \(send.count)"
@@ -229,7 +230,9 @@ final class BackupModel {
                                            progress: ("restore", i + 1, send.count, done, total))
                 request.httpMethod = "POST"
                 let (_, response) = try await URLSession.shared.upload(for: request, fromFile: local[path]!)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DottyError.refused("Dotty couldn't take \(path)") }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 409 { throw DottyError.refused("cancelled on Dotty") }
+                if status != 200 { refused.append((path as NSString).lastPathComponent) }
                 done += Int64((try? local[path]!.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
                 self.progress = total > 0 ? Double(done) / Double(total) : nil
                 self.detail = Self.rate(done: done, total: total, since: started)
@@ -241,8 +244,12 @@ final class BackupModel {
                 request.httpMethod = "POST"
                 _ = try await URLSession.shared.data(for: request)
             }
+            if !refused.isEmpty {
+                self.error = "Dotty couldn't take \(refused.count == 1 ? "this file" : "these \(refused.count) files"): "
+                    + refused.joined(separator: ", ")
+            }
             var parts = ["\(unchanged) unchanged"]
-            if !send.isEmpty { parts.append("\(send.count) sent") }
+            if send.count > refused.count { parts.append("\(send.count - refused.count) sent") }
             if !delete.isEmpty { parts.append("\(delete.count) removed") }
             self.notice = "Restored: " + parts.joined(separator: ", ") + "."
         }
@@ -359,7 +366,10 @@ final class BackupModel {
             let relative = String(file.standardizedFileURL.path.dropFirst(folder.standardizedFileURL.path.count))
             guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   relative != "/" + manifestName, !hidden(relative) else { continue }
-            local[relative] = file
+            // iOS hands back decomposed (NFD) names: Korean ones grow ~1.7x, past the 512
+            // characters Dotty's server takes in a URL, and they wouldn't match Dotty's (NFC)
+            // paths either, so the smart restore would resend and delete them.
+            local[relative.precomposedStringWithCanonicalMapping] = file
         }
         return local
     }

@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -166,7 +167,8 @@ def restore(folder, dry_run=False):
     manifest = folder / "dotty-backup.json"
     info = json.loads(manifest.read_text()) if manifest.exists() else {}
     scope = info.get("scope", "all")
-    local = {"/" + p.relative_to(folder).as_posix(): p for p in sorted(folder.rglob("*"))
+    # NFC like Dotty's names (a decomposed Korean name can pass the server's 512-char URL limit)
+    local = {unicodedata.normalize("NFC", "/" + p.relative_to(folder).as_posix()): p for p in sorted(folder.rglob("*"))
              if p.is_file() and p != manifest and not hidden(p.relative_to(folder))}
     # older backups don't list their cartridges: every one they have files of
     cartridges = set(info.get("cartridges") or filter(None, map(cartridge_of, local)))
