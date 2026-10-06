@@ -279,8 +279,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   setting), erases the ota_0 header, writes the launcher(s) back to the card, sets
   `rescue/good` (and `trying` for the newer one) and starts the launcher. The app forgets
   Dotty (`DottyLink.forgetAfterReset`) and the pairing screen asks to Forget This Device in
-  iOS Settings › Bluetooth (apps can't remove iOS bonds). Not yet run for real on the
-  prototype (it erases the user's songs, photos and recordings).
+  iOS Settings › Bluetooth (apps can't remove iOS bonds). Run for real on 2026-10-06:
+  reset → welcome → pairing (after Forget This Device) → Wi-Fi → restore of the 152 MB iPhone
+  backup (after the NFC fix) → Music back with 29 songs and 4 playlists.
 - **Welcome flow** (launcher home, user-facing, no jargon): never paired (`ble::bondCount()`
   0) → firefly + "Hi, I'm Dotty! / Open the Dotty app / and pick Dotty-SP01"; paired, no
   Wi-Fi → "We're friends! / Next, pick a Wi-Fi network in the app"; `wifi.add` → "One
