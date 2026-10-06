@@ -611,6 +611,18 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Events `fetch.progress {stage, done, size}`.
 - Intended app flow: the iOS app fetches the catalog, the user picks, the app sends
   `library.fetch` over BLE; BLE image upload (`install.begin`) is the fallback.
+- **Offline switching** (launcher 0.9.14): `library.fetch` installs the requested build
+  straight from the card when it's there (no Wi-Fi; reply `fromCard`), and when Wi-Fi, the
+  catalog or the download fails it installs the newest version on the card instead (reply
+  `offline: true, reason`; never for the launcher). One path for every card install:
+  `installFromCard()` (also `install.fromCard` and the picker). The app skips its "no Wi-Fi
+  yet" stop when the card has the cartridge and says when Dotty installed an older card copy.
+  A failed install screen goes back home after 15 s or a tap (it used to wait for BOOT).
+- **Cartridge picker on Dotty** (no phone, no internet): tap the launcher's home screen ("BOOT:
+  start Tap: switch") → "Cartridges" list (newest version per cartridge on the card, the
+  installed one inverted, 4 rows a page, swipes / the page corner turn pages, back or BOOT
+  closes); a row installs from the card and restarts into it, the installed one just starts.
+  Get to the launcher with BOOT + PWR. Dev key `c` opens it.
 
 ## Power management (`lib/dotty_core/src/power.*`)
 

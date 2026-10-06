@@ -437,24 +437,36 @@ struct CartridgesView: View {
             // cartridges may not), so switch first, then check Wi-Fi.
             install?.stage = "Switching to the launcher"
             try await link.ensureLauncher()
-            install?.stage = "Checking Dotty's Wi-Fi"
-            let saved = try await link.send("wifi.list")["networks"] as? [String] ?? []
-            guard !saved.isEmpty else {
-                install?.error = "Dotty has no Wi-Fi yet. Add a network under Wi-Fi first."
-                return
+            // A copy on Dotty's card installs without the internet (Dotty prefers it, and falls
+            // back to the newest one there when it can't get online).
+            let cardVersions = onCard[cartridge.id]?.versions ?? []
+            if cardVersions.isEmpty {
+                install?.stage = "Checking Dotty's Wi-Fi"
+                let saved = try await link.send("wifi.list")["networks"] as? [String] ?? []
+                guard !saved.isEmpty else {
+                    install?.error = "Dotty has no Wi-Fi yet. Add a network under Wi-Fi first."
+                    return
+                }
             }
-            install?.stage = "Connecting to Wi-Fi"
+            install?.stage = cardVersions.contains(cartridge.version) ? "Installing from Dotty's card" : "Connecting to Wi-Fi"
             // Name/version/size let Dotty's screen show the cartridge before the catalog arrives.
-            try await link.send("library.fetch", ["id": cartridge.id, "name": cartridge.name, "version": cartridge.version,
-                                                  "size": cartridge.size, "sha256": cartridge.sha256], timeout: 300)
+            let reply = try await link.send("library.fetch", ["id": cartridge.id, "name": cartridge.name,
+                                                              "version": cartridge.version, "size": cartridge.size,
+                                                              "sha256": cartridge.sha256], timeout: 300)
             install?.stage = "Restarting"
             install?.progress = nil
             try await link.waitForReconnect()
-            // Short confirmation that goes away by itself.
+            // Short confirmation that goes away by itself (longer when it isn't the newest).
             install = nil
             await loadCard()
-            success = "\(cartridge.name) \(cartridge.version) is installed."
-            try? await Task.sleep(for: .seconds(2.5))
+            let version = reply["version"] as? String ?? cartridge.version
+            if reply["offline"] as? Bool == true, version != cartridge.version {
+                success = "Installed \(cartridge.name) \(version) from Dotty's card. Dotty couldn't reach the internet, so \(cartridge.version) wasn't downloaded."
+                try? await Task.sleep(for: .seconds(6))
+            } else {
+                success = "\(cartridge.name) \(version) is installed."
+                try? await Task.sleep(for: .seconds(2.5))
+            }
             success = nil
         } catch {
             install?.error = error.localizedDescription

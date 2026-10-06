@@ -23,13 +23,14 @@
 #include "installer.h"
 #include "library.h"
 #include "log.h"
+#include "nav_bar.h"
 #include "net.h"
 #include "storage.h"
 #include "transfer.h"
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.13");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.14");
 
 namespace {
 
@@ -65,8 +66,17 @@ struct Job {
   uint8_t icon[installer::kIconBytes];
   bool hasIcon = false;
   bool failureShown = false;
+  uint32_t failedAt = 0;
 };
 Job job;
+constexpr uint32_t kFailureShownMs = 15000;  // then back to the home screen by itself
+
+// The cartridge picker: every cartridge on the card, to switch without the phone or the
+// internet (tap the home screen).
+constexpr int16_t kRowH = 38;  // like the cartridges' lists: 4 rows a page
+constexpr int kPickerRows = (EpdDisplay::kSize - nav::kHeight - 2) / kRowH;
+bool pickerOpen = false;
+int pickerPage = 0;
 
 // The last launcher update's outcome, from Rescue's notes (rescue/result…): "updated",
 // "failed" or "rolledBack", until the app has shown it (launcher.updateSeen).
@@ -144,6 +154,21 @@ bool drawWelcome() {
   }
 }
 
+bool olderThan(const String &a, const char *b);
+
+// One entry per cartridge on the card (its newest version), by name; not the launcher.
+std::vector<library::Entry> cardCartridges() {
+  std::vector<library::Entry> out;
+  for (const library::Entry &e : library::list()) {
+    if (e.id == "launcher") continue;
+    auto same = std::find_if(out.begin(), out.end(), [&](const library::Entry &o) { return o.id == e.id; });
+    if (same == out.end()) out.push_back(e);
+    else if (olderThan(same->version, e.version.c_str())) *same = e;
+  }
+  std::sort(out.begin(), out.end(), [](const library::Entry &a, const library::Entry &b) { return a.name < b.name; });
+  return out;
+}
+
 void drawHome(const char *hint = nullptr) {
   if (!hint && drawWelcome()) return;
   epd.fillScreen(kWhite);
@@ -160,12 +185,19 @@ void drawHome(const char *hint = nullptr) {
   } else {
     ui::drawCentered(epd, "No cartridge yet", 168);
   }
+  // Can a tap switch to another cartridge on the card?
+  const std::vector<library::Entry> onCard = cardCartridges();
+  const bool others = std::any_of(onCard.begin(), onCard.end(), [](const library::Entry &e) {
+    return !hasCartridge || e.id != installed.id;
+  });
   if (hint) {
     ui::drawCentered(epd, hint, 192);
   } else if (updateFailed()) {
     ui::drawCentered(epd, ui::fitText(epd, "Update to " + lastUpdate.version + " failed", kW - 8), 192);
   } else if (hasCartridge) {
-    ui::drawCentered(epd, "Press BOOT to start", 192);
+    ui::drawCentered(epd, others ? "BOOT: start   Tap: switch" : "Press BOOT to start", 192);
+  } else if (others) {
+    ui::drawCentered(epd, "Tap to pick one", 192);
   }
 }
 
@@ -254,6 +286,7 @@ void startJob(const String &action, const String &name, const String &version, s
 void failJob(const String &error) {
   job.stage = Stage::Failed;
   job.error = error;
+  job.failedAt = millis();
 }
 
 // ---------- BLE install ----------
@@ -454,6 +487,30 @@ void rememberGoodLauncher() {
 
 // ---------- SD card library ----------
 
+void notifyFetch(const char *stage, size_t done, size_t size);
+
+// Installs a cartridge that's already on the card (no internet needed): the job screen with
+// its icon, then loop() restarts into it. A launcher is staged for Rescue instead. False (the
+// job failed, error set) if it can't.
+bool installFromCard(const library::Entry &entry, String &error) {
+  uint8_t icon[installer::kIconBytes];
+  const bool haveIcon = library::readIcon(entry, icon);
+  job.fromBle = false;
+  startJob("Installing from card", entry.name, entry.version, entry.size, haveIcon ? icon : nullptr);
+  const bool ok = entry.id == "launcher" ? stageLauncher(entry, error)
+                                         : library::install(entry, [](size_t done, size_t) {
+                                             job.done = done;
+                                             updateJobScreen();
+                                             notifyFetch("install", done, job.size);
+                                           }, error);
+  if (!ok) {
+    failJob(error);
+    return false;
+  }
+  job.stage = Stage::Done;  // loop() restarts into it (or into Rescue)
+  return true;
+}
+
 void registerLibraryCommands() {
   library::begin();
 
@@ -487,29 +544,9 @@ void registerLibraryCommands() {
       return;
     }
 
-    job.fromBle = false;
-    startJob("Installing from card", entry.name, entry.version, entry.size);
-    job.hasIcon = library::readIcon(entry, job.icon);
-    if (entry.id == "launcher") {
-      if (stageLauncher(entry, error)) {
-        job.stage = Stage::Done;  // loop() restarts into Rescue
-        reply["version"] = entry.version;
-      } else {
-        failJob(error);
-        reply["ok"] = false;
-        reply["error"] = error;
-      }
-      return;
-    }
-    const bool ok = library::install(entry, [](size_t done, size_t) {
-      job.done = done;
-      updateJobScreen();
-    }, error);
-    if (ok) {
-      job.stage = Stage::Done;
+    if (installFromCard(entry, error)) {
       reply["version"] = entry.version;
     } else {
-      failJob(error);
       reply["ok"] = false;
       reply["error"] = error;
     }
@@ -573,6 +610,10 @@ void registerFetchCommand() {
   // {id, version?, sha256?, install? = true}: Dotty reads the catalog over Wi-Fi,
   // downloads the cartridge onto the card (skipped if that build is already there),
   // then installs it from the card. Progress: fetch.progress events.
+  // Offline-friendly: the build the app asked for, when it's on the card, installs without
+  // Wi-Fi ({fromCard: true}); and when the internet can't be reached, the newest version on
+  // the card is installed instead of failing ({offline: true, reason}) — never for the
+  // launcher, where an older copy isn't an update.
   ble::on("library.fetch", [](JsonObjectConst args, JsonObject reply) {
     const String id = args["id"] | "";
     const String wantVersion = args["version"] | "";
@@ -589,6 +630,28 @@ void registerFetchCommand() {
     if (id.isEmpty()) return fail("id is required");
     if (!library::available()) return fail("no SD card");
 
+    library::Entry exact;
+    if (install && wantVersion.length() && library::find(id, wantVersion, exact) &&
+        (wantSha.isEmpty() || wantSha.equalsIgnoreCase(exact.sha256))) {
+      LOGI("fetch", "%s %s is on the card: no Wi-Fi needed", id.c_str(), wantVersion.c_str());
+      if (!installFromCard(exact, error)) return fail(error);
+      reply["version"] = exact.version;
+      reply["downloaded"] = false;
+      reply["fromCard"] = true;
+      return;
+    }
+    auto offline = [&](const String &why) {
+      library::Entry newest;
+      if (!install || id == "launcher" || !library::find(id, "", newest)) return fail(why);
+      net::disconnect();
+      LOGW("fetch", "%s: installing %s %s from the card instead", why.c_str(), id.c_str(), newest.version.c_str());
+      if (!installFromCard(newest, error)) return fail(error);
+      reply["version"] = newest.version;
+      reply["downloaded"] = false;
+      reply["offline"] = true;
+      reply["reason"] = why;
+    };
+
     // Show what we already know: the app sends name/version/size from its catalog copy,
     // and an earlier version on the card provides the icon.
     job.fromBle = false;
@@ -597,13 +660,13 @@ void registerFetchCommand() {
     const bool haveIcon = library::find(id, "", previous) && library::readIcon(previous, cardIcon);
     startJob("Connecting to Wi-Fi", args["name"] | (previous.name.length() ? previous.name : id), wantVersion,
              args["size"] | 0, haveIcon ? cardIcon : nullptr);
-    if (!net::connect(error)) return fail(error);
+    if (!net::connect(error)) return offline(error);
 
     notifyFetch("catalog", 0, 0);
     String body;
-    if (!net::getString(catalogUrl, body, error)) return fail("catalog: " + error);
+    if (!net::getString(catalogUrl, body, error)) return offline("catalog: " + error);
     JsonDocument catalog;
-    if (deserializeJson(catalog, body) != DeserializationError::Ok) return fail("catalog is not valid JSON");
+    if (deserializeJson(catalog, body) != DeserializationError::Ok) return offline("catalog is not valid JSON");
     JsonObjectConst item;
     for (JsonObjectConst e : catalog["cartridges"].as<JsonArrayConst>()) {
       if (id == (e["id"] | "")) item = e;
@@ -640,7 +703,7 @@ void registerFetchCommand() {
     drawJob();
     shell::refresh(false);
     if (!cached) {
-      if (!downloadToCard(entry, item["firmware"] | "", error)) return fail(error);
+      if (!downloadToCard(entry, item["firmware"] | "", error)) return offline(error);
     }
     net::disconnect();
     reply["version"] = entry.version;
@@ -764,11 +827,93 @@ void drawCardTransfer() {
   epd.print("Cancel");
 }
 
+// ---------- cartridge picker ----------
+
+void drawPicker() {
+  const std::vector<library::Entry> entries = cardCartridges();
+  const int pages = max(1, (static_cast<int>(entries.size()) + kPickerRows - 1) / kPickerRows);
+  pickerPage = constrain(pickerPage, 0, pages - 1);
+  epd.fillScreen(kWhite);
+  nav::draw(epd, "Cartridges", nav::Icon::Back, nav::Icon::None, nav::pageLabel(pickerPage, pages));
+  epd.setFont(&FreeSans9pt7b);
+  if (entries.empty()) {
+    epd.setTextColor(kBlack);
+    ui::drawWrapped(epd, "No cartridges on the card yet. Add one from the Dotty app.", 90, kW - 24, 4, 20);
+    return;
+  }
+  for (int row = 0; row < kPickerRows; row++) {
+    const int i = pickerPage * kPickerRows + row;
+    if (i >= static_cast<int>(entries.size())) break;
+    const library::Entry &e = entries[i];
+    const int16_t top = nav::kHeight + 2 + row * kRowH;
+    const bool current = hasCartridge && e.id == installed.id;  // the one in the slot
+    if (current) epd.fillRect(0, top, kW, kRowH - 1, kBlack);
+    epd.setTextColor(current ? kWhite : kBlack);
+    const String version = current ? String(installed.version) : e.version;
+    const int16_t versionW = ui::textWidth(epd, version);
+    epd.setCursor(10, top + kRowH / 2 + 6);
+    epd.print(ui::fitText(epd, e.name, kW - 30 - versionW));
+    epd.setCursor(kW - 10 - versionW, top + kRowH / 2 + 6);
+    epd.print(version);
+    if (!current) epd.drawFastHLine(10, top + kRowH - 1, kW - 20, kBlack);
+  }
+  epd.setTextColor(kBlack);
+}
+
+void closePicker() {
+  pickerOpen = false;
+  shell::showApp();
+}
+
+// Swipes / the page corner turn pages, back or BOOT closes, a row installs that cartridge
+// from the card (the one in the slot just starts).
+void loopPicker(const shell::Input &input) {
+  using G = Touch::Gesture;
+  if (startRequested && hasCartridge) {  // launcher.start from the app
+    pickerOpen = false;
+    startCartridge();
+    return;
+  }
+  if (input.boot) return closePicker();
+  const std::vector<library::Entry> entries = cardCartridges();
+  const int pages = max(1, (static_cast<int>(entries.size()) + kPickerRows - 1) / kPickerRows);
+  int page = pickerPage;
+  if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) page = (page + 1) % pages;
+  if (input.gesture == G::SwipeRight || input.gesture == G::SwipeDown) page = (page + pages - 1) % pages;
+  if (input.gesture == G::Tap) {
+    const uint16_t x = shell::touch.x(), y = shell::touch.y();
+    const int corner = nav::hit(x, y);
+    if (corner < 0) return closePicker();
+    if (corner > 0) {
+      page = (page + 1) % pages;
+    } else if (y >= nav::kHeight + 2) {
+      const int row = (y - nav::kHeight - 2) / kRowH;
+      const int i = pickerPage * kPickerRows + row;
+      if (row < kPickerRows && i < static_cast<int>(entries.size())) {
+        pickerOpen = false;
+        if (hasCartridge && entries[i].id == installed.id) {
+          startCartridge();
+        } else {
+          String error;
+          installFromCard(entries[i], error);  // loop() restarts into it, or shows the failure
+        }
+        return;
+      }
+    }
+  }
+  if (page != pickerPage) {
+    pickerPage = page;
+    shell::showApp();
+  }
+}
+
 void drawApp() {
   if (transfer::active()) {
     drawCardTransfer();
   } else if (askResetUntil) {
     drawResetQuestion();
+  } else if (job.stage == Stage::None && pickerOpen) {
+    drawPicker();
   } else if (job.stage == Stage::None) {
     drawHome();
   } else {
@@ -963,7 +1108,7 @@ void loop() {
       drawJob();
       shell::refresh(true);
     }
-    if (input.boot) {
+    if (input.boot || input.gesture == Touch::Gesture::Tap || millis() - job.failedAt > kFailureShownMs) {
       job.stage = Stage::None;
       hasCartridge = cartridge::readInstalled(installed);
       shell::showApp();
@@ -981,6 +1126,12 @@ void loop() {
       askResetUntil = 0;
       shell::showApp();
     }
+  } else if (pickerOpen) {
+    loopPicker(input);
+  } else if (input.key == 'c' || (input.gesture == Touch::Gesture::Tap && !cardCartridges().empty())) {
+    pickerOpen = true;  // serial c: developer aid
+    pickerPage = 0;
+    shell::showApp();
   } else if ((input.boot || startRequested) && hasCartridge) {
     startCartridge();
   }
