@@ -52,6 +52,10 @@ void registerCommands(std::function<void(const Summary &)> onFinished = nullptr)
 // Call from the main loop: idle timeout and events.
 void poll();
 bool active();
+// Stops the session from Dotty's side (e.g. a Cancel button): the app's next request gets
+// "cancelled on Dotty", and the session ends a few seconds later.
+void cancel();
+bool cancelling();
 Status status();
 
 }  // namespace transfer

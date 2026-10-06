@@ -51,6 +51,14 @@ bool cardScope = false;
 char jobName[12] = {};
 volatile int jobStep = 0, jobSteps = 0;
 volatile uint64_t jobBytesBefore = 0, jobBytesTotal = 0;
+// Cancelled on Dotty (cancel()): the file in progress is dropped at once (a half-sent
+// download, a deleted .part), later requests get 409 "cancelled on Dotty" (GET /status says
+// so too), and the session stops once nothing has
+// moved for kCancelGraceMs — long enough for the app's next request to hear why (stopping
+// right after the last file left it timing out against a server that was gone).
+constexpr uint32_t kCancelGraceMs = 5000;
+constexpr uint32_t kCancelMaxMs = 180000;  // a big file on weak Wi-Fi
+volatile uint32_t cancelledAt = 0;
 // Wi-Fi and BLE share the radio: with BLE on, uploads run at about half speed (measured
 // 130 vs 240 KB/s). So BLE pauses shortly after transfer.start has been answered and
 // comes back when the session ends.
@@ -206,6 +214,7 @@ bool cardPath(httpd_req_t *req, String &folder, String &name) {
 // upload repeats without the app knowing.
 esp_err_t handleUpload(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  if (cancelledAt) return reply(req, "409 Conflict", "{\"ok\":false,\"error\":\"cancelled on Dotty\"}");
   String dir = storage::safeName(queryValue(req, "dir"));
   String name = storage::safeName(queryValue(req, "name"));
   String folder = storage::myDataDir() + (dir.length() ? "/" + dir : "");
@@ -234,12 +243,12 @@ esp_err_t handleUpload(httpd_req_t *req) {
   int timeouts = 0;
   bool connectionOk = true;
   const uint32_t started = millis();
-  while (received < total && connectionOk && !writeFailed) {
+  while (received < total && connectionOk && !writeFailed && !cancelledAt) {
     int i;
     xQueueReceive(emptyBlocks, &i, portMAX_DELAY);
     size_t filled = 0;
     const size_t want = min(total - received, kBlock);
-    while (filled < want) {
+    while (filled < want && !cancelledAt) {
       const int n = httpd_req_recv(req, reinterpret_cast<char *>(blocks[i] + filled), want - filled);
       if (n == HTTPD_SOCK_ERR_TIMEOUT) {
         // Nothing for recv_wait_timeout seconds: the phone went away (locked, closed, out
@@ -279,6 +288,13 @@ esp_err_t handleUpload(httpd_req_t *req) {
   currentDone = 0;
   lastActivity = millis();
 
+  if (cancelledAt && !complete) {
+    SD_MMC.remove(path + ".part");
+    // Answer, then fail: ESP_FAIL closes the socket. Returning ESP_OK would make the server
+    // read and discard the rest of the file before the phone hears anything.
+    reply(req, "409 Conflict", "{\"ok\":false,\"error\":\"cancelled on Dotty\"}");
+    return ESP_FAIL;
+  }
   if (!complete) {
     filesFailed = filesFailed + 1;
     SD_MMC.remove(path + ".part");
@@ -311,6 +327,7 @@ esp_err_t handleUpload(httpd_req_t *req) {
 // recording), in 16 KB chunks.
 esp_err_t handleDownload(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  if (cancelledAt) return reply(req, "409 Conflict", "{\"ok\":false,\"error\":\"cancelled on Dotty\"}");
   const String dir = storage::safeName(queryValue(req, "dir"));
   String name = storage::safeName(queryValue(req, "name"));
   String path = storage::myDataDir() + (dir.length() ? "/" + dir : "") + "/" + name;
@@ -332,7 +349,7 @@ esp_err_t handleDownload(httpd_req_t *req) {
   constexpr size_t kChunk = kBlock;
   bool ok = true;
   size_t sent = 0;
-  while (ok && sent < total) {
+  while (ok && sent < total && !cancelledAt) {
     const size_t n = in.read(reinterpret_cast<uint8_t *>(chunk), kChunk);
     if (n == 0) break;
     ok = httpd_resp_send_chunk(req, chunk, n) == ESP_OK;
@@ -340,15 +357,16 @@ esp_err_t handleDownload(httpd_req_t *req) {
     currentDone = sent;
     lastActivity = millis();
   }
-  if (ok) ok = httpd_resp_send_chunk(req, nullptr, 0) == ESP_OK;
+  const bool cut = ok && sent < total && cancelledAt;  // the phone sees a broken-off reply
+  if (ok && !cut) ok = httpd_resp_send_chunk(req, nullptr, 0) == ESP_OK;
   in.close();
   setCurrentFile("");
   currentTotal = 0;
   currentDone = 0;
   lastActivity = millis();
-  LOGI("transfer", "%s: %u of %u bytes", ok && sent == total ? "sent" : "send FAILED", static_cast<unsigned>(sent),
-       static_cast<unsigned>(total));
-  return ok ? ESP_OK : ESP_FAIL;
+  LOGI("transfer", "%s: %u of %u bytes", cut ? "send cancelled" : ok && sent == total ? "sent" : "send FAILED",
+       static_cast<unsigned>(sent), static_cast<unsigned>(total));
+  return ok && !cut ? ESP_OK : ESP_FAIL;
 }
 
 // Whole-card mode: GET /card/list[?hash=1] → [{"path": "/…", "size": n, "sha256"?: "…"}, …],
@@ -382,7 +400,7 @@ String fileSha256(File &f) {
 
 void listCard(const String &folder, CardLister &out) {
   File dir = SD_MMC.open(folder.length() ? folder : String("/"));
-  for (File f = dir ? dir.openNextFile() : File(); f && out.ok; f = dir.openNextFile()) {
+  for (File f = dir ? dir.openNextFile() : File(); f && out.ok && !cancelledAt; f = dir.openNextFile()) {
     const String path = folder + "/" + f.name();
     if (f.isDirectory()) {
       f.close();
@@ -409,6 +427,7 @@ void listCard(const String &folder, CardLister &out) {
 
 esp_err_t handleCardList(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  if (cancelledAt) return reply(req, "409 Conflict", "{\"ok\":false,\"error\":\"cancelled on Dotty\"}");
   if (!cardScope) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"not in whole-card mode\"}");
   httpd_resp_set_type(req, "application/json");
   CardLister out{req, queryValue(req, "hash") == "1"};
@@ -421,15 +440,26 @@ esp_err_t handleCardList(httpd_req_t *req) {
   }
   httpd_resp_send_chunk(req, "[", 1);
   listCard("", out);
+  // Cancelled midway: no closing bracket, so the app can't mistake half a list for all of
+  // it (a restore deletes what the list doesn't have).
+  if (cancelledAt) out.ok = false;
   if (out.ok) httpd_resp_send_chunk(req, "]", 1);
   httpd_resp_send_chunk(req, nullptr, 0);
   return out.ok ? ESP_OK : ESP_FAIL;
+}
+
+// GET /status → {"cancelled": bool}: lets the app tell "cancelled on Dotty" from a dropped
+// connection when a request fails.
+esp_err_t handleStatus(httpd_req_t *req) {
+  if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  return reply(req, "200 OK", cancelledAt ? "{\"ok\":true,\"cancelled\":true}" : "{\"ok\":true,\"cancelled\":false}");
 }
 
 // Whole-card mode: POST /card/delete?path= removes a file (a restore drops what the backup
 // doesn't have).
 esp_err_t handleCardDelete(httpd_req_t *req) {
   if (!tokenMatches(req)) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"bad token\"}");
+  if (cancelledAt) return reply(req, "409 Conflict", "{\"ok\":false,\"error\":\"cancelled on Dotty\"}");
   String folder, name;
   if (!cardPath(req, folder, name)) return reply(req, "400 Bad Request", "{\"ok\":false,\"error\":\"bad path\"}");
   const String path = (folder == "/" ? String() : folder) + "/" + name;
@@ -468,6 +498,7 @@ bool startServer(String &error) {
     return false;
   }
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.max_uri_handlers = 12;  // 7 routes (the default allows 8)
   config.server_port = 80;
   config.stack_size = 8192;
   config.recv_wait_timeout = kRecvWaitSeconds;
@@ -494,6 +525,11 @@ bool startServer(String &error) {
   list.method = HTTP_GET;
   list.handler = handleCardList;
   httpd_register_uri_handler(server, &list);
+  httpd_uri_t status = {};
+  status.uri = "/status";
+  status.method = HTTP_GET;
+  status.handler = handleStatus;
+  httpd_register_uri_handler(server, &status);
   httpd_uri_t remove = {};
   remove.uri = "/card/delete";
   remove.method = HTTP_POST;
@@ -515,6 +551,7 @@ void stop(bool appFinished) {
   net::disconnect();
   blePauseAt = 0;
   cardScope = false;
+  cancelledAt = 0;
   jobName[0] = 0;
   jobStep = jobSteps = 0;
   jobBytesBefore = jobBytesTotal = 0;
@@ -597,11 +634,26 @@ void poll() {
     ble::notify(event);
   }
   const bool idle = currentTotal == 0 || currentDone >= currentTotal;
+  if (cancelledAt && ((idle && millis() - cancelledAt > kCancelGraceMs && millis() - lastActivity > kCancelGraceMs) ||
+                      millis() - cancelledAt > kCancelMaxMs)) {
+    stopRequested = true;
+  }
   if (stopRequested || (idle && millis() - lastActivity > kIdleTimeoutMs)) {
     const bool byApp = stopRequested;
     stopRequested = false;
     stop(byApp);
   }
+}
+
+void cancel() {
+  if (server && !cancelledAt) {
+    cancelledAt = millis();
+    LOGI("transfer", "cancelled on Dotty");
+  }
+}
+
+bool cancelling() {
+  return cancelledAt != 0;
 }
 
 bool active() {

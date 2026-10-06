@@ -310,6 +310,21 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   files · N files checked". Hidden files are skipped by both the app and the Mac tool.
   `ble::bondCount()` caches the count: reading NimBLE's store while BLE is off (locked, or
   paused for Wi-Fi) asserts in ble_hs_lock — it crashed the launcher mid-restore.
+  **Per-cartridge backups**: the app lists the cartridges on the card (`storage.list`, with
+  sizes; all ticked by default) and backs up only the ticked ones' `/cartridges/<id>/`
+  (Mac: `backup --only weather,jokes`); the launcher's own copies are never backed up. The
+  manifest lists `cartridges` (older backups: every cartridge they have files of), and a
+  restore only adds/changes/deletes inside those, so a Weather-only backup leaves Music alone.
+  **Cancel** (app progress card, or the Cancel button at the bottom of Dotty's transfer
+  screen, y > 142): the file in flight is dropped at once — the user found "finishing this
+  file first" unresponsive — (a cut-off chunked download; an upload's `.part` deleted, then
+  409 + `ESP_FAIL`, because returning ESP_OK makes esp_http_server read and discard the rest
+  of the body first). Later requests get 409 "cancelled on Dotty" and `GET /status` says
+  `cancelled`, so clients report "stopped on Dotty"; the server stays up until nothing has
+  moved for 5 s (stopping right after the last file left the Mac timing out against a server
+  that was gone). The app deletes a half-made backup folder (the Mac tool too); a cancelled
+  restore keeps the files already sent. Tested: Mac backup and restore both stopped within
+  ~1 s of the tap.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,

@@ -18,15 +18,34 @@ final class BackupModel {
         let photos: Int
         let recordings: Int
         let withFirmware: Bool
+        /// The cartridges it holds (a restore only touches these).
+        let cartridges: [String]
 
         var summary: String {
-            var parts: [String] = []
+            var parts = [cartridges.map { BackupModel.names[$0] ?? $0.capitalized }.joined(separator: ", ")]
             if songs > 0 { parts.append(songs == 1 ? "1 song" : "\(songs) songs") }
             if photos > 0 { parts.append(photos == 1 ? "1 photo" : "\(photos) photos") }
             if recordings > 0 { parts.append(recordings == 1 ? "1 recording" : "\(recordings) recordings") }
             parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
             return parts.joined(separator: " · ")
         }
+    }
+
+    /// A cartridge with files on Dotty's card (storage.list): what a backup can include.
+    struct CardCartridge: Identifiable, Hashable {
+        let id: String
+        let bytes: Int64
+
+        var name: String { BackupModel.names[id] ?? id.capitalized }
+    }
+
+    static let names = ["music": "Music", "jokes": "Joke Factory", "weather": "Weather Station",
+                        "album": "Album Viewer", "tape": "Tape Recorder", "launcher": "Dotty system"]
+
+    /// "/cartridges/music/data/…" → "music".
+    nonisolated static func cartridge(of path: String) -> String? {
+        let parts = path.split(separator: "/")
+        return parts.count > 2 && parts[0] == "cartridges" ? String(parts[1]) : nil
     }
 
     /// A file on Dotty's card, from GET /card/list.
@@ -37,7 +56,11 @@ final class BackupModel {
     }
 
     private(set) var backups: [Backup] = []
+    /// Cartridges with data on Dotty, for choosing what to back up.
+    private(set) var onDotty: [CardCartridge] = []
+    @ObservationIgnored private var job: Task<Void, Never>?
     private(set) var busy = false
+    private(set) var cancelling = false
     private(set) var stage: String?
     private(set) var progress: Double?
     private(set) var detail: String?
@@ -68,7 +91,8 @@ final class BackupModel {
                           songs: paths.filter { $0.contains("/music/data/library/") }.count,
                           photos: paths.filter { $0.contains("/album/data/photos/") }.count,
                           recordings: paths.filter { $0.contains("/tape/data/recordings/") }.count,
-                          withFirmware: manifest.scope == "all")
+                          withFirmware: manifest.scope == "all",
+                          cartridges: manifest.cartridges ?? Array(Set(paths.compactMap(Self.cartridge(of:)))).sorted())
         }
         .sorted { $0.made > $1.made }
     }
@@ -81,42 +105,82 @@ final class BackupModel {
     private struct Manifest: Codable {
         let made: String
         let scope: String
+        var cartridges: [String]? = nil  // older backups: every cartridge in `files`
         let files: [CardFile]
 
         var date: Date { ISO8601DateFormatter.local.date(from: made) ?? .distantPast }
     }
 
+    /// The cartridges with files on Dotty (Bluetooth, no Wi-Fi needed).
+    func loadOnDotty() async {
+        guard let reply = try? await link.send("storage.list") else { return }
+        onDotty = (reply["cartridges"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let id = item["id"] as? String, id != "launcher" else { return nil }
+            let bytes = (item["data"] as? NSNumber)?.int64Value ?? 0
+            let installed = !(item["versions"] as? [Any] ?? []).isEmpty
+            return bytes > 0 || installed ? CardCartridge(id: id, bytes: bytes) : nil
+        }
+        .sorted { $0.name < $1.name }
+    }
+
+    // MARK: - Running and cancelling
+
+    /// Starts a backup or restore that `cancel()` can stop.
+    func start(_ work: @escaping () async -> Void) {
+        guard job == nil else { return }
+        job = Task {
+            await work()
+            job = nil
+        }
+    }
+
+    func cancel() {
+        guard job != nil else { return }
+        cancelling = true
+        stage = "Stopping"
+        job?.cancel()
+    }
+
     // MARK: - Back up
 
-    func backUp(withFirmware: Bool) async {
-        await run("Backing up") { url, token in
+    /// Copies the chosen cartridges' files (and their firmware copies with `withFirmware`).
+    func backUp(only cartridges: Set<String>, withFirmware: Bool) async {
+        await run("Backup") { url, token in
             self.stage = "Reading Dotty's card"
-            var files = try await self.list(url, token, hashes: false)
-                .filter { !Self.hidden($0.path) && (withFirmware || !$0.path.contains("/firmware/")) }
+            var files = try await self.list(url, token, hashes: false).filter { file in
+                guard !Self.hidden(file.path), let id = Self.cartridge(of: file.path), cartridges.contains(id) else { return false }
+                return withFirmware || !file.path.contains("/firmware/")
+            }
             files.sort { $0.path < $1.path }
             let total = files.reduce(0) { $0 + $1.size }
             let stamp = Date()
             let folder = Self.folder.appending(path: Self.folderName(for: stamp), directoryHint: .isDirectory)
             let started = Date()
             var done: Int64 = 0
-            for (i, file) in files.enumerated() {
-                self.stage = "Copying \(i + 1) of \(files.count)"
-                let target = folder.appending(path: String(file.path.dropFirst()))
-                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let request = self.request(url, token, "download", file.path,
-                                           progress: ("backup", i + 1, files.count, done, total))
-                let (temp, response) = try await URLSession.shared.download(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DottyError.refused("Dotty couldn't send \(file.path)") }
-                try? FileManager.default.removeItem(at: target)
-                try FileManager.default.moveItem(at: temp, to: target)
-                let size = (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? -1
-                guard size == file.size else { throw DottyError.refused("\(file.path) arrived incomplete") }
-                done += file.size
-                self.progress = total > 0 ? Double(done) / Double(total) : nil
-                self.detail = Self.rate(done: done, total: total, since: started)
+            do {
+                for (i, file) in files.enumerated() {
+                    try Task.checkCancellation()
+                    self.stage = "Copying \(i + 1) of \(files.count)"
+                    let target = folder.appending(path: String(file.path.dropFirst()))
+                    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    let request = self.request(url, token, "download", file.path,
+                                               progress: ("backup", i + 1, files.count, done, total))
+                    let (temp, response) = try await URLSession.shared.download(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DottyError.refused("Dotty couldn't send \(file.path)") }
+                    try? FileManager.default.removeItem(at: target)
+                    try FileManager.default.moveItem(at: temp, to: target)
+                    let size = (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? -1
+                    guard size == file.size else { throw DottyError.refused("\(file.path) arrived incomplete") }
+                    done += file.size
+                    self.progress = total > 0 ? Double(done) / Double(total) : nil
+                    self.detail = Self.rate(done: done, total: total, since: started)
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: folder)  // no half backups
+                throw error
             }
             let manifest = Manifest(made: ISO8601DateFormatter.local.string(from: stamp),
-                                    scope: withFirmware ? "all" : "data", files: files)
+                                    scope: withFirmware ? "all" : "data", cartridges: cartridges.sorted(), files: files)
             try JSONEncoder().encode(manifest).write(to: folder.appending(path: Self.manifestName))
             self.loadBackups()
             let size = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
@@ -130,7 +194,7 @@ final class BackupModel {
     /// files (SHA-256), unchanged ones stay, files the backup lacks are deleted (never the
     /// launcher's copies, hidden files, or cartridge copies when the backup has only data).
     func restore(_ backup: Backup) async {
-        await run("Restoring") { url, token in
+        await run("Restore") { url, token in
             let local = Self.localFiles(in: backup.folder)
             self.stage = "Dotty is checking its files"
             self.progress = nil
@@ -145,8 +209,11 @@ final class BackupModel {
                     return path
                 }
             }.value
+            // Only the backup's cartridges are made to match: others stay as they are.
+            let scope = Set(backup.cartridges)
             let keep: (String) -> Bool = { path in
                 Self.hidden(path) || path.hasPrefix("/cartridges/launcher/") || (!backup.withFirmware && path.contains("/firmware/"))
+                    || !(Self.cartridge(of: path).map(scope.contains) ?? false)
             }
             let delete = remote.keys.filter { local[$0] == nil && !keep($0) }
             let unchanged = local.count - send.count
@@ -156,6 +223,7 @@ final class BackupModel {
             let started = Date()
             var done: Int64 = 0
             for (i, path) in send.sorted().enumerated() {
+                try Task.checkCancellation()
                 self.stage = "Sending \(i + 1) of \(send.count)"
                 var request = self.request(url, token, "upload", path,
                                            progress: ("restore", i + 1, send.count, done, total))
@@ -167,6 +235,7 @@ final class BackupModel {
                 self.detail = Self.rate(done: done, total: total, since: started)
             }
             for (i, path) in delete.sorted().enumerated() {
+                try Task.checkCancellation()
                 self.stage = "Removing \(i + 1) of \(delete.count)"
                 var request = self.request(url, token, "card/delete", path)
                 request.httpMethod = "POST"
@@ -196,6 +265,7 @@ final class BackupModel {
         let background = UIApplication.shared.beginBackgroundTask(withName: what)
         defer {
             busy = false
+            cancelling = false
             stage = nil
             progress = nil
             detail = nil
@@ -214,17 +284,41 @@ final class BackupModel {
             session = (url, token)
             try await body(url, token)
         } catch {
-            self.error = "\(what) didn't finish: \(error.localizedDescription). Is this iPhone on the same Wi-Fi as Dotty?"
+            let stoppedHere = error is CancellationError || (error as? URLError)?.code == .cancelled
+            // Cleanup runs in its own task: a cancelled task's network calls fail at once.
+            let stoppedOnDotty = await Task { () -> Bool in
+                guard !stoppedHere, let (url, token) = session else { return false }
+                return await Self.cancelledOnDotty(url, token)
+            }.value
+            if stoppedHere {
+                self.notice = what == "Restore" ? "Restore stopped. Dotty has the files sent so far." : "Backup stopped."
+            } else if stoppedOnDotty {
+                self.notice = what == "Restore" ? "Restore stopped on Dotty. It has the files sent so far." : "Backup stopped on Dotty."
+            } else {
+                self.error = "\(what) didn't finish: \(error.localizedDescription). Is this iPhone on the same Wi-Fi as Dotty?"
+            }
         }
-        if let (url, token) = session {
-            stage = "Reconnecting to Dotty"
-            await SongOutbox.endSession(server: url, token: token)
-            try? await link.waitForReconnect(timeout: 30)
-        }
-        if let wasRunning, link.info?.isLauncher == true {
-            stage = "Starting \(wasRunning) again"
-            _ = try? await link.send("launcher.start")
-        }
+        await Task { [link] in
+            if let (url, token) = session {
+                self.stage = "Reconnecting to Dotty"
+                await SongOutbox.endSession(server: url, token: token)
+                try? await link.waitForReconnect(timeout: 30)
+            }
+            if let wasRunning, link.info?.isLauncher == true {
+                self.stage = "Starting \(wasRunning) again"
+                _ = try? await link.send("launcher.start")
+            }
+        }.value
+    }
+
+    /// Asks Dotty whether the session was cancelled on its screen (GET /status).
+    private static func cancelledOnDotty(_ url: URL, _ token: String) async -> Bool {
+        var request = URLRequest(url: url.appending(path: "status"))
+        request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
+        request.timeoutInterval = 5
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return json["cancelled"] as? Bool ?? false
     }
 
     private func list(_ url: URL, _ token: String, hashes: Bool) async throws -> [CardFile] {

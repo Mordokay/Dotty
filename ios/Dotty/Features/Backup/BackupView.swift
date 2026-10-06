@@ -21,6 +21,8 @@ private struct BackupContent: View {
     @Bindable var model: BackupModel
     @Environment(DottyLink.self) private var link
     @State private var withFirmware = false
+    /// Cartridges left out of the next backup (all are in by default).
+    @State private var skipped: Set<String> = []
     @State private var restoring: BackupModel.Backup?
     @State private var deleting: BackupModel.Backup?
 
@@ -44,12 +46,15 @@ private struct BackupContent: View {
         }
         .navigationTitle("")
         .onAppear { model.loadBackups() }
+        .task(id: link.connection == .connected) {
+            if link.connection == .connected && !model.busy { await model.loadOnDotty() }
+        }
         .confirmationDialog("Put this backup back on Dotty?", isPresented: .init(get: { restoring != nil },
                                                                                set: { if !$0 { restoring = nil } }),
                             titleVisibility: .visible, presenting: restoring) { backup in
-            Button("Restore") { Task { await model.restore(backup) } }
-        } message: { _ in
-            Text("Dotty's songs, photos, recordings and other files will match this backup. Files that are already the same aren't sent again.")
+            Button("Restore") { model.start { await model.restore(backup) } }
+        } message: { backup in
+            Text("\(backup.cartridges.map { BackupModel.names[$0] ?? $0 }.joined(separator: ", ")) on Dotty will match this backup. Files that are already the same aren't sent again; other cartridges aren't touched.")
         }
         .confirmationDialog("Delete this backup?", isPresented: .init(get: { deleting != nil },
                                                                        set: { if !$0 { deleting = nil } }),
@@ -62,18 +67,42 @@ private struct BackupContent: View {
 
     private var backUpCard: some View {
         GlassCard(title: "Back up now") {
+            if model.onDotty.isEmpty {
+                Text(link.connection == .connected ? "Looking at Dotty's card…" : "Connect to Dotty to choose what to back up.")
+                    .font(.lpCallout).foregroundStyle(Color.inkMuted).padding(Spacing.m)
+            }
+            ForEach(model.onDotty) { cartridge in
+                Toggle(isOn: .init(get: { !skipped.contains(cartridge.id) },
+                                   set: { if $0 { skipped.remove(cartridge.id) } else { skipped.insert(cartridge.id) } })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(cartridge.name).font(.lpCallout).foregroundStyle(Color.ink)
+                        Text(cartridge.bytes > 0 ? ByteCountFormatter.string(fromByteCount: cartridge.bytes, countStyle: .file) : "No files yet")
+                            .font(.lpCaption).foregroundStyle(Color.inkMuted)
+                    }
+                }
+                .toggleStyle(.light())
+                .padding(.horizontal, Spacing.m)
+                .padding(.vertical, Spacing.s)
+            }
+            Divider().padding(.horizontal, Spacing.m)
             Toggle("Include cartridge copies", isOn: $withFirmware)
                 .toggleStyle(.light())
                 .padding(Spacing.m)
-            Text(withFirmware ? "Everything on the card." : "Your songs, photos, recordings and settings files. Cartridges can always be downloaded again.")
+            Text(withFirmware ? "The chosen cartridges' files and their firmware." : "Your songs, photos, recordings and settings files. Cartridges can always be downloaded again.")
                 .font(.lpCaption).foregroundStyle(Color.inkMuted)
                 .padding(.horizontal, Spacing.m)
-            Button("Back up Dotty") { Task { await model.backUp(withFirmware: withFirmware) } }
-                .buttonStyle(.light())
-                .padding(Spacing.m)
-                .needsDotty(link)
+            Button(chosen.count == model.onDotty.count ? "Back up Dotty" : "Back up \(chosen.count) of \(model.onDotty.count)") {
+                let only = chosen
+                model.start { await model.backUp(only: only, withFirmware: withFirmware) }
+            }
+            .buttonStyle(.light())
+            .padding(Spacing.m)
+            .disabled(chosen.isEmpty)
+            .needsDotty(link)
         }
     }
+
+    private var chosen: Set<String> { Set(model.onDotty.map(\.id)).subtracting(skipped) }
 
     private var progressCard: some View {
         GlassCard(title: "Working on it", light: DottyLight.firefly.color) {
@@ -89,6 +118,10 @@ private struct BackupContent: View {
                 }
                 Text("Keep the app open; your screen stays on. Dotty's Bluetooth pauses meanwhile.")
                     .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                Button("Cancel", role: .cancel) { model.cancel() }
+                    .buttonStyle(.light())
+                    .disabled(model.cancelling)
+                    .padding(.top, Spacing.s)
             }
             .padding(Spacing.m)
         }

@@ -29,7 +29,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.10");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.11");
 
 namespace {
 
@@ -709,6 +709,8 @@ void startFactoryReset(const String &newerLauncher) {
   cartridge::rebootToRescue();
 }
 
+constexpr int16_t kCancelTop = 162;  // the card copy's Cancel button
+
 // A whole-card backup or restore over Wi-Fi (the app's Backups, or tools/card_backup.py):
 // what it is, "20 of 50", a bar by size, and the file in plain words.
 void drawCardTransfer() {
@@ -728,6 +730,12 @@ void drawCardTransfer() {
   if (dot > 0) file.remove(dot);
 
   epd.setFont(&FreeSansBold12pt7b);
+  if (transfer::cancelling()) {
+    ui::drawCentered(epd, "Stopping...", 88);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, "Telling the app", 120);
+    return;
+  }
   if (checking) {
     ui::drawCentered(epd, "Checking my files", 88);
   } else if (s.steps > 0) {
@@ -747,8 +755,13 @@ void drawCardTransfer() {
     const int16_t fill = static_cast<int16_t>((barW - 4) * done / s.bytesTotal);
     if (fill > 0) epd.fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 4, kBlack);
   }
-  ui::drawCentered(epd, ui::fitText(epd, file, kW - 16), 150);
-  ui::drawCentered(epd, "Keep me close to Wi-Fi", 186);
+  ui::drawCentered(epd, ui::fitText(epd, file, kW - 16), 146);
+  // Cancel (tap anywhere below the file name).
+  epd.drawRoundRect(54, kCancelTop, kW - 108, 30, 15, kBlack);
+  epd.drawRoundRect(55, kCancelTop + 1, kW - 110, 28, 14, kBlack);
+  epd.setFont(&FreeSansBold9pt7b);
+  epd.setCursor((kW - ui::textWidth(epd, "Cancel")) / 2, kCancelTop + 21);
+  epd.print("Cancel");
 }
 
 void drawApp() {
@@ -898,6 +911,10 @@ void loop() {
   if (!unlocked) return;
   if (transfer::active()) {  // a card copy: show what's moving, and stay awake
     static uint32_t lastDraw = 0;
+    if (input.gesture == Touch::Gesture::Tap && shell::touch.y() > kCancelTop - 20 && !transfer::cancelling()) {
+      transfer::cancel();
+      lastDraw = 0;  // show "Stopping..." now
+    }
     if (millis() - lastDraw > 2000 && !epd.isBusy()) {
       lastDraw = millis();
       shell::wake();
