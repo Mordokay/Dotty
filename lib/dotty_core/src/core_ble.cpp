@@ -129,6 +129,11 @@ void buildInfo(JsonDocument &doc, bool withCommands) {
   doc["name"] = me.name;
   doc["version"] = me.version;
   doc["serial"] = serialText;
+  if (!cartridge::isLauncher()) {  // the launcher's version, for "Dotty system" updates in the app
+    static CartridgeInfo launcher = {};
+    static bool read = cartridge::readLauncher(launcher);
+    if (read) doc["launcher"] = launcher.version;
+  }
   doc["battery"] = battery::percent();
   doc["charging"] = battery::charging();
   doc["power"] = battery::external();

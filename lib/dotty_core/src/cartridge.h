@@ -30,6 +30,9 @@ bool isLauncher();
 // Reads the identity of the cartridge in ota_0; false if none is installed.
 bool readInstalled(CartridgeInfo &out);
 
+// Reads the launcher's identity (factory partition), e.g. its version for the app.
+bool readLauncher(CartridgeInfo &out);
+
 // Empties ota_0 (erases its image header) and boots the launcher from now on. Used when the
 // installed cartridge is removed.
 bool eraseInstalled();

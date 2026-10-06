@@ -43,8 +43,13 @@ struct DottyInfo: Decodable, Equatable, Sendable {
     let installed: Installed?
     /// Launcher only: an SD card is in.
     let card: Bool?
+    /// Cartridges only: the launcher's version (firmware from the launcher-updates era on).
+    let launcher: String?
 
     var isLauncher: Bool { role == "launcher" }
+
+    /// Dotty's system (launcher) version, whether it or a cartridge is running.
+    var launcherVersion: String? { isLauncher ? version : launcher }
 
     /// True if the firmware has commands in this namespace, e.g. "wifi".
     func supports(_ feature: String) -> Bool {

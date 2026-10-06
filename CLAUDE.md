@@ -218,7 +218,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Clients **must wait for CoreBluetooth's `canSendWriteWithoutResponse`** before each
   write — writes sent while its queue is full are silently dropped (bleak doesn't
   check it; ble_dotty.py reads it from bleak's CBPeripheral).
-- **Catalog** (`tools/build_catalog.py`): builds every cartridge except the launcher into
+- **Launcher updates from the app** ("Dotty system" panel on Cartridges): the launcher is in
+  the catalog with `"system": true`. Any launcher fetches it like a cartridge
+  (`library.fetch {id: launcher}`) into ota_0 and boots it; the new launcher, seeing it runs
+  from ota_0, copies its image into factory (`installSelfIfUpdate`, before the shell: no BLE
+  from the slot copy), verifies it (`esp_image_verify`), sets factory as boot and restarts;
+  the factory launcher finds "launcher" in ota_0 and erases it. Power cut midway → the ota_0
+  copy boots again and redoes it. The app then reinstalls the previous cartridge with
+  `install.fromCard`. Info has `launcher` (factory version) in every cartridge, so the app
+  can offer the update anywhere; apps hide `system` entries from the cartridge list.
+- **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,
   `protocol` = install protocol version, `release` tag). `--release` publishes a GitHub

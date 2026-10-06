@@ -7,7 +7,10 @@
 dist/ gets <id>-<version>.bin per cartridge plus catalog.json. A release is marked
 "latest", so the app always finds the newest catalog at
   https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json
-The launcher is not in the catalog: it lives in the factory partition (USB only).
+The launcher is in the catalog too, marked "system": true (apps don't list it as a
+cartridge). Installed like a cartridge, it copies itself into the factory partition at its
+first start (cartridges/launcher/main.cpp, installSelfIfUpdate): that's how Dotty's system
+firmware updates from the app.
 
 Each cartridges/<id>/ may have cartridge.json ({"description": ..., "requires": [...]}),
 icon.png (64x64 1-bit after conversion: Dotty's install screen) and artwork.png (square,
@@ -42,8 +45,7 @@ def run(cmd, **kwargs):
 
 
 def cartridge_ids():
-    return sorted(p.name for p in (REPO / "cartridges").iterdir()
-                  if (p / "main.cpp").exists() and p.name != "launcher")
+    return sorted(p.name for p in (REPO / "cartridges").iterdir() if (p / "main.cpp").exists())
 
 
 def build(cartridge_id):
@@ -98,6 +100,7 @@ def catalog_entry(cartridge_id, image, info, base_url):
         "firmware": f"{base_url}/{filename}" if base_url else filename,
         "icon": base64.b64encode(icon_bytes(icon_path)).decode() if icon_path.exists() else None,
         "artwork": (f"{base_url}/{artwork}" if base_url else artwork) if artwork else None,
+        **({"system": True} if cartridge_id == "launcher" else {}),
     }
 
 

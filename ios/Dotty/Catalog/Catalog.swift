@@ -16,6 +16,11 @@ struct Catalog: Decodable, Sendable {
         case installProtocol = "protocol"
     }
 
+    /// What the Cartridges list shows: everything but Dotty's system (the launcher).
+    var cartridgeList: [CatalogCartridge] { cartridges.filter { $0.system != true } }
+    /// Dotty's system firmware, when the catalog has it.
+    var launcher: CatalogCartridge? { cartridges.first { $0.system == true } }
+
     static let url = URL(string: "https://github.com/Mordokay/Dotty/releases/latest/download/catalog.json")!
 
     static func load() async throws -> Catalog {
@@ -42,6 +47,8 @@ struct CatalogCartridge: Decodable, Identifiable, Sendable {
     let icon: String?
     /// Full-colour square picture for the app (a URL; older catalogs don't have it).
     let artwork: String?
+    /// Dotty's system firmware (the launcher), not a cartridge.
+    let system: Bool?
 
     var artworkURL: URL? { artwork.flatMap(URL.init(string:)) }
     var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file) }

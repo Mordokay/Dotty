@@ -49,7 +49,12 @@ struct CartridgesView: View {
                         // The cartridge being installed is shown by the progress card instead.
                         // Other cartridges are dimmed and inert until the install finishes.
                         let installing = install != nil && install?.error == nil
-                        ForEach(ordered(catalog.cartridges).filter { $0.id != install?.cartridge.id }) { cartridge in
+                        if let launcher = catalog.launcher, install?.cartridge.id != launcher.id {
+                            systemCard(launcher)
+                                .opacity(installing ? 0.4 : 1)
+                                .allowsHitTesting(!installing)
+                        }
+                        ForEach(ordered(catalog.cartridgeList).filter { $0.id != install?.cartridge.id }) { cartridge in
                             cartridgeCard(cartridge)
                                 .opacity(installing ? 0.4 : 1)
                                 .allowsHitTesting(!installing)
@@ -250,6 +255,81 @@ struct CartridgesView: View {
         }
     }
 
+    // MARK: - Dotty system (the launcher)
+
+    /// Dotty's system firmware: its version, and Update when the catalog has a newer one.
+    private func systemCard(_ launcher: CatalogCartridge) -> some View {
+        let current = link.info?.launcherVersion
+        let newer = current.map { launcher.version.compare($0, options: .numeric) == .orderedDescending } ?? false
+        return VStack(alignment: .leading, spacing: Spacing.m) {
+            HStack(alignment: .center, spacing: Spacing.m) {
+                CartridgeArtwork(cartridge: launcher, size: 56)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Dotty system").font(.lpTitle).foregroundStyle(Color.ink)
+                    Text(current.map { newer ? "Update · \($0) → \(launcher.version)" : "Up to date · v\($0)" }
+                         ?? "Version \(launcher.version) available")
+                        .font(.lpCaption)
+                        .foregroundStyle(newer ? DottyLight.leaf.color : Color.inkMuted)
+                }
+                Spacer(minLength: Spacing.s)
+                if newer || current == nil {
+                    Button("Update") { Task { await updateSystem(launcher) } }
+                        .buttonStyle(.light(DottyLight.leaf.color))
+                        .disabled(install != nil && install?.error == nil)
+                        .needsDotty(link)
+                }
+            }
+            Text("Installs and switches cartridges, and runs Wi-Fi, Bluetooth and the lock screen. Updating keeps your cartridges and their files; Dotty restarts a few times.")
+                .font(.lpCallout)
+                .foregroundStyle(Color.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Spacing.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface()
+    }
+
+    /// The launcher is fetched like a cartridge; started from the cartridge slot, it copies
+    /// itself over the old launcher and restarts there (firmware: installSelfIfUpdate). Then
+    /// the cartridge that was installed goes back in from the SD card.
+    private func updateSystem(_ launcher: CatalogCartridge) async {
+        install = InstallState(cartridge: launcher)
+        guard let info = link.info else { return }
+        let previous = info.isLauncher ? info.installed.map { ($0.id, $0.version, $0.name) } : (info.id, info.version, info.name)
+        do {
+            install?.stage = "Switching to the launcher"
+            try await link.ensureLauncher()
+            install?.stage = "Checking Dotty's Wi-Fi"
+            let saved = try await link.send("wifi.list")["networks"] as? [String] ?? []
+            guard !saved.isEmpty else {
+                install?.error = "Dotty has no Wi-Fi yet. Add a network under Wi-Fi first."
+                return
+            }
+            install?.stage = "Connecting to Wi-Fi"
+            try await link.send("library.fetch", ["id": launcher.id, "name": "Dotty system", "version": launcher.version,
+                                                  "size": launcher.size, "sha256": launcher.sha256], timeout: 300)
+            install?.stage = "Dotty is installing its new system"
+            install?.progress = nil
+            let deadline = Date().addingTimeInterval(180)
+            while !(link.connection == .connected && link.info?.isLauncher == true && link.info?.version == launcher.version) {
+                guard Date() < deadline else { throw DottyError.timeout }
+                try await Task.sleep(for: .seconds(1))
+            }
+            if let (id, version, name) = previous, id != launcher.id {
+                install?.stage = "Putting \(name) back"
+                try await link.send("install.fromCard", ["id": id, "version": version], timeout: 60)
+                try await link.waitForReconnect()
+            }
+            install = nil
+            await loadCard()
+            success = "Dotty system \(launcher.version) is installed."
+            try? await Task.sleep(for: .seconds(2.5))
+            success = nil
+        } catch {
+            install?.error = error.localizedDescription
+        }
+    }
+
     private func installCard(_ state: InstallState) -> some View {
         GlassCard(title: state.cartridge.name, light: DottyLight.firefly.color) {
             VStack(alignment: .leading, spacing: Spacing.m) {
@@ -284,7 +364,7 @@ struct CartridgesView: View {
               let reply = try? await link.send("storage.list") else { return }
         var found: [String: CardFiles] = [:]
         for item in reply["cartridges"] as? [[String: Any]] ?? [] {
-            guard let id = item["id"] as? String else { continue }
+            guard let id = item["id"] as? String, id != "launcher" else { continue }
             found[id] = CardFiles(versions: item["versions"] as? [String] ?? [],
                                   dataBytes: (item["data"] as? NSNumber)?.int64Value ?? 0)
         }

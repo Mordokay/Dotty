@@ -8,10 +8,13 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <SD_MMC.h>
 #include <mbedtls/base64.h>
+#include <esp_image_format.h>
+#include <esp_ota_ops.h>
 #include <mbedtls/sha256.h>
 
 #include "art.h"
 #include "battery.h"
+#include "board_pins.h"
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/firefly.h"
@@ -23,7 +26,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.7.4");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.8.0");
 
 namespace {
 
@@ -488,6 +491,12 @@ void registerFetchCommand() {
     if (!install) {
       job.stage = Stage::None;
       hasCartridge = cartridge::readInstalled(installed);
+  if (hasCartridge && strcmp(installed.id, "launcher") == 0) {
+    // What's left of a launcher update (see installSelfIfUpdate): not a cartridge.
+    cartridge::eraseInstalled();
+    hasCartridge = false;
+    LOGI("update", "launcher update finished: %s", cartridge::self().version);
+  }
       shell::showApp();
       return;
     }
@@ -520,7 +529,51 @@ const shell::Picture kOffPictures[] = {
 
 }  // namespace
 
+// A launcher update arrives like a cartridge: the old launcher installs this image in the
+// cartridge slot (ota_0) and boots it. Running from there, it copies itself over the launcher
+// (factory), checks the copy and restarts into it; that start empties ota_0 (setup below).
+// A power cut midway boots this copy from ota_0 again, which simply starts over. Runs before
+// the shell, so no Bluetooth comes up from the slot copy; the e-paper keeps showing the old
+// launcher's install screen meanwhile.
+void installSelfIfUpdate() {
+  if (cartridge::isLauncher()) return;
+  pinMode(PIN_VBAT_PWR, OUTPUT);
+  digitalWrite(PIN_VBAT_PWR, HIGH);  // stay on when on battery
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *factory =
+      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
+  esp_image_metadata_t image;
+  const esp_partition_pos_t from = {running->address, running->size};
+  if (!factory || esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &from, &image) != ESP_OK ||
+      image.image_len > factory->size) {
+    LOGE("update", "can't install this launcher (no factory partition or a bad image)");
+    return;  // runs as a plain launcher from ota_0: still usable, and the app can retry
+  }
+  const size_t length = image.image_len;
+  LOGI("update", "installing launcher %s (%u bytes)", cartridge::self().version, static_cast<unsigned>(length));
+  if (esp_partition_erase_range(factory, 0, (length + 4095) & ~static_cast<size_t>(4095)) != ESP_OK) return;
+  static uint8_t block[4096];
+  for (size_t at = 0; at < length; at += sizeof(block)) {
+    const size_t n = min(sizeof(block), length - at);
+    if (esp_partition_read(running, at, block, n) != ESP_OK || esp_partition_write(factory, at, block, n) != ESP_OK) {
+      LOGE("update", "copy failed at %u", static_cast<unsigned>(at));
+      return;
+    }
+  }
+  esp_image_metadata_t copy;
+  const esp_partition_pos_t to = {factory->address, factory->size};
+  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &to, &copy) != ESP_OK || copy.image_len != length) {
+    LOGE("update", "the copy doesn't verify");
+    return;
+  }
+  esp_ota_set_boot_partition(factory);
+  LOGI("update", "launcher installed, restarting into it");
+  delay(100);
+  esp_restart();
+}
+
 void setup() {
+  installSelfIfUpdate();
   shell::Config config;
   config.drawApp = drawApp;
   config.offPictures = kOffPictures;

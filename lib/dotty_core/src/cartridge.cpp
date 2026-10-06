@@ -30,8 +30,9 @@ bool isLauncher() {
   return esp_ota_get_running_partition()->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY;
 }
 
-bool readInstalled(CartridgeInfo &out) {
-  const esp_partition_t *part = slot();
+namespace {
+
+bool readFrom(const esp_partition_t *part, CartridgeInfo &out) {
   esp_app_desc_t desc;
   if (!part || esp_ota_get_partition_description(part, &desc) != ESP_OK) return false;
   if (esp_partition_read(part, kInfoOffset, &out, sizeof(out)) != ESP_OK) return false;
@@ -39,6 +40,16 @@ bool readInstalled(CartridgeInfo &out) {
   out.version[sizeof(out.version) - 1] = '\0';
   out.id[sizeof(out.id) - 1] = '\0';
   return out.magic == kCartridgeMagic;
+}
+
+}  // namespace
+
+bool readInstalled(CartridgeInfo &out) {
+  return readFrom(slot(), out);
+}
+
+bool readLauncher(CartridgeInfo &out) {
+  return readFrom(esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr), out);
 }
 
 bool eraseInstalled() {
