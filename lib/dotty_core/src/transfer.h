@@ -30,6 +30,12 @@ struct Status {
   String file;         // file being received ("" between files)
   size_t done = 0, total = 0;
   int filesReceived = 0;
+  // A backup or restore (whole-card mode): the app says where it is with each file
+  // (headers X-Dotty-Job: backup|restore, X-Dotty-Step: 20/50, X-Dotty-Bytes: before/total).
+  // job "check" = Dotty fingerprinting its files for a restore (step = files done).
+  String job;
+  int step = 0, steps = 0;
+  uint64_t bytesBefore = 0, bytesTotal = 0;
 };
 
 // How a session went, for the cartridge to show.

@@ -103,7 +103,9 @@ final class BackupModel {
                 self.stage = "Copying \(i + 1) of \(files.count)"
                 let target = folder.appending(path: String(file.path.dropFirst()))
                 try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let (temp, response) = try await URLSession.shared.download(for: self.request(url, token, "download", file.path))
+                let request = self.request(url, token, "download", file.path,
+                                           progress: ("backup", i + 1, files.count, done, total))
+                let (temp, response) = try await URLSession.shared.download(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DottyError.refused("Dotty couldn't send \(file.path)") }
                 try? FileManager.default.removeItem(at: target)
                 try FileManager.default.moveItem(at: temp, to: target)
@@ -155,7 +157,8 @@ final class BackupModel {
             var done: Int64 = 0
             for (i, path) in send.sorted().enumerated() {
                 self.stage = "Sending \(i + 1) of \(send.count)"
-                var request = self.request(url, token, "upload", path)
+                var request = self.request(url, token, "upload", path,
+                                           progress: ("restore", i + 1, send.count, done, total))
                 request.httpMethod = "POST"
                 let (_, response) = try await URLSession.shared.upload(for: request, fromFile: local[path]!)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DottyError.refused("Dotty couldn't take \(path)") }
@@ -233,11 +236,19 @@ final class BackupModel {
         return try JSONDecoder().decode([CardFile].self, from: data)
     }
 
-    private func request(_ url: URL, _ token: String, _ endpoint: String, _ path: String) -> URLRequest {
+    /// `progress` tells Dotty's screen where the job is: "20 of 50" and a bar by size
+    /// (firmware: transfer.cpp readProgress).
+    private func request(_ url: URL, _ token: String, _ endpoint: String, _ path: String,
+                         progress: (job: String, step: Int, steps: Int, before: Int64, total: Int64)? = nil) -> URLRequest {
         var components = URLComponents(url: url.appending(path: endpoint), resolvingAgainstBaseURL: false)!
         components.percentEncodedQuery = "path=" + (path.addingPercentEncoding(withAllowedCharacters: Self.unreserved) ?? path)
         var request = URLRequest(url: components.url!)
         request.setValue(token, forHTTPHeaderField: "X-Dotty-Token")
+        if let progress {
+            request.setValue(progress.job, forHTTPHeaderField: "X-Dotty-Job")
+            request.setValue("\(progress.step)/\(progress.steps)", forHTTPHeaderField: "X-Dotty-Step")
+            request.setValue("\(progress.before)/\(progress.total)", forHTTPHeaderField: "X-Dotty-Bytes")
+        }
         request.timeoutInterval = 60
         return request
     }

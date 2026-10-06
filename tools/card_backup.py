@@ -70,8 +70,13 @@ def open_session():
     return reply["url"], reply["token"]
 
 
-def request(url, token, method="GET", data=None, timeout=60):
-    req = urllib.request.Request(url, data=data, method=method, headers={"X-Dotty-Token": token})
+def request(url, token, method="GET", data=None, timeout=60, progress=None):
+    """progress = (job, step, steps, bytes before, bytes total): shown on Dotty's screen."""
+    headers = {"X-Dotty-Token": token}
+    if progress:
+        job, step, steps, before, total = progress
+        headers.update({"X-Dotty-Job": job, "X-Dotty-Step": f"{step}/{steps}", "X-Dotty-Bytes": f"{before}/{total}"})
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     return urllib.request.urlopen(req, timeout=timeout)
 
 
@@ -86,6 +91,7 @@ def backup(folder, with_firmware=False):
     url, token = open_session()
     try:
         files = json.loads(request(f"{url}/card/list", token).read())
+        files = [f for f in files if not hidden(f["path"])]  # e.g. a Mac's .Spotlight-V100
         if not with_firmware:
             files = [f for f in files if "/firmware/" not in f["path"]]
         total = sum(f["size"] for f in files)
@@ -96,7 +102,8 @@ def backup(folder, with_firmware=False):
             target = folder / f["path"].lstrip("/")
             target.parent.mkdir(parents=True, exist_ok=True)
             query = urllib.parse.urlencode({"path": f["path"]}, quote_via=urllib.parse.quote)
-            with request(f"{url}/download?{query}", token, timeout=120) as response, open(target, "wb") as out:
+            with request(f"{url}/download?{query}", token, timeout=120,
+                         progress=("backup", i, len(files), done, total)) as response, open(target, "wb") as out:
                 while chunk := response.read(65536):
                     out.write(chunk)
             if target.stat().st_size != f["size"]:
@@ -158,12 +165,16 @@ def restore(folder, dry_run=False):
                 print(f"  delete {path}")
             return
         started = time.time()
+        sent = 0
         for i, path in enumerate(send, 1):
             query = urllib.parse.urlencode({"path": path}, quote_via=urllib.parse.quote)
-            with request(f"{url}/upload?{query}", token, method="POST", data=local[path].read_bytes(), timeout=180) as r:
+            data = local[path].read_bytes()
+            with request(f"{url}/upload?{query}", token, method="POST", data=data, timeout=180,
+                         progress=("restore", i, len(send), sent, size)) as r:
                 reply = json.loads(r.read())
             if not reply.get("ok"):
                 sys.exit(f"{path}: {reply.get('error')}")
+            sent += len(data)
             print(f"  sent {i}/{len(send)} {path}")
         for path in delete:
             query = urllib.parse.urlencode({"path": path}, quote_via=urllib.parse.quote)

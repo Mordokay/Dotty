@@ -29,7 +29,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.9");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.10");
 
 namespace {
 
@@ -709,20 +709,46 @@ void startFactoryReset(const String &newerLauncher) {
   cartridge::rebootToRescue();
 }
 
-// A whole-card backup or restore over Wi-Fi (tools/card_backup.py).
+// A whole-card backup or restore over Wi-Fi (the app's Backups, or tools/card_backup.py):
+// what it is, "20 of 50", a bar by size, and the file in plain words.
 void drawCardTransfer() {
   const transfer::Status s = transfer::status();
+  const bool checking = s.job == "check";
+  const char *title = s.job == "backup" ? "Backup" : s.job == "restore" ? "Restore" : checking ? "Restore" : "SD card copy";
   epd.fillScreen(kWhite);
   epd.fillRect(0, 0, kW, 45, kBlack);
   epd.setTextColor(kWhite);
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, "SD card copy", 29);
+  ui::drawCentered(epd, title, 29);
   epd.setTextColor(kBlack);
-  epd.setFont(&FreeSansBold9pt7b);
-  ui::drawCentered(epd, "Copying files", 80);
+
+  // The file without its folder or extension: "Baila Bajo el Cielo".
+  String file = ui::printable(s.file);
+  const int dot = file.lastIndexOf('.');
+  if (dot > 0) file.remove(dot);
+
+  epd.setFont(&FreeSansBold12pt7b);
+  if (checking) {
+    ui::drawCentered(epd, "Checking my files", 88);
+  } else if (s.steps > 0) {
+    ui::drawCentered(epd, String(s.step) + " of " + String(s.steps), 88);
+  } else {
+    ui::drawCentered(epd, "Copying files", 88);
+  }
   epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, ui::fitText(epd, ui::printable(s.file), kW - 16), 110);
-  ui::drawCentered(epd, "Keep me close to Wi-Fi", 170);
+  if (checking) {
+    // No bar: Dotty doesn't know the count yet, so it counts up.
+    ui::drawCentered(epd, String(s.step) + (s.step == 1 ? " file checked" : " files checked"), 120);
+  } else if (s.bytesTotal > 0) {
+    // Everything before this file plus how far this one is.
+    const int16_t barX = 15, barY = 106, barW = kW - 30, barH = 12;
+    epd.drawRoundRect(barX, barY, barW, barH, 6, kBlack);
+    const uint64_t done = min<uint64_t>(s.bytesTotal, s.bytesBefore + s.done);
+    const int16_t fill = static_cast<int16_t>((barW - 4) * done / s.bytesTotal);
+    if (fill > 0) epd.fillRoundRect(barX + 2, barY + 2, fill, barH - 4, 4, kBlack);
+  }
+  ui::drawCentered(epd, ui::fitText(epd, file, kW - 16), 150);
+  ui::drawCentered(epd, "Keep me close to Wi-Fi", 186);
 }
 
 void drawApp() {

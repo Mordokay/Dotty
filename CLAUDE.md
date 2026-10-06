@@ -302,6 +302,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `LSSupportsOpeningDocumentsInPlace` in Dotty-Info.plist), list them ("29 songs · 8 photos
   · 2 recordings · 158 MB"), restore with the same smart diff (the iPhone's SHA-256s are
   computed off the main thread), delete. The cartridge that was running starts again after.
+  **Dotty's screen during a backup/restore** (launcher `drawCardTransfer`): title Backup /
+  Restore, "20 of 50", a bar by size and the file without its extension. Dotty can't know
+  the plan by itself (the client picks the files), so each request carries headers
+  `X-Dotty-Job: backup|restore`, `X-Dotty-Step: 20/50`, `X-Dotty-Bytes: <before>/<total>`
+  (transfer.cpp `readProgress`); while it fingerprints for a restore it shows "Checking my
+  files · N files checked". Hidden files are skipped by both the app and the Mac tool.
   `ble::bondCount()` caches the count: reading NimBLE's store while BLE is off (locked, or
   paused for Wi-Fi) asserts in ble_hs_lock — it crashed the launcher mid-restore.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into

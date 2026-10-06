@@ -47,6 +47,10 @@ bool stopRequested = false;
 // Whole-card mode (backups, launcher only): ?path= may name any file on the card and
 // GET /card/list lists them all.
 bool cardScope = false;
+// Where a backup or restore is (sent by the app with each file; see Status), guarded by lock.
+char jobName[12] = {};
+volatile int jobStep = 0, jobSteps = 0;
+volatile uint64_t jobBytesBefore = 0, jobBytesTotal = 0;
 // Wi-Fi and BLE share the radio: with BLE on, uploads run at about half speed (measured
 // 130 vs 240 KB/s). So BLE pauses shortly after transfer.start has been answered and
 // comes back when the session ends.
@@ -163,6 +167,28 @@ void setCurrentFile(const char *name) {
   portEXIT_CRITICAL(&lock);
 }
 
+// The app's progress headers on a backup/restore request (see Status).
+void readProgress(httpd_req_t *req) {
+  char value[48];
+  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Job", value, sizeof(value)) == ESP_OK) {
+    portENTER_CRITICAL(&lock);
+    strlcpy(jobName, value, sizeof(jobName));
+    portEXIT_CRITICAL(&lock);
+  }
+  int a = 0, b = 0;
+  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Step", value, sizeof(value)) == ESP_OK &&
+      sscanf(value, "%d/%d", &a, &b) == 2) {
+    jobStep = a;
+    jobSteps = b;
+  }
+  unsigned long long before = 0, total = 0;
+  if (httpd_req_get_hdr_value_str(req, "X-Dotty-Bytes", value, sizeof(value)) == ESP_OK &&
+      sscanf(value, "%llu/%llu", &before, &total) == 2) {
+    jobBytesBefore = before;
+    jobBytesTotal = total;
+  }
+}
+
 // Whole-card mode: an absolute path on the card ("/cartridges/music/data/x.mp3"), checked
 // so it stays on the card (no "..", no empty segments). False if it isn't usable.
 bool cardPath(httpd_req_t *req, String &folder, String &name) {
@@ -195,6 +221,7 @@ esp_err_t handleUpload(httpd_req_t *req) {
   }
 
   const size_t total = req->content_len;
+  readProgress(req);
   setCurrentFile(name.c_str());
   currentTotal = total;
   currentDone = 0;
@@ -292,6 +319,7 @@ esp_err_t handleDownload(httpd_req_t *req) {
   File in = name.length() ? SD_MMC.open(path) : File();
   if (!in || in.isDirectory()) return reply(req, "404 Not Found", "{\"ok\":false,\"error\":\"no such file\"}");
   const size_t total = in.size();
+  readProgress(req);
   setCurrentFile(name.c_str());
   currentTotal = total;
   currentDone = 0;
@@ -364,7 +392,11 @@ void listCard(const String &folder, CardLister &out) {
     JsonDocument item;
     item["path"] = path;
     item["size"] = f.size();
-    if (out.hash) item["sha256"] = fileSha256(f);
+    if (out.hash) {
+      setCurrentFile(f.name());
+      item["sha256"] = fileSha256(f);
+      jobStep = jobStep + 1;  // "Checking my files: 12"
+    }
     f.close();
     String json;
     serializeJson(item, json);  // into a String it replaces the content, so separately
@@ -380,6 +412,13 @@ esp_err_t handleCardList(httpd_req_t *req) {
   if (!cardScope) return reply(req, "403 Forbidden", "{\"ok\":false,\"error\":\"not in whole-card mode\"}");
   httpd_resp_set_type(req, "application/json");
   CardLister out{req, queryValue(req, "hash") == "1"};
+  if (out.hash) {
+    portENTER_CRITICAL(&lock);
+    strlcpy(jobName, "check", sizeof(jobName));
+    portEXIT_CRITICAL(&lock);
+    jobStep = 0;
+    jobSteps = 0;
+  }
   httpd_resp_send_chunk(req, "[", 1);
   listCard("", out);
   if (out.ok) httpd_resp_send_chunk(req, "]", 1);
@@ -476,6 +515,9 @@ void stop(bool appFinished) {
   net::disconnect();
   blePauseAt = 0;
   cardScope = false;
+  jobName[0] = 0;
+  jobStep = jobSteps = 0;
+  jobBytesBefore = jobBytesTotal = 0;
   if (blePaused && !shell::locked()) ble::start();  // locked: the shell restarts it on unlock
   blePaused = false;
   power::setWakeLock(power::kWakeLockNetwork, false);
@@ -577,6 +619,15 @@ Status status() {
   s.done = currentDone;
   s.total = currentTotal;
   s.filesReceived = filesReceived;
+  char job[sizeof(jobName)];
+  portENTER_CRITICAL(&lock);
+  memcpy(job, jobName, sizeof(job));
+  portEXIT_CRITICAL(&lock);
+  s.job = job;
+  s.step = jobStep;
+  s.steps = jobSteps;
+  s.bytesBefore = jobBytesBefore;
+  s.bytesTotal = jobBytesTotal;
   return s;
 }
 
