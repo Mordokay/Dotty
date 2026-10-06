@@ -535,6 +535,10 @@ bool update(Input &input) {
     gesture = key == ']' ? Touch::Gesture::SwipeLeft : Touch::Gesture::SwipeRight;
     input.key = 0;
   }
+  if ((key == '{' || key == '}') && !isLocked) {  // { } swipe down / up (scroll back / on)
+    gesture = key == '}' ? Touch::Gesture::SwipeUp : Touch::Gesture::SwipeDown;
+    input.key = 0;
+  }
 
   if (isLocked) {
     // Locked: touch and BOOT are ignored, only PWR unlocks. The lock screen shows power

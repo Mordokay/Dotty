@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The News cartridge's screen: the topics Dotty follows (BBC sections and keywords searched on
-/// Google News), which are favourites (★: Dotty's Favourites list and lock screen), when it
-/// last fetched, and what Dotty is showing now (firmware: cartridges/news/).
+/// The News cartridge's screen: the topics Dotty follows — outlets' feeds, Kagi News daily
+/// briefings, Google News keywords — which are favourites (★: Dotty's Favourites list and lock
+/// screen), when it last fetched, and what Dotty is showing now (firmware: cartridges/news/).
 struct NewsView: View {
     @Environment(DottyLink.self) private var link
     @State private var status: Status?
@@ -10,6 +10,7 @@ struct NewsView: View {
     @State private var stories: [Story] = []
     @State private var keyword = ""
     @State private var busy: String?  // the topic key (or "add") being changed
+    @State private var picking: TopicPicker.Kind?
     @State private var error: String?
     @FocusState private var keywordFocused: Bool
 
@@ -30,12 +31,16 @@ struct NewsView: View {
         let key: String
         let name: String
         let section: String?
+        let kagi: String?
         let star: Bool
         let count: Int
     }
 
+    /// An outlet's feed Dotty can follow ("NYT" + "World").
     struct Section: Identifiable {
         let id: String
+        let outlet: String
+        let section: String
         let name: String
     }
 
@@ -58,7 +63,7 @@ struct NewsView: View {
                     if let status {
                         statusCard(status).needsDotty(link)
                         topicsCard(status).needsDotty(link)
-                        sectionsCard(status).needsDotty(link)
+                        addCard(status).needsDotty(link)
                     }
                     if !stories.isEmpty { storiesCard }
                 }
@@ -77,6 +82,14 @@ struct NewsView: View {
             if link.lastEvent?.event == "news.changed" { Task { await load() } }
         }
         // While Dotty fetches, follow its progress.
+        .sheet(item: $picking) { kind in
+            TopicPicker(kind: kind, outlets: sections, taken: Set(status?.topics.map(\.key) ?? []), busy: busy,
+                        full: (status?.topics.count ?? 0) >= Self.maxTopics) { key, args in
+                Task { await change(key, "news.topic.add", args) }
+            }
+            .presentationDetents([.large])
+            .presentationBackground(.clear)
+        }
         .task(id: status?.fetching == true) {
             while status?.fetching == true, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
@@ -115,9 +128,8 @@ struct NewsView: View {
     private func topicsCard(_ status: Status) -> some View {
         GlassCard(title: "Your topics (\(status.topics.count)/\(Self.maxTopics))") {
             ForEach(Array(status.topics.enumerated()), id: \.element.key) { index, topic in
-                LightRow(title: topic.name,
-                         subtitle: (topic.section != nil ? "BBC" : "Keyword · Google News") + " · \(topic.count) stories",
-                         systemImage: topic.section != nil ? "newspaper" : "magnifyingglass") {
+                LightRow(title: topic.name, subtitle: source(of: topic) + " · \(topic.count) stories",
+                         systemImage: topic.kagi != nil ? "sparkles.rectangle.stack" : topic.section != nil ? "newspaper" : "magnifyingglass") {
                     HStack(spacing: Spacing.xs) {
                         Button {
                             Task { await change(topic.key, "news.topic.star", ["key": topic.key, "on": !topic.star]) }
@@ -155,6 +167,18 @@ struct NewsView: View {
                     .opacity(busy == topic.key ? 0.4 : 1)
                 }
             }
+            Text("★ topics make up Dotty's Favourites and its lock screen.")
+                .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                .padding(.horizontal, Spacing.m).padding(.bottom, Spacing.s)
+        }
+    }
+
+    private func addCard(_ status: Status) -> some View {
+        GlassCard(title: "Add a topic") {
+            LightRow(title: "Daily briefing", subtitle: "The day's big stories from dozens of outlets, summarised · Kagi News",
+                     systemImage: "sparkles.rectangle.stack", action: { picking = .briefing })
+            LightRow(title: "News outlet", subtitle: "NYT, NBC, BBC, Bloomberg, Guardian… fresh all day",
+                     systemImage: "newspaper", action: { picking = .outlet })
             if status.topics.count < Self.maxTopics {
                 HStack(spacing: Spacing.s) {
                     TextField("Add a keyword, e.g. Formula 1", text: $keyword)
@@ -172,28 +196,17 @@ struct NewsView: View {
                 }
                 .padding(Spacing.m)
             }
-            Text("★ topics make up Dotty's Favourites and its lock screen. Keywords search Google News over the last 2 days.")
+            Text("Keywords search Google News over the last 2 days: headlines only, no summary. Try \"site:wsj.com\" for an outlet without a feed.")
                 .font(.lpCaption).foregroundStyle(Color.inkFaint)
                 .padding(.horizontal, Spacing.m).padding(.bottom, Spacing.s)
         }
     }
 
-    @ViewBuilder private func sectionsCard(_ status: Status) -> some View {
-        let added = Set(status.topics.compactMap(\.section))
-        let available = sections.filter { !added.contains($0.id) }
-        if !available.isEmpty, status.topics.count < Self.maxTopics {
-            GlassCard(title: "Add a BBC section") {
-                ForEach(available) { section in
-                    LightRow(title: section.name, systemImage: "plus") {
-                        if busy == "s:" + section.id { ProgressView() }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        Task { await change("s:" + section.id, "news.topic.add", ["section": section.id]) }
-                    }
-                }
-            }
-        }
+    /// Where a topic's stories come from.
+    private func source(of topic: Topic) -> String {
+        if topic.kagi != nil { return "Daily briefing · Kagi News" }
+        if let id = topic.section { return sections.first { $0.id == id }?.outlet ?? "News outlet" }
+        return "Keyword · headlines only"
     }
 
     private var storiesCard: some View {
@@ -228,7 +241,8 @@ struct NewsView: View {
         if sections.isEmpty, let reply = try? await link.send("news.sections") {
             sections = (reply["sections"] as? [[String: Any]] ?? []).compactMap { item in
                 guard let id = item["id"] as? String, let name = item["name"] as? String else { return nil }
-                return Section(id: id, name: name)
+                return Section(id: id, outlet: item["outlet"] as? String ?? "BBC", section: item["section"] as? String ?? name,
+                               name: name)
             }
         }
         if let reply = try? await link.send("news.stories", ["limit": 8]) {
@@ -256,7 +270,8 @@ struct NewsView: View {
             s.topics = (reply["topics"] as? [[String: Any]] ?? []).compactMap { item in
                 guard let key = item["key"] as? String else { return nil }
                 return Topic(key: key, name: item["name"] as? String ?? key, section: item["section"] as? String,
-                             star: item["star"] as? Bool ?? false, count: item["count"] as? Int ?? 0)
+                             kagi: item["kagi"] as? String, star: item["star"] as? Bool ?? false,
+                             count: item["count"] as? Int ?? 0)
             }
             status = s
             error = nil

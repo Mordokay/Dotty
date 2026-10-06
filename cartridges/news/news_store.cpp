@@ -21,11 +21,73 @@ constexpr uint32_t kRefreshMs = 30 * 60 * 1000;
 constexpr uint32_t kRetryMs = 10 * 60 * 1000;
 constexpr uint32_t kAfterChangeMs = 5000;  // a topic change fetches soon (edits come in bursts)
 
-const std::vector<Section> kSections = {
-    {"top", "Top stories"}, {"world", "World"},     {"uk", "UK"},         {"business", "Business"},
-    {"politics", "Politics"}, {"tech", "Tech"},     {"science", "Science"}, {"health", "Health"},
-    {"culture", "Culture"}, {"sport", "Sport"},
+constexpr size_t kMaxSummary = 250;    // summaries are cut to whole sentences within this
+constexpr const char *kKagiIndex = "https://kite.kagi.com/kite.json";
+
+// Outlets with working feeds (checked 2026-10-06: fresh, a summary on every story). CNN and
+// WSJ feeds stopped updating, Reuters and AP have none: they're reachable as keywords
+// (Google News, e.g. "site:wsj.com"), headlines only. The BBC ids stay short (the first topics).
+#define BBC "https://feeds.bbci.co.uk/news/"
+#define NYT "https://rss.nytimes.com/services/xml/rss/nyt/"
+const std::vector<Feed> kFeeds = {
+    {"top", "BBC", "Top stories", BBC "rss.xml"},
+    {"world", "BBC", "World", BBC "world/rss.xml"},
+    {"uk", "BBC", "UK", BBC "uk/rss.xml"},
+    {"business", "BBC", "Business", BBC "business/rss.xml"},
+    {"politics", "BBC", "Politics", BBC "politics/rss.xml"},
+    {"tech", "BBC", "Tech", BBC "technology/rss.xml"},
+    {"science", "BBC", "Science", BBC "science_and_environment/rss.xml"},
+    {"health", "BBC", "Health", BBC "health/rss.xml"},
+    {"culture", "BBC", "Culture", BBC "entertainment_and_arts/rss.xml"},
+    {"sport", "BBC", "Sport", "https://feeds.bbci.co.uk/sport/rss.xml"},
+    {"nyt-home", "NYT", "Top stories", NYT "HomePage.xml"},
+    {"nyt-world", "NYT", "World", NYT "World.xml"},
+    {"nyt-us", "NYT", "U.S.", NYT "US.xml"},
+    {"nyt-politics", "NYT", "Politics", NYT "Politics.xml"},
+    {"nyt-business", "NYT", "Business", NYT "Business.xml"},
+    {"nyt-tech", "NYT", "Tech", NYT "Technology.xml"},
+    {"nyt-science", "NYT", "Science", NYT "Science.xml"},
+    {"nyt-health", "NYT", "Health", NYT "Health.xml"},
+    {"nyt-arts", "NYT", "Arts", NYT "Arts.xml"},
+    {"wapo-politics", "Washington Post", "Politics", "https://feeds.washingtonpost.com/rss/politics"},
+    {"wapo-world", "Washington Post", "World", "https://feeds.washingtonpost.com/rss/world"},
+    {"wapo-business", "Washington Post", "Business", "https://feeds.washingtonpost.com/rss/business"},
+    {"nbc", "NBC News", "", "https://feeds.nbcnews.com/nbcnews/public/news"},
+    {"abc", "ABC News", "Top stories", "https://abcnews.go.com/abcnews/topstories"},
+    {"abc-world", "ABC News", "World", "https://abcnews.go.com/abcnews/internationalheadlines"},
+    {"cbs", "CBS News", "Latest", "https://www.cbsnews.com/latest/rss/main"},
+    {"cbs-world", "CBS News", "World", "https://www.cbsnews.com/latest/rss/world"},
+    {"npr", "NPR", "News", "https://feeds.npr.org/1001/rss.xml"},
+    {"npr-world", "NPR", "World", "https://feeds.npr.org/1004/rss.xml"},
+    {"npr-politics", "NPR", "Politics", "https://feeds.npr.org/1014/rss.xml"},
+    {"fox", "Fox News", "Latest", "https://moxie.foxnews.com/google-publisher/latest.xml"},
+    {"bloomberg", "Bloomberg", "Markets", "https://feeds.bloomberg.com/markets/news.rss"},
+    {"bloomberg-tech", "Bloomberg", "Tech", "https://feeds.bloomberg.com/technology/news.rss"},
+    {"bloomberg-politics", "Bloomberg", "Politics", "https://feeds.bloomberg.com/politics/news.rss"},
+    {"ft", "FT", "Top stories", "https://www.ft.com/rss/home"},
+    {"ft-world", "FT", "World", "https://www.ft.com/world?format=rss"},
+    {"guardian-world", "Guardian", "World", "https://www.theguardian.com/world/rss"},
+    {"guardian-uk", "Guardian", "UK", "https://www.theguardian.com/uk/rss"},
+    {"guardian-us", "Guardian", "US", "https://www.theguardian.com/us-news/rss"},
+    {"guardian-business", "Guardian", "Business", "https://www.theguardian.com/business/rss"},
+    {"guardian-tech", "Guardian", "Tech", "https://www.theguardian.com/technology/rss"},
+    {"guardian-science", "Guardian", "Science", "https://www.theguardian.com/science/rss"},
+    {"aljazeera", "Al Jazeera", "", "https://www.aljazeera.com/xml/rss/all.xml"},
+    {"sky", "Sky News", "", "https://feeds.skynews.com/feeds/rss/home.xml"},
+    {"euronews", "Euronews", "", "https://www.euronews.com/rss"},
+    {"techcrunch", "TechCrunch", "", "https://techcrunch.com/feed/"},
+    {"ars", "Ars Technica", "", "https://feeds.arstechnica.com/arstechnica/index"},
+    {"verge", "The Verge", "", "https://www.theverge.com/rss/index.xml"},
 };
+#undef BBC
+#undef NYT
+
+const Feed *findFeed(const String &id) {
+  for (const Feed &f : kFeeds) {
+    if (id == f.id) return &f;
+  }
+  return nullptr;
+}
 
 std::vector<Topic> topicList;
 std::vector<Story> pool;   // texts point into `text`
@@ -40,6 +102,7 @@ char fetchError[64] = "";
 uint32_t fetchedAt = 0;
 uint32_t lastAttempt = 0;
 bool attempted = false;
+uint32_t kagiEdition = 0;  // the Kagi edition (its index timestamp) the pool holds
 uint32_t changedAt = 0;  // millis() of the last topic change (0 = none pending)
 // What the task works from: a copy of the topics, and each topic's current stories (kept
 // when its feed can't be read this time).
@@ -64,6 +127,7 @@ uint32_t nowUtc() {
 // ---------- RSS ----------
 
 String feedUrl(const Topic &t) {
+  if (t.kagi.length()) return "https://kite.kagi.com/" + t.kagi;
   if (t.section.isEmpty()) {
     String q;
     for (const char *p = t.query.c_str(); *p; p++) {
@@ -74,13 +138,8 @@ String feedUrl(const Topic &t) {
     }
     return "https://news.google.com/rss/search?q=" + q + "%20when%3A2d&hl=en-GB&gl=GB&ceid=GB%3Aen";
   }
-  if (t.section == "top") return "https://feeds.bbci.co.uk/news/rss.xml";
-  if (t.section == "sport") return "https://feeds.bbci.co.uk/sport/rss.xml";
-  const char *path = t.section == "tech"       ? "technology"
-                     : t.section == "science"  ? "science_and_environment"
-                     : t.section == "culture"  ? "entertainment_and_arts"
-                                               : t.section.c_str();
-  return String("https://feeds.bbci.co.uk/news/") + path + "/rss.xml";
+  const Feed *feed = findFeed(t.section);
+  return feed ? String(feed->url) : String();
 }
 
 void appendUtf8(String &out, uint32_t cp) {
@@ -109,7 +168,10 @@ String cleanText(String s) {
       continue;
     }
     if (inTag) {
-      if (c == '>') inTag = false;
+      if (c == '>') {
+        inTag = false;
+        out += ' ';  // "…Saturday</p><p>Kenya" must not become "SaturdayKenya"
+      }
       continue;
     }
     if (c == '&') {
@@ -135,8 +197,40 @@ String cleanText(String s) {
     out += (c == '\t' || c == '\n' || c == '\r') ? ' ' : c;
   }
   while (out.indexOf("  ") >= 0) out.replace("  ", " ");
+  for (const char *p : {" .", " ,", " ;", " :", " !", " ?"}) out.replace(p, p + 1);
   out.trim();
   return out;
+}
+
+// Whole sentences from the start, at least ~80 characters when there are more, at most
+// kMaxSummary ("Oct." or "U.S." doesn't end a sentence); a word-cut "..." as the last resort.
+// Kagi's source marks ("[bbc.co.uk#1]") go first.
+String shortSummary(String s) {
+  for (int open; (open = s.indexOf('[')) >= 0;) {
+    const int close = s.indexOf(']', open);
+    if (close < 0) break;
+    s.remove(open, close - open + 1);
+  }
+  s = cleanText(s);
+  if (s.length() <= kMaxSummary) return s;
+  int cut = -1;
+  for (size_t i = 1; i + 2 < s.length() && i < kMaxSummary; i++) {
+    const char c = s[i];
+    if ((c != '.' && c != '!' && c != '?') || s[i + 1] != ' ') continue;
+    const char next = s[i + 2];
+    if (!isupper(static_cast<uint8_t>(next)) && next != '"' && static_cast<uint8_t>(next) < 0x80) continue;
+    if (c == '.') {  // an abbreviation? (a short capitalised word, or one with dots: "U.S.")
+      int start = i;
+      while (start > 0 && s[start - 1] != ' ') start--;
+      const String word = s.substring(start, i);
+      if (word.indexOf('.') >= 0 || (word.length() <= 3 && word.length() && isupper(static_cast<uint8_t>(word[0])))) continue;
+    }
+    cut = i + 1;
+    if (cut >= 80) break;
+  }
+  if (cut > 0) return s.substring(0, cut);
+  const int space = s.lastIndexOf(' ', kMaxSummary - 3);
+  return s.substring(0, space > 0 ? space : kMaxSummary - 3) + "...";
 }
 
 // The text inside <tag ...>…</tag> ("" if missing).
@@ -189,16 +283,36 @@ struct Item {
   String source, title, summary;
 };
 
-// One feed's best stories (feed order, recent ones only). False if it couldn't be read.
+// "2026-10-06T17:50:19Z" / "+01:00" (Atom) → UTC epoch; 0 if unreadable.
+uint32_t parseIsoDate(const String &s) {
+  int y, mo, d, h, mi, sec;
+  if (sscanf(s.c_str(), "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec) != 6) return 0;
+  int64_t t = daysFromCivil(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec;
+  const int zone = std::max(s.lastIndexOf('+'), s.lastIndexOf('-'));
+  if (zone > 10) {
+    const int offset = atoi(s.c_str() + zone + 1) * 3600 + atoi(s.c_str() + zone + 4) * 60;
+    t -= s[zone] == '+' ? offset : -offset;
+  }
+  return t > 0 ? static_cast<uint32_t>(t) : 0;
+}
+
+// One outlet or Google News feed's best stories (feed order, recent ones only; RSS <item>
+// or Atom <entry>). False if it couldn't be read.
 bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
   String buffer;
   int seen = 0;
   const uint32_t now = nowUtc();
   const bool keyword = topic.section.isEmpty();
+  const Feed *feed = keyword ? nullptr : findFeed(topic.section);
+  if (!keyword && !feed) {
+    error = "unknown feed";
+    return false;
+  }
   auto takeItem = [&](const String &item) {
     const int position = seen++;
     Item it;
-    it.published = parseDate(tagText(item, "pubDate"));
+    const String rss = tagText(item, "pubDate");
+    it.published = rss.length() ? parseDate(rss) : parseIsoDate(tagText(item, "published").length() ? tagText(item, "published") : tagText(item, "updated"));
     if (it.published && now > it.published && now - it.published > kMaxAge) return;
     it.position = position;
     it.title = tagText(item, "title");
@@ -211,8 +325,9 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
         it.title = it.title.substring(0, dash);
       }
     } else {
-      it.source = "BBC";
-      it.summary = tagText(item, "description");
+      it.source = feed->outlet;
+      const String description = tagText(item, "description");
+      it.summary = shortSummary(description.length() ? description : tagText(item, "summary"));
     }
     if (it.title.length() && static_cast<int>(items.size()) < kPerTopic) items.push_back(it);
   };
@@ -221,24 +336,90 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
       [&](const uint8_t *data, size_t len) {
         buffer.concat(reinterpret_cast<const char *>(data), len);
         for (;;) {
-          const int start = buffer.indexOf("<item>");
+          int start = buffer.indexOf("<item>");
+          if (start < 0) start = buffer.indexOf("<item ");
+          const bool atom = start < 0;
+          if (atom) start = buffer.indexOf("<entry>");
           if (start < 0) {
             if (buffer.length() > 16) buffer.remove(0, buffer.length() - 16);  // a split "<item>"
             break;
           }
-          const int end = buffer.indexOf("</item>", start);
+          const char *closing = atom ? "</entry>" : "</item>";
+          const int end = buffer.indexOf(closing, start);
           if (end < 0) {
             buffer.remove(0, start);
             break;
           }
           takeItem(buffer.substring(start, end));
-          buffer.remove(0, end + 7);
+          buffer.remove(0, end + strlen(closing));
         }
         return seen < kScanItems;  // enough: stop downloading (Google's feeds are 130 KB)
       },
       nullptr, error);
   if (!ok && seen < kScanItems) return false;  // a real failure, not our early stop
   error = "";
+  return true;
+}
+
+// Kagi's index: when the current edition came out (it publishes once a day).
+bool kagiIndex(uint32_t &edition, String &error) {
+  String body;
+  if (!net::getString(kKagiIndex, body, error)) return false;
+  JsonDocument filter;
+  filter["timestamp"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, body, DeserializationOption::Filter(filter)) != DeserializationError::Ok) {
+    error = "Kagi index unreadable";
+    return false;
+  }
+  edition = doc["timestamp"] | 0u;
+  return edition > 0;
+}
+
+// A Kagi category: its file (~100-450 KB) goes to the card first, then only the parts Dotty
+// uses are read back (title, summary, how many outlets): the whole file wouldn't fit in RAM.
+bool fetchKagi(const Topic &topic, std::vector<Item> &items, String &error) {
+  const String temp = path("kagi.part");
+  File out = SD_MMC.open(temp, FILE_WRITE);
+  if (!out) {
+    error = "cannot write to the card";
+    return false;
+  }
+  const bool ok = net::download(
+      feedUrl(topic), [&](const uint8_t *data, size_t len) { return out.write(data, len) == len; }, nullptr, error);
+  out.close();
+  if (!ok) {
+    SD_MMC.remove(temp);
+    return false;
+  }
+  JsonDocument filter;
+  filter["timestamp"] = true;
+  JsonObject cluster = filter["clusters"].add<JsonObject>();
+  cluster["title"] = true;
+  cluster["short_summary"] = true;
+  cluster["unique_domains"] = true;
+  JsonDocument doc;
+  File in = SD_MMC.open(temp);
+  const DeserializationError parsed = deserializeJson(doc, in, DeserializationOption::Filter(filter));
+  in.close();
+  SD_MMC.remove(temp);
+  if (parsed != DeserializationError::Ok) {
+    error = String("Kagi file unreadable (") + parsed.c_str() + ")";
+    return false;
+  }
+  const uint32_t published = doc["timestamp"] | 0u;
+  if (published && nowUtc() > published && nowUtc() - published > kMaxAge) return true;  // stale edition
+  int position = 0;
+  for (JsonObjectConst c : doc["clusters"].as<JsonArrayConst>()) {
+    Item it;
+    it.published = published;
+    it.position = position++;
+    it.title = cleanText(c["title"] | "");
+    it.summary = shortSummary(c["short_summary"] | "");
+    const int outlets = c["unique_domains"] | 0;
+    it.source = outlets > 1 ? String(outlets) + " sources" : String("Kagi");  // the topic says it's Kagi
+    if (it.title.length() && static_cast<int>(items.size()) < kPerTopic) items.push_back(it);
+  }
   return true;
 }
 
@@ -268,11 +449,29 @@ void fetchTask(void *) {
     if (!ok) error = "cannot write to the card";
   }
   if (ok) {
+    uint32_t edition = 0;  // Kagi's current edition (asked once, when a topic needs it)
+    bool askedKagi = false, kagiOk = true;
     for (size_t i = 0; i < fetchTopics.size(); i++) {
       const Topic &t = fetchTopics[i];
       std::vector<Item> items;
       String feedError;
-      if (fetchFeed(t, items, feedError)) {
+      if (t.kagi.length()) {
+        if (!askedKagi) {
+          askedKagi = true;
+          String indexError;
+          if (!kagiIndex(edition, indexError)) LOGW("news", "Kagi index: %s", indexError.c_str());
+        }
+        // Kagi publishes once a day: the same edition needn't be downloaded again.
+        if (edition && edition == kagiEdition && previousLines[i].length()) {
+          out.print(previousLines[i]);
+          fetched++;
+          fetchDone = fetchDone + 1;
+          continue;
+        }
+      }
+      const bool got = t.kagi.length() ? fetchKagi(t, items, feedError) : fetchFeed(t, items, feedError);
+      if (t.kagi.length() && !got) kagiOk = false;
+      if (got) {
         fetched++;
         for (const Item &it : items) {
           out.printf("%s\t%lu\t%u\t%s\t%s\t%s\n", t.key().c_str(), static_cast<unsigned long>(it.published),
@@ -287,6 +486,13 @@ void fetchTask(void *) {
       fetchDone = fetchDone + 1;
     }
     out.close();
+    if (askedKagi && kagiOk && edition) {
+      kagiEdition = edition;
+      Preferences prefs;
+      prefs.begin("news", false);
+      prefs.putULong("kagi", edition);
+      prefs.end();
+    }
     if (fetched > 0) {
       SD_MMC.remove(path("stories.tsv"));
       if (!SD_MMC.rename(path("stories.part"), path("stories.tsv"))) {
@@ -318,7 +524,8 @@ void fetchTask(void *) {
 void scorePool() {
   const uint32_t now = nowUtc();
   for (Story &s : pool) {
-    const float hours = s.published && now > s.published ? (now - s.published) / 3600.0f : 0;
+    float hours = s.published && now > s.published ? (now - s.published) / 3600.0f : 0;
+    if (s.topic[0] == 'c') hours = min(hours, 12.0f);  // a daily briefing stays today's news all day
     s.score = s.position + hours * 0.5f;
     // The same story in several of the user's topics: a big one.
     int copies = 0;
@@ -372,16 +579,17 @@ void loadTopics() {
     for (JsonObjectConst o : doc.as<JsonArrayConst>()) {
       Topic t;
       t.section = o["section"] | "";
+      t.kagi = o["kagi"] | "";
       t.query = o["query"] | "";
       t.name = o["name"] | "";
       t.star = o["star"] | false;
-      if (t.section.length() || t.query.length()) topicList.push_back(t);
+      if (t.section.length() || t.kagi.length() || t.query.length()) topicList.push_back(t);
     }
     return;
   }
   // First run: a sensible start the app can change.
-  topicList = {{"top", "", "Top stories", true}, {"tech", "", "Tech", true}, {"world", "", "World", false},
-               {"science", "", "Science", false}};
+  topicList = {{"top", "", "", "Top stories", true}, {"tech", "", "", "Tech", true}, {"world", "", "", "World", false},
+               {"science", "", "", "Science", false}};
 }
 
 // refetch: the topics' stories change (added/removed), not just their star or order.
@@ -391,6 +599,7 @@ void saveTopics(bool refetch) {
   for (const Topic &t : topicList) {
     JsonObject o = list.add<JsonObject>();
     if (t.section.length()) o["section"] = t.section;
+    else if (t.kagi.length()) o["kagi"] = t.kagi;
     else o["query"] = t.query;
     o["name"] = t.name;
     o["star"] = t.star;
@@ -409,8 +618,8 @@ int indexOf(const String &key) {
 
 }  // namespace
 
-const std::vector<Section> &sections() {
-  return kSections;
+const std::vector<Feed> &feeds() {
+  return kFeeds;
 }
 
 bool begin() {
@@ -420,6 +629,7 @@ bool begin() {
   Preferences prefs;
   prefs.begin("news", true);
   fetchedAt = prefs.getULong("fetched", 0);
+  kagiEdition = prefs.getULong("kagi", 0);
   prefs.end();
   LOGI("news", "%u topics, %u stories", static_cast<unsigned>(topicList.size()), static_cast<unsigned>(pool.size()));
   return !pool.empty();

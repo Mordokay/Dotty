@@ -9,28 +9,38 @@
 // The news pool: short stories for the topics the user follows, fetched over Wi-Fi every
 // 30 minutes and kept on the SD card, so Dotty can be read offline for hours.
 //
-// Topics are BBC News sections (headline + a one-sentence summary) or keywords searched on
-// Google News over the last 2 days (headline + source). Each topic keeps its 10 best stories
-// of the last 48 hours. Files in the cartridge's data folder:
-//   topics.json   [{section | query, name, star}] in the user's order
+// A topic comes from one of three sources:
+//   - an outlet's feed (feeds(): BBC, NYT, NBC, Bloomberg, …): headline + a short summary,
+//     fresh all day (key "s:<feed id>");
+//   - a Kagi News category (kite.kagi.com): a daily briefing of the day's 12 big stories, each
+//     clustered from dozens of outlets with an AI summary; fetched only when Kagi publishes a
+//     new edition (key "c:<file>");
+//   - a keyword searched on Google News over the last 2 days: headlines only (key "k:<query>").
+// Summaries are cut to their first sentence(s), about 250 characters at most. Each topic keeps
+// its 10 best stories of the last 48 hours. Files in the cartridge's data folder:
+//   topics.json   [{section | kagi | query, name, star}] in the user's order
 //   stories.tsv   topic key \t published (UTC epoch) \t feed position \t source \t title \t summary
-// "Best" = a score from the feed's own order (BBC lists by editorial importance, Google by
-// relevance), the story's age, and a boost when several of the user's topics carry it.
+// "Best" = a score from the feed's own order (outlets list by editorial importance, Kagi by
+// size, Google by relevance), the story's age, and a boost when several topics carry it.
 namespace news {
 
 constexpr int kMaxTopics = 12;
 
-struct Section {
-  const char *id, *name;
+struct Feed {
+  const char *id, *outlet, *section, *url;
+  String name() const { return section[0] ? String(outlet) + " " + section : String(outlet); }
 };
-const std::vector<Section> &sections();  // BBC sections a topic can be
+const std::vector<Feed> &feeds();  // the outlets' feeds a topic can be
 
 struct Topic {
-  String section;  // a BBC section id, or "" for a keyword
-  String query;    // the keyword ("" for a section)
+  String section;  // an outlet feed id ("section": the first topics were BBC sections)
+  String kagi;     // a Kagi News category file, e.g. "formula_1.json"
+  String query;    // a Google News keyword
   String name;     // shown on Dotty and in the app
   bool star = false;
-  String key() const { return section.length() ? "s:" + section : "k:" + query; }
+  String key() const {
+    return section.length() ? "s:" + section : kagi.length() ? "c:" + kagi : "k:" + query;
+  }
 };
 
 struct Story {

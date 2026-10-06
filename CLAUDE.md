@@ -92,7 +92,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   unlocks only if PWR is really down (else "woke for PWR, but it isn't pressed"). Locking
   on battery once flashed the lock screen and bounced straight back to the app.
 - **Taps without a finger**: serial keys `1`-`9` tap a 3x3 grid like a phone keypad (`1` =
-  the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right;
+  the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right, `}` / `{` swipe up / down;
   `k` locks / unlocks (while locked it's read only when Dotty is awake: a locked Dotty without
   a reading program light-sleeps until the next minute). Send keys with a short
   wait before closing the port (`write; flush; sleep 0.3`): closing at once left the byte
@@ -592,13 +592,26 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ## News cartridge (`cartridges/news/`)
 
-- Topics (max 12, managed in the app): BBC sections (`news::sections()`: top, world, uk,
-  business, politics, tech, science, health, culture, sport → feeds.bbci.co.uk RSS, headline +
-  one-sentence summary) or keywords (Google News search RSS, `when:2d`, en-GB: headline +
-  source, title's " - Source" suffix split off; no summary). ★ = favourite. Starter set: Top
-  stories ★, Tech ★, World, Science. Files in `data/`: `topics.json`, `stories.tsv` (topic key
-  `s:<id>`/`k:<query>`, published UTC, feed position, source, title, summary; parsed in place in
-  PSRAM like jokes.tsv).
+- Topics (max 12, managed in the app), three sources:
+  - **Outlet feeds** (`news::feeds()`, key `s:<id>`): BBC sections (short ids top, world… —
+    the first topics), NYT, Washington Post, NBC, ABC, CBS, NPR, Fox, Bloomberg, FT, Guardian,
+    Al Jazeera, Sky, Euronews, TechCrunch, Ars, The Verge (Atom). Checked 2026-10-06: CNN's and
+    WSJ's feeds stopped updating (2023 / early 2025), MSNBC's is empty (NBC's works), Reuters
+    and AP have none → keywords like `site:wsj.com` (headlines only).
+  - **Kagi News daily briefings** (key `c:<file>`, e.g. `formula_1.json`; ~188 categories, the
+    app reads https://kite.kagi.com/kite.json itself): the day's ~12 big stories, each clustered
+    from 40-60 outlets with an AI summary; once a day (~12:00 UTC). Files are 100-450 KB: saved
+    to the card (`kagi.part`), then read back with an ArduinoJson filter (title, short_summary,
+    unique_domains); source shown as "50 sources". The index timestamp is kept (NVS
+    `news/kagi`): the same edition isn't downloaded again. Ages count from the file's own
+    timestamp; their score's age term is capped at 12 h. Licence believed non-commercial.
+  - **Keywords** (key `k:<query>`): Google News search RSS, `when:2d`, en-GB: headline + source
+    (title's " - Source" suffix split off), no summary.
+  Summaries are cut to whole sentences, ≥ ~80 and ≤ 250 chars ("Oct." / "U.S." aren't ends;
+  Kagi's `[site#1]` marks removed). ★ = favourite. Starter set: Top stories ★, Tech ★, World,
+  Science. Files in `data/`: `topics.json` ({section | kagi | query, name, star}),
+  `stories.tsv` (topic key, published UTC, feed position, source, title, summary; parsed in
+  place in PSRAM like jokes.tsv).
 - Fetch task (`news_store.*`, core 0, 12 KB) every 30 min (also locked: the loop runs at every
   minute wake, Network wake lock while fetching), 5 s after a topic add/remove, retry 10 min.
   RSS is parsed while streaming (`<item>` by `<item>`; CDATA, entities, tags stripped), stopping
@@ -607,16 +620,18 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Ranking: score = feed position + 0.5 × hours old − 2 per extra topic carrying the same
   title (a big story); Favourites = starred topics (all if none starred), deduplicated.
 - Dotty: menu (★ Favourites + each topic with counts, 38 px rows, paged), story screen
-  (headline bold, "BBC - 2h ago" with a rule under it, summary; swipe up/down scrolls with ▲▼,
+  (headline bold, "BBC - 2h ago" with a rule under it, summary; swipe up/down scrolls, with a
+  scrollbar on the right edge — dotted track, thumb sized to the visible part — instead of ▲▼,
   swipe left/right / BOOT / the "3/10" corner = next/previous). Lock widget: a favourite
   headline that fits 3 bold lines (measured, like jokes) + source/age, the top 12 taking turns
   per 5-minute slot (partial refresh). Ages need the phone's UTC offset (core.time).
 - BLE: `news.status` {stories, fetching, done, total, fetchedAt (local), error?, topics[{key,
-  name, section|query, star, count}]}, `news.sections`, `news.topic.add {section | query,
-  name?, star?}`, `news.topic.remove {key}`, `news.topic.star {key, on}`, `news.topic.move
+  name, section|kagi|query, star, count}]}, `news.sections` (outlet feeds: {id, outlet, section,
+  name}), `news.topic.add {section | kagi + name | query, name?, star?}`, `news.topic.remove {key}`, `news.topic.star {key, on}`, `news.topic.move
   {from, to}`, `news.refresh`, `news.stories {topic?, limit?}`; event `news.changed`. Dev key
-  `r` fetches now. App: `Features/News/NewsView.swift` (topics with ★ and a menu, keyword
-  field, BBC sections to add, "Favourites on Dotty now").
+  `r` fetches now. App: `Features/News/NewsView.swift` (topics with ★ and a menu; "Add a
+  topic": Daily briefing / News outlet → `TopicPicker` sheet (search, several at once), keyword
+  field; "Favourites on Dotty now").
 
 ## SD library + Wi-Fi fetch (launcher)
 

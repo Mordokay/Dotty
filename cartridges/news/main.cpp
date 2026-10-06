@@ -1,5 +1,6 @@
-// News: short, recent stories for the topics the user follows (news_store.h), fetched every
-// 30 minutes and kept on the SD card so they can be read offline.
+// News: short, recent stories for the topics the user follows (news_store.h): outlets' feeds,
+// Kagi News daily briefings and Google News keywords, fetched every 30 minutes and kept on
+// the SD card so they can be read offline.
 //
 // Screens: the menu (★ Favourites = the starred topics together, then each topic with its
 // story count; paged) → a story (headline, source and age, the one-sentence summary; swipe
@@ -26,7 +27,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("news", "News", "0.1.0");
+DOTTY_CARTRIDGE("news", "News", "0.2.0");
 
 namespace {
 
@@ -124,6 +125,17 @@ void drawMenu() {
   }
 }
 
+// A long story's scrollbar on the right edge: a thin track, and a thumb as tall as the part on
+// screen, placed where it is in the story. Nothing when it all fits.
+void drawScrollbar(int first, int visible, int total) {
+  if (total <= visible) return;
+  const int16_t x = kW - 4, top = nav::kHeight + 4, height = EpdDisplay::kSize - 4 - top;
+  for (int16_t y = top; y < top + height; y += 3) epd.drawPixel(x + 1, y, kBlack);  // dotted track
+  const int16_t thumb = max<int16_t>(14, height * visible / total);
+  const int16_t y = top + (height - thumb) * first / max(1, total - visible);
+  epd.fillRoundRect(x, y, 3, thumb, 1, kBlack);
+}
+
 void drawStory() {
   epd.fillScreen(kWhite);
   const String where = list.empty() ? String() : String(storyIndex + 1) + "/" + String(list.size());
@@ -143,11 +155,7 @@ void drawStory() {
     epd.print(line.text);
     if (line.rule) epd.drawFastHLine(kTextX, kFirstBaseline + i * kLineH + 5, kTextW, kBlack);
   }
-  // More above / below.
-  if (scrollLine > 0) epd.fillTriangle(kW - 9, nav::kHeight + 3, kW - 14, nav::kHeight + 9, kW - 4, nav::kHeight + 9, kBlack);
-  if (scrollLine + kVisibleLines < static_cast<int>(lines.size())) {
-    epd.fillTriangle(kW - 9, kW - 3, kW - 14, kW - 9, kW - 4, kW - 9, kBlack);
-  }
+  drawScrollbar(scrollLine, kVisibleLines, lines.size());
 }
 
 // No stories at all yet: why, and what happens next.
@@ -318,30 +326,41 @@ void registerCommands() {
       o["key"] = t.key();
       o["name"] = t.name;
       if (t.section.length()) o["section"] = t.section;
+      else if (t.kagi.length()) o["kagi"] = t.kagi;
       else o["query"] = t.query;
       o["star"] = t.star;
       o["count"] = news::stories(t.key()).size();
     }
   });
+  // The outlets' feeds a topic can be (the app groups them by outlet).
   ble::on("news.sections", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["sections"].to<JsonArray>();
-    for (const news::Section &s : news::sections()) {
+    for (const news::Feed &f : news::feeds()) {
       JsonObject o = list.add<JsonObject>();
-      o["id"] = s.id;
-      o["name"] = s.name;
+      o["id"] = f.id;
+      o["outlet"] = f.outlet;
+      o["section"] = f.section;
+      o["name"] = f.name();
     }
   });
-  // {section} or {query, name?}
+  // {section} (an outlet feed), {kagi: "formula_1.json", name} (a Kagi News category, from
+  // kite.kagi.com/kite.json), or {query, name?} (a Google News keyword).
   ble::on("news.topic.add", [](JsonObjectConst args, JsonObject reply) {
     news::Topic t;
     t.section = args["section"] | "";
+    t.kagi = args["kagi"] | "";
     t.query = args["query"] | "";
     t.query.trim();
     if (t.section.length()) {
-      for (const news::Section &s : news::sections()) {
-        if (t.section == s.id) t.name = s.name;
+      for (const news::Feed &f : news::feeds()) {
+        if (t.section == f.id) t.name = f.name();
       }
-      if (t.name.isEmpty()) return fail(reply, "unknown section");
+      if (t.name.isEmpty()) return fail(reply, "unknown feed");
+    } else if (t.kagi.length()) {
+      // A plain file name only (it becomes part of a URL).
+      if (!t.kagi.endsWith(".json") || t.kagi.indexOf('/') >= 0 || t.kagi.length() > 60) return fail(reply, "bad category");
+      t.name = args["name"] | "";
+      if (t.name.isEmpty()) t.name = t.kagi.substring(0, t.kagi.length() - 5);
     } else if (t.query.length()) {
       if (t.query.length() > 60) return fail(reply, "keep it under 60 characters");
       t.name = args["name"] | t.query.c_str();
