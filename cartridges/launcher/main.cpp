@@ -8,6 +8,7 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <SD_MMC.h>
 #include <mbedtls/base64.h>
+#include <Preferences.h>
 #include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <mbedtls/sha256.h>
@@ -26,7 +27,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.8.1");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.0");
 
 namespace {
 
@@ -47,6 +48,7 @@ enum class Stage { None, Running, Done, Failed };
 struct Job {
   Stage stage = Stage::None;
   bool fromBle = false;  // progress comes from the BLE installer
+  bool rescue = false;   // a launcher update: Done restarts into Rescue, which installs it
   String action;         // "Installing", "Installing from card", …
   String name, version, error;
   size_t size = 0, done = 0;
@@ -154,6 +156,7 @@ void startJob(const String &action, const String &name, const String &version, s
   job.hasIcon = icon != nullptr;
   if (icon) memcpy(job.icon, icon, sizeof(job.icon));
   job.failureShown = false;
+  job.rescue = false;
   hasCartridge = false;  // the old cartridge is being overwritten
   shell::wake();
   drawJob();
@@ -246,6 +249,7 @@ void registerBleInstallCommands() {
     m.hasIcon = args["icon"] | false;
     String error;
     if (m.id.isEmpty() || m.name.isEmpty()) error = "id and name are required";
+    else if (m.id == "launcher") error = "the launcher updates with library.fetch (through Rescue)";
     else if (!parseSha256(args["sha256"], m.sha256)) error = "sha256 must be 64 hex characters";
     else installer::start(m, error);
     if (error.length()) {
@@ -305,6 +309,53 @@ void saveBleInstallToCard() {
   job.stage = Stage::Done;
 }
 
+// ---------- launcher updates (through Rescue) ----------
+
+// Launchers older than this predate flash layout 2 (they'd copy themselves over Rescue).
+constexpr const char *kFirstRescueLauncher = "0.9.0";
+
+bool olderThan(const String &a, const char *b) {
+  int x[3] = {}, y[3] = {};
+  sscanf(a.c_str(), "%d.%d.%d", &x[0], &x[1], &x[2]);
+  sscanf(b, "%d.%d.%d", &y[0], &y[1], &y[2]);
+  for (int i = 0; i < 3; i++) {
+    if (x[i] != y[i]) return x[i] < y[i];
+  }
+  return false;
+}
+
+// A new launcher on the card is installed by Rescue: it writes the launcher slot, checks it
+// and starts it on trial (rescue/main.cpp). False (with error) if it can't be staged.
+bool stageLauncher(const library::Entry &entry, String &error) {
+  if (olderThan(entry.version, kFirstRescueLauncher)) {
+    error = "launcher " + entry.version + " is too old for this Dotty";
+    return false;
+  }
+  Preferences p;
+  p.begin("rescue", false);
+  p.putString("install", entry.version);
+  p.end();
+  job.rescue = true;
+  job.action = "Restarting into Rescue";
+  LOGI("update", "launcher %s staged for Rescue", entry.version.c_str());
+  return true;
+}
+
+// Once this launcher has run fine: it's the one Rescue puts back if a later update fails,
+// so remember its version and keep a copy of it on the card (a USB-flashed launcher has none).
+void rememberGoodLauncher() {
+  Preferences p;
+  p.begin("rescue", false);
+  if (p.getString("good", "") != cartridge::self().version) p.putString("good", cartridge::self().version);
+  p.end();
+  library::Entry onCard;
+  if (!library::available() || library::find("launcher", cartridge::self().version, onCard)) return;
+  String error;
+  if (!library::saveRunning("launcher", "Launcher", cartridge::self().version, error)) {
+    LOGW("update", "no copy of this launcher on the card: %s", error.c_str());
+  }
+}
+
 // ---------- SD card library ----------
 
 void registerLibraryCommands() {
@@ -343,6 +394,17 @@ void registerLibraryCommands() {
     job.fromBle = false;
     startJob("Installing from card", entry.name, entry.version, entry.size);
     job.hasIcon = library::readIcon(entry, job.icon);
+    if (entry.id == "launcher") {
+      if (stageLauncher(entry, error)) {
+        job.stage = Stage::Done;  // loop() restarts into Rescue
+        reply["version"] = entry.version;
+      } else {
+        failJob(error);
+        reply["ok"] = false;
+        reply["error"] = error;
+      }
+      return;
+    }
     const bool ok = library::install(entry, [](size_t done, size_t) {
       job.done = done;
       updateJobScreen();
@@ -494,6 +556,12 @@ void registerFetchCommand() {
       shell::showApp();
       return;
     }
+    if (id == "launcher") {
+      if (!stageLauncher(entry, error)) return fail(error);
+      notifyFetch("install", entry.size, entry.size);
+      job.stage = Stage::Done;  // loop() restarts into Rescue
+      return;
+    }
     job.action = "Installing from card";
     job.done = 0;
     if (!library::install(entry, [](size_t done, size_t) {
@@ -523,51 +591,13 @@ const shell::Picture kOffPictures[] = {
 
 }  // namespace
 
-// A launcher update arrives like a cartridge: the old launcher installs this image in the
-// cartridge slot (ota_0) and boots it. Running from there, it copies itself over the launcher
-// (factory), checks the copy and restarts into it; that start empties ota_0 (setup below).
-// A power cut midway boots this copy from ota_0 again, which simply starts over. Runs before
-// the shell, so no Bluetooth comes up from the slot copy; the e-paper keeps showing the old
-// launcher's install screen meanwhile.
-void installSelfIfUpdate() {
-  if (cartridge::isLauncher()) return;
-  pinMode(PIN_VBAT_PWR, OUTPUT);
-  digitalWrite(PIN_VBAT_PWR, HIGH);  // stay on when on battery
-  const esp_partition_t *running = esp_ota_get_running_partition();
-  const esp_partition_t *factory =
-      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
-  esp_image_metadata_t image;
-  const esp_partition_pos_t from = {running->address, running->size};
-  if (!factory || esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &from, &image) != ESP_OK ||
-      image.image_len > factory->size) {
-    LOGE("update", "can't install this launcher (no factory partition or a bad image)");
-    return;  // runs as a plain launcher from ota_0: still usable, and the app can retry
-  }
-  const size_t length = image.image_len;
-  LOGI("update", "installing launcher %s (%u bytes)", cartridge::self().version, static_cast<unsigned>(length));
-  if (esp_partition_erase_range(factory, 0, (length + 4095) & ~static_cast<size_t>(4095)) != ESP_OK) return;
-  static uint8_t block[4096];
-  for (size_t at = 0; at < length; at += sizeof(block)) {
-    const size_t n = min(sizeof(block), length - at);
-    if (esp_partition_read(running, at, block, n) != ESP_OK || esp_partition_write(factory, at, block, n) != ESP_OK) {
-      LOGE("update", "copy failed at %u", static_cast<unsigned>(at));
-      return;
-    }
-  }
-  esp_image_metadata_t copy;
-  const esp_partition_pos_t to = {factory->address, factory->size};
-  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &to, &copy) != ESP_OK || copy.image_len != length) {
-    LOGE("update", "the copy doesn't verify");
-    return;
-  }
-  esp_ota_set_boot_partition(factory);
-  LOGI("update", "launcher installed, restarting into it");
-  delay(100);
-  esp_restart();
-}
-
 void setup() {
-  installSelfIfUpdate();
+#ifdef DOTTY_TEST_CRASH
+  // Test build only (PLATFORMIO_BUILD_FLAGS=-DDOTTY_TEST_CRASH): a launcher that never starts,
+  // to check the bootloader rollback and Rescue's automatic repair.
+  delay(500);
+  abort();
+#endif
   shell::Config config;
   config.drawApp = drawApp;
   config.offPictures = kOffPictures;
@@ -621,7 +651,13 @@ void setup() {
 
 void loop() {
   shell::Input input;
-  if (!shell::update(input)) return;
+  const bool unlocked = shell::update(input);
+  static bool remembered = false;
+  if (!remembered && millis() > 8000) {  // after the shell's trial confirmation
+    remembered = true;
+    rememberGoodLauncher();
+  }
+  if (!unlocked) return;
 
   if (installer::active()) {
     loopBleInstall();
@@ -631,6 +667,8 @@ void loop() {
     drawJob();
     shell::refresh(false);
     epd.waitBusy();
+    if (job.rescue) cartridge::rebootToRescue();
+    cartridge::confirmHealthy();  // a deliberate restart, not a crash
     esp_restart();
   } else if (job.stage == Stage::Failed) {
     // Show the error until BOOT; the slot may no longer hold a valid cartridge.

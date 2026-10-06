@@ -1,10 +1,16 @@
-# 8MB flash: a permanent launcher + one cartridge slot.
-# factory = the launcher (USB updates only), ota_0 = the active cartridge, installed by
-# the launcher over BLE. If ota_0 is empty or invalid the bootloader boots the launcher.
+# 8MB flash, layout 2 (2026-10-06): Rescue + launcher + one cartridge slot.
+# rescue (factory) = the small recovery firmware, flashed over USB and never updated by the
+#   app: it installs launcher updates staged on the SD card and puts the last good launcher
+#   back when a new one fails (bootloader rollback). The bootloader falls back to it when no
+#   OTA slot is bootable.
+# launcher (ota_1) = the launcher, updated through Rescue.
+# ota_0 = the active cartridge, installed by the launcher.
+# storage = unused (everything lives on the SD card), kept for later.
 # Name,    Type, SubType,  Offset,   Size
 nvs,       data, nvs,      0x9000,   0x5000
 otadata,   data, ota,      0xe000,   0x2000
-factory,   app,  factory,  0x10000,  0x200000
-ota_0,     app,  ota_0,    0x210000, 0x400000
-storage,   data, spiffs,   0x610000, 0x1E0000
+rescue,    app,  factory,  0x10000,  0xC0000
+launcher,  app,  ota_1,    0xD0000,  0x200000
+ota_0,     app,  ota_0,    0x2D0000, 0x400000
+storage,   data, spiffs,   0x6D0000, 0x120000
 coredump,  data, coredump, 0x7F0000, 0x10000

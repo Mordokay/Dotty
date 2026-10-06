@@ -28,6 +28,7 @@ namespace {
 
 constexpr uint32_t kPowerOffHoldMs = 2000;
 constexpr uint32_t kLauncherComboMs = 1000;
+constexpr uint32_t kConfirmAfterMs = 5000;  // a new firmware's trial (bootloader rollback)
 constexpr uint32_t kAutoLockMs = 2 * 60 * 1000;
 constexpr uint32_t kBatteryLogIntervalMs = 10 * 60 * 1000;
 constexpr uint32_t kPowerCardMs = 2500;
@@ -145,6 +146,7 @@ void unlock() {
 
 [[noreturn]] void powerOff() {
   LOGI("power", "power off");
+  cartridge::confirmHealthy();  // switched off on purpose: not a crash to roll back
   if (cfg.beforePowerOff) cfg.beforePowerOff();
   epd.fillScreen(EpdDisplay::kWhite);
   if (cfg.offPictureCount > 0) {
@@ -355,6 +357,7 @@ void logBattery() {
 // stays off until it's charged; on battery the next PWR press shows this again.
 [[noreturn]] void batteryEmptyOff() {
   LOGW("power", "battery empty (%lu mV): switching off", battery::millivolts());
+  cartridge::confirmHealthy();
   if (cfg.beforePowerOff) cfg.beforePowerOff();
   epd.waitBusy();
   drawBatteryEmpty(epd);
@@ -382,6 +385,12 @@ void begin(const Config &config) {
   LOGI("boot", "=== Dotty %s %s === PSRAM %lu KB, heap %lu KB", me.name, me.version,
        ESP.getPsramSize() / 1024, ESP.getFreeHeap() / 1024);
   reportPreviousCrash();
+  // A launcher update that failed its trial left the launcher slot unusable: Rescue puts the
+  // last good launcher back (it needs the launcher to switch cartridges and update).
+  if (!cartridge::isLauncher() && cartridge::launcherBroken()) {
+    LOGW("boot", "the launcher failed its trial: handing over to Rescue");
+    cartridge::rebootToRescue();
+  }
   if (!cartridge::isLauncher()) {
     esp_task_wdt_config_t wdt = {};
     wdt.timeout_ms = kLoopWatchdogMs;
@@ -445,6 +454,12 @@ void sendScreenshot() {
 }
 
 bool update(Input &input) {
+  // Running fine for a few seconds: confirm this firmware so the bootloader keeps it.
+  static bool confirmed = false;
+  if (!confirmed && millis() > kConfirmAfterMs) {
+    confirmed = true;
+    cartridge::confirmHealthy();
+  }
   const char key = dlog::takeKey();
   if (key == 's') sendScreenshot();
   input.key = key == 's' ? 0 : key;

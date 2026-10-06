@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <SD_MMC.h>
+#include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
@@ -119,12 +120,48 @@ bool readIcon(const Entry &entry, uint8_t *out) {
   return f && f.read(out, installer::kIconBytes) == installer::kIconBytes;
 }
 
+bool saveFrom(const esp_partition_t *part, const Entry &entry, const uint8_t *icon, String &error);
+
 bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error) {
+  return saveFrom(slot(), entry, icon, error);
+}
+
+bool saveRunning(const String &id, const String &name, const String &version, String &error) {
+  const esp_partition_t *part = esp_ota_get_running_partition();
+  esp_image_metadata_t image;
+  const esp_partition_pos_t pos = {part->address, part->size};
+  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &image) != ESP_OK) {
+    error = "the running image doesn't verify";
+    return false;
+  }
+  // The image's SHA-256, as the catalog has it for the same build.
+  static uint8_t buffer[kChunk];
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  for (size_t done = 0; done < image.image_len;) {
+    const size_t n = min<size_t>(kChunk, image.image_len - done);
+    if (esp_partition_read(part, done, buffer, n) != ESP_OK) break;
+    mbedtls_sha256_update(&sha, buffer, n);
+    done += n;
+  }
+  uint8_t digest[32];
+  mbedtls_sha256_finish(&sha, digest);
+  mbedtls_sha256_free(&sha);
+  Entry entry;
+  entry.id = id;
+  entry.name = name;
+  entry.version = version;
+  entry.size = image.image_len;
+  entry.sha256 = toHex(digest);
+  return saveFrom(part, entry, nullptr, error);
+}
+
+bool saveFrom(const esp_partition_t *part, const Entry &entry, const uint8_t *icon, String &error) {
   if (!available()) {
     error = "no SD card";
     return false;
   }
-  const esp_partition_t *part = slot();
   storage::makeDirs(storage::firmwareDir(entry.id));
   const String base = basePath(entry.id, entry.version);
   File out = SD_MMC.open(base + ".bin", FILE_WRITE);

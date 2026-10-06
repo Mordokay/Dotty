@@ -37,6 +37,10 @@ bool commit(const Entry &entry, const uint8_t *icon, String &error);
 // Copies the cartridge just installed in ota_0 onto the card (verifying its SHA-256).
 bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error);
 
+// Copies the running firmware (e.g. the launcher itself) onto the card as id/version, so
+// Rescue has a known-good copy to put back.
+bool saveRunning(const String &id, const String &name, const String &version, String &error);
+
 // Flashes an entry from the card into ota_0 and selects it for the next boot.
 bool install(const Entry &entry, Progress progress, String &error);
 

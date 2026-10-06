@@ -261,6 +261,8 @@ struct CartridgesView: View {
     private func systemCard(_ launcher: CatalogCartridge) -> some View {
         let current = link.info?.launcherVersion
         let newer = current.map { launcher.version.compare($0, options: .numeric) == .orderedDescending } ?? false
+        // Launchers before 0.9.0 use the old flash layout (no Rescue): one USB flash moves them.
+        let needsCable = current.map { $0.compare("0.9.0", options: .numeric) == .orderedAscending } ?? false
         return VStack(alignment: .leading, spacing: Spacing.m) {
             HStack(alignment: .center, spacing: Spacing.m) {
                 CartridgeArtwork(cartridge: launcher, size: 56)
@@ -272,14 +274,16 @@ struct CartridgesView: View {
                         .foregroundStyle(newer ? DottyLight.leaf.color : Color.inkMuted)
                 }
                 Spacer(minLength: Spacing.s)
-                if newer || current == nil {
+                if newer && !needsCable {
                     Button("Update") { Task { await updateSystem(launcher) } }
                         .buttonStyle(.light(DottyLight.leaf.color))
                         .disabled(install != nil && install?.error == nil)
                         .needsDotty(link)
                 }
             }
-            Text("Installs and switches cartridges, and runs Wi-Fi, Bluetooth and the lock screen. Updating keeps your cartridges and their files; Dotty restarts a few times.")
+            Text(needsCable && newer
+                 ? "This update moves Dotty to a safer layout with a rescue system, which needs a USB cable once. After that, updates come from here."
+                 : "Installs and switches cartridges, and runs Wi-Fi, Bluetooth and the lock screen. Updating keeps your cartridges and their files. If a new version ever fails to start, Dotty puts the previous one back by itself.")
                 .font(.lpCallout)
                 .foregroundStyle(Color.inkMuted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -289,13 +293,13 @@ struct CartridgesView: View {
         .glassSurface()
     }
 
-    /// The launcher is fetched like a cartridge; started from the cartridge slot, it copies
-    /// itself over the old launcher and restarts there (firmware: installSelfIfUpdate). Then
-    /// the cartridge that was installed goes back in from the SD card.
+    /// Dotty downloads the new launcher to its SD card and restarts into Rescue, which writes
+    /// it and starts it on trial (firmware: cartridges/rescue). The cartridge slot isn't
+    /// touched, so the cartridge that was running is simply started again.
     private func updateSystem(_ launcher: CatalogCartridge) async {
         install = InstallState(cartridge: launcher)
         guard let info = link.info else { return }
-        let previous = info.isLauncher ? info.installed.map { ($0.id, $0.version, $0.name) } : (info.id, info.version, info.name)
+        let wasRunning = info.isLauncher ? nil : info.name
         do {
             install?.stage = "Switching to the launcher"
             try await link.ensureLauncher()
@@ -308,16 +312,16 @@ struct CartridgesView: View {
             install?.stage = "Connecting to Wi-Fi"
             try await link.send("library.fetch", ["id": launcher.id, "name": "Dotty system", "version": launcher.version,
                                                   "size": launcher.size, "sha256": launcher.sha256], timeout: 300)
-            install?.stage = "Dotty is installing its new system"
+            install?.stage = "Rescue is installing the new system"
             install?.progress = nil
             let deadline = Date().addingTimeInterval(180)
             while !(link.connection == .connected && link.info?.isLauncher == true && link.info?.version == launcher.version) {
                 guard Date() < deadline else { throw DottyError.timeout }
                 try await Task.sleep(for: .seconds(1))
             }
-            if let (id, version, name) = previous, id != launcher.id {
-                install?.stage = "Putting \(name) back"
-                try await link.send("install.fromCard", ["id": id, "version": version], timeout: 60)
+            if let wasRunning {
+                install?.stage = "Starting \(wasRunning) again"
+                try await link.send("launcher.start")
                 try await link.waitForReconnect()
             }
             install = nil

@@ -19,26 +19,43 @@ constexpr uint32_t kCartridgeMagic = 0x59544F44;  // "DOTY"
   extern "C" const CartridgeInfo kDottyCartridge                                            \
       __attribute__((section(".rodata_custom_desc"), used)) = {kCartridgeMagic, ID, NAME, VERSION}
 
+#include <esp_partition.h>
+
 namespace cartridge {
+
+// Flash layout 2 (partitions.csv): Rescue in factory, the launcher in ota_1, the cartridge
+// in ota_0.
+const esp_partition_t *launcherSlot();
+const esp_partition_t *rescueSlot();
 
 // The running firmware's identity.
 const CartridgeInfo &self();
 
-// True when running from the factory partition.
+// True when running from the launcher slot.
 bool isLauncher();
 
 // Reads the identity of the cartridge in ota_0; false if none is installed.
 bool readInstalled(CartridgeInfo &out);
 
-// Reads the launcher's identity (factory partition), e.g. its version for the app.
+// Reads the launcher's identity (its slot), e.g. its version for the app.
 bool readLauncher(CartridgeInfo &out);
+
+// A firmware started for the first time is on trial: if it restarts before confirming,
+// the bootloader rolls back to the previous one. The shell confirms after a few seconds of
+// running (and before any deliberate restart). True if this call confirmed it.
+bool confirmHealthy();
+
+// The launcher slot holds a launcher that failed its trial (or nothing valid): Rescue
+// should put a good one back.
+bool launcherBroken();
 
 // Empties ota_0 (erases its image header) and boots the launcher from now on. Used when the
 // installed cartridge is removed.
 bool eraseInstalled();
 
-// Boot targets. Both restart the chip and do not return on success.
+// Boot targets. They restart the chip and do not return on success.
 void rebootToLauncher();
+void rebootToRescue();
 bool startInstalled();
 
 }  // namespace cartridge

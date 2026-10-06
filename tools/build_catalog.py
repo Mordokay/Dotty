@@ -10,7 +10,8 @@ dist/ gets <id>-<version>.bin per cartridge plus catalog.json. A release is mark
 The launcher is in the catalog too, marked "system": true (apps don't list it as a
 cartridge). Installed like a cartridge, it copies itself into the factory partition at its
 first start (cartridges/launcher/main.cpp, installSelfIfUpdate): that's how Dotty's system
-firmware updates from the app.
+firmware updates from the app. Since flash layout 2 Rescue installs it (cartridges/rescue/),
+and Rescue itself is never in the catalog.
 
 Each cartridges/<id>/ may have cartridge.json ({"description": ..., "requires": [...]}),
 icon.png (64x64 1-bit after conversion: Dotty's install screen) and artwork.png (square,
@@ -45,7 +46,9 @@ def run(cmd, **kwargs):
 
 
 def cartridge_ids():
-    return sorted(p.name for p in (REPO / "cartridges").iterdir() if (p / "main.cpp").exists())
+    # Rescue (factory partition) is USB-only: never in the catalog.
+    return sorted(p.name for p in (REPO / "cartridges").iterdir()
+                  if (p / "main.cpp").exists() and p.name != "rescue")
 
 
 def build(cartridge_id):

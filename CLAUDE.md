@@ -58,7 +58,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 
 ```bash
 ~/.platformio/penv/bin/pio run -e music                                # build a cartridge
-~/.platformio/penv/bin/pio run -e launcher -t upload --upload-port /dev/cu.usbmodem1101  # factory, boots launcher
+~/.platformio/penv/bin/pio run -e launcher -t upload --upload-port /dev/cu.usbmodem1101  # ota_1, boots launcher
+~/.platformio/penv/bin/pio run -e rescue -t upload --upload-port /dev/cu.usbmodem1101    # factory (Rescue), boot slot unchanged
 ~/.platformio/penv/bin/pio run -e music -t upload --upload-port /dev/cu.usbmodem1101     # ota_0, boots music
 ~/.platformio/penv/bin/esptool --port /dev/cu.usbmodem1101 flash-id    # chip info
 ```
@@ -107,18 +108,30 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 ## Architecture decisions
 
 - **Launcher + cartridges** (plan agreed 2026-10-04; launcher skeleton done): one firmware per product concept
-  (music, weather, …), never mixed; the iOS app swaps them over BLE. A permanent
-  launcher in the `factory` partition installs cartridges and shows progress with the
-  cartridge's icon. Shared code lives in `lib/dotty_core/src/`; each cartridge is
+  (music, weather, …), never mixed; the iOS app swaps them over BLE. The launcher (ota_1)
+  installs cartridges and shows progress with the cartridge's icon; Rescue (factory) installs
+  and repairs the launcher. Shared code lives in `lib/dotty_core/src/`; each cartridge is
   `cartridges/<name>/` with its own `[env:<name>]` in `platformio.ini`
   (`build_src_filter = +<name>/`). Never add cartridge-specific code to dotty_core
   unless a second cartridge needs it.
-- Flash layout (`partitions.csv`): `factory` 2 MB = launcher (grew from 1.5 MB when
-  Wi-Fi + HTTPS pushed it to 97 %), `ota_0` 4 MB = the active cartridge, `storage`
-  1.9 MB LittleFS. Cartridge envs upload to ota_0 with
-  `boot_app0.bin` (boots the cartridge); `tools/pio_launcher.py` makes the launcher env
-  upload to `factory` with a blank otadata (boots the launcher). The platform resets
-  `ESP32_APP_OFFSET` to ota_0 during the build, hence the pre-actions in that script.
+- Flash layout 2 (`partitions.csv`, since 2026-10-06; migrating needs one USB flash of
+  launcher + rescue + a cartridge, NVS stays): `rescue` = factory 768 KB (Rescue, 593 KB),
+  `launcher` = ota_1 2 MB, `ota_0` 4 MB = the active cartridge, `storage` 1.1 MB (unused
+  LittleFS), coredump still at 0x7F0000. Layout 1 had the launcher in factory and no Rescue;
+  cartridges built for layout 2 can't find the launcher on layout 1. Cartridge envs upload
+  to ota_0 with `boot_app0.bin` (boots the cartridge); `tools/pio_launcher.py` uploads the
+  launcher to ota_1 with an otadata selecting it (seq 2; crc = `zlib.crc32(seq, 0xFFFFFFFF)`,
+  same as boot_app0's), `tools/pio_rescue.py` uploads Rescue without touching otadata. The
+  platform resets `ESP32_APP_OFFSET` to ota_0 during the build (pre-actions set it back) and
+  copies FLASH_EXTRA_IMAGES into `UPLOADERFLAGS` early: swap boot_app0.bin in UPLOADERFLAGS
+  in an upload pre-action (replacing FLASH_EXTRA_IMAGES did nothing — the old blank-otadata
+  launcher upload never worked, which is why a USB-flashed launcher always booted the cartridge).
+- **Rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on in the prebuilt bootloader):
+  dotty_core overrides `verifyRollbackLater()` → true, so a firmware booted for the first
+  time after `esp_ota_set_boot_partition` is on trial; the shell confirms it after 5 s
+  (`cartridge::confirmHealthy`), and before deliberate restarts and power-off (else a quick
+  power-off would roll back a good update). A crash before that → the bootloader marks it
+  ABORTED and boots the other otadata entry (or factory).
 - Every firmware declares `DOTTY_CARTRIDGE(id, name, version)`; the struct lands in
   `.rodata_custom_desc` at offset 0x120 of the image, where the launcher reads it
   (`cartridge::readInstalled`). `cartridge::rebootToLauncher()` / `startInstalled()`
@@ -148,9 +161,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   outline and segment stripes (the original pale-yellow tail dithers to almost nothing),
   no glow. Render with `qlmanage -t -s 800`, convert with img2epd (atkinson, 120 px).
 
-- **Partition table is OTA-ready from day one** (`partitions.csv`: two 3 MB app slots,
-  1.9 MB `spiffs`/LittleFS, coredump). The long-term goal is firmware updates over BLE
-  from an iOS app; don't switch to a no-OTA layout.
+- **Partition table is OTA-ready** (layout 2 above). The long-term goal is firmware updates
+  from the iOS app; don't switch to a no-OTA layout.
 - **Display driver** (`lib/dotty_core/src/epd_display.*`) subclasses `GFXcanvas1`: its buffer layout
   (MSB-first, 25 bytes/row, 1 = white) matches the controller RAM, so it's sent as-is.
   Init sequence and LUTs come from Waveshare's example driver. Draw with Adafruit GFX,
@@ -218,15 +230,25 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Clients **must wait for CoreBluetooth's `canSendWriteWithoutResponse`** before each
   write — writes sent while its queue is full are silently dropped (bleak doesn't
   check it; ble_dotty.py reads it from bleak's CBPeripheral).
-- **Launcher updates from the app** ("Dotty system" panel on Cartridges): the launcher is in
-  the catalog with `"system": true`. Any launcher fetches it like a cartridge
-  (`library.fetch {id: launcher}`) into ota_0 and boots it; the new launcher, seeing it runs
-  from ota_0, copies its image into factory (`installSelfIfUpdate`, before the shell: no BLE
-  from the slot copy), verifies it (`esp_image_verify`), sets factory as boot and restarts;
-  the factory launcher finds "launcher" in ota_0 and erases it. Power cut midway → the ota_0
-  copy boots again and redoes it. The app then reinstalls the previous cartridge with
-  `install.fromCard`. Info has `launcher` (factory version) in every cartridge, so the app
-  can offer the update anywhere; apps hide `system` entries from the cartridge list.
+- **Launcher updates and Rescue** ("Dotty system" panel on Cartridges): the launcher is in the
+  catalog with `"system": true` (apps hide it from the cartridge list). `library.fetch
+  {id: launcher}` (or `install.fromCard`) downloads it to the card, sets NVS `rescue/install`
+  = version and restarts into Rescue (`cartridges/rescue/`, factory, USB-only, never updated
+  by the app). Rescue writes the launcher slot from `/cartridges/launcher/firmware/<v>.bin`
+  (checking the .json SHA-256 and `esp_ota_end`), and starts it on trial; the cartridge slot
+  isn't touched (the app restarts the cartridge with `launcher.start`). Each launcher, 8 s
+  into a healthy run, records NVS `rescue/good` = its version and copies itself to the card
+  if it isn't there (`library::saveRunning`), so Rescue always has a good one. **Automatic
+  rescue**: a launcher that crashes on trial is rolled back by the bootloader; the next
+  firmware (a cartridge, via `shell::begin` → `cartridge::launcherBroken()` → ABORTED/INVALID)
+  or the bootloader itself hands over to Rescue, which reinstalls `good` (else the newest
+  ≥ 0.9.0 on the card that isn't the broken one). Rescue refuses launchers < 0.9.0 (layout 1
+  ones copy themselves into factory). No good launcher anywhere → "Dotty needs a computer".
+  Tested 2026-10-06: 0.9.0 → 0.9.1 through Rescue; a launcher that aborts in setup
+  (`PLATFORMIO_BUILD_FLAGS=-DDOTTY_TEST_CRASH pio run -e launcher`, written to 0xD0000 with an
+  otadata of {seq 1 ota_0 VALID, seq 2 ota_1 NEW}) → rolled back → Rescue put 0.9.1 back.
+  Info has `launcher` (its version) in every cartridge; the app offers Update only from
+  launcher ≥ 0.9.0 (older ones need the USB migration).
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,
