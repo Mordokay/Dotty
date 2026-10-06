@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <SD_MMC.h>
 #include <mbedtls/base64.h>
 #include <Preferences.h>
@@ -27,7 +28,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.3");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.4");
 
 namespace {
 
@@ -41,6 +42,14 @@ constexpr const char *kCatalogUrl = "https://github.com/Mordokay/Dotty/releases/
 CartridgeInfo installed;
 bool hasCartridge = false;
 bool startRequested = false;  // set by the launcher.start command
+
+// Factory reset (Rescue does it): asked on screen after holding BOOT 10 s on the home screen,
+// or requested by the app (launcher.factoryReset).
+constexpr uint32_t kResetHoldMs = 10000;
+constexpr uint32_t kResetAskMs = 20000;  // the question goes away by itself
+uint32_t askResetUntil = 0;
+bool resetRequested = false;
+String resetNewer;
 
 // What the progress screen shows: a BLE install, an install from the card, a download.
 // Restarting / failing is acted on in loop(), after the command's reply has been sent.
@@ -606,8 +615,46 @@ void registerFetchCommand() {
 
 // ---------- shell hooks ----------
 
+// "Erase everything?" with Yes (left) / No (right).
+void drawResetQuestion() {
+  epd.fillScreen(kWhite);
+  epd.fillRect(0, 0, kW, 45, kBlack);
+  epd.setTextColor(kWhite);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, "Factory reset", 29);
+  epd.setTextColor(kBlack);
+  epd.setFont(&FreeSansBold9pt7b);
+  ui::drawCentered(epd, "Erase everything?", 72);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawWrapped(epd, "Songs, photos, recordings, Wi-Fi, pairings and settings.", 98, kW - 16, 3, 18);
+  epd.fillRoundRect(12, 152, 84, 34, 17, kBlack);
+  epd.setTextColor(kWhite);
+  epd.setFont(&FreeSansBold9pt7b);
+  epd.setCursor(12 + (84 - ui::textWidth(epd, "Erase")) / 2, 174);
+  epd.print("Erase");
+  epd.setTextColor(kBlack);
+  epd.drawRoundRect(104, 152, 84, 34, 17, kBlack);
+  epd.drawRoundRect(105, 153, 82, 32, 16, kBlack);
+  epd.setCursor(104 + (84 - ui::textWidth(epd, "Keep")) / 2, 174);
+  epd.print("Keep");
+}
+
+// Rescue does the erasing; this only leaves it the note (and the newer launcher to keep).
+void startFactoryReset(const String &newerLauncher) {
+  Preferences p;
+  p.begin("rescue", false);
+  p.putBool("reset", true);
+  if (newerLauncher.length()) p.putString("install", newerLauncher);
+  else p.remove("install");
+  p.end();
+  LOGW("launcher", "factory reset requested");
+  cartridge::rebootToRescue();
+}
+
 void drawApp() {
-  if (job.stage == Stage::None) {
+  if (askResetUntil) {
+    drawResetQuestion();
+  } else if (job.stage == Stage::None) {
     drawHome();
   } else {
     drawJob();
@@ -671,6 +718,19 @@ void setup() {
     cart["name"] = installed.name;
     cart["version"] = installed.version;
   });
+  // {launcher?}: erase everything (Rescue does it after this reply), keeping this launcher or
+  // the newer one the app has just downloaded to the card (library.fetch, install: false).
+  ble::on("launcher.factoryReset", [](JsonObjectConst args, JsonObject reply) {
+    const String newer = args["launcher"] | "";
+    library::Entry entry;
+    if (newer.length() && !library::find("launcher", newer, entry)) {
+      reply["ok"] = false;
+      reply["error"] = "launcher " + newer + " isn't on the card";
+      return;
+    }
+    resetNewer = newer;
+    resetRequested = true;  // from loop(), once this reply has gone out
+  });
   // The app has told the user how the last launcher update went.
   ble::on("launcher.updateSeen", [](JsonObjectConst, JsonObject) {
     Preferences p;
@@ -706,6 +766,22 @@ void loop() {
   }
   if (!unlocked) return;
 
+  // BOOT held 10 s on the home screen: ask about a factory reset. (BOOT held at power-on
+  // can't be used: the chip would start in USB flashing mode.)
+  static uint32_t bootDownAt = 0;
+  const bool bootDown = digitalRead(PIN_BTN_BOOT) == LOW;
+  if (!bootDown) bootDownAt = 0;
+  else if (!bootDownAt) bootDownAt = millis();
+  if (bootDown && bootDownAt && millis() - bootDownAt >= kResetHoldMs && job.stage == Stage::None && !askResetUntil) {
+    askResetUntil = millis() + kResetAskMs;
+    shell::showApp();
+  }
+  if (input.key == 'f' && job.stage == Stage::None && !askResetUntil) {  // developer aid: the question
+    askResetUntil = millis() + kResetAskMs;
+    shell::showApp();
+  }
+  if (askResetUntil) input.boot = false;  // letting go of BOOT mustn't start the cartridge
+
   if (installer::active()) {
     loopBleInstall();
   } else if (job.stage == Stage::Done) {
@@ -727,6 +803,19 @@ void loop() {
     if (input.boot) {
       job.stage = Stage::None;
       hasCartridge = cartridge::readInstalled(installed);
+      shell::showApp();
+    }
+  } else if (resetRequested) {
+    delay(300);  // let the reply go out
+    startFactoryReset(resetNewer);
+  } else if (askResetUntil) {
+    // The question: Erase (left) / Keep (right); it also goes away by itself.
+    if (input.gesture == Touch::Gesture::Tap && shell::touch.y() > 140) {
+      if (shell::touch.x() < kW / 2) startFactoryReset("");
+      askResetUntil = 0;
+      shell::showApp();
+    } else if (millis() > askResetUntil) {
+      askResetUntil = 0;
       shell::showApp();
     }
   } else if ((input.boot || startRequested) && hasCartridge) {

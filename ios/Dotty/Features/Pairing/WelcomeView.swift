@@ -16,6 +16,10 @@ struct WelcomeView: View {
                     if let problem = radioProblem {
                         NoticeCard(kind: .error, text: problem)
                     }
+                    if let name = UserDefaults.standard.string(forKey: DottyLink.resetNameKey) {
+                        // iOS keeps its own pairing with the old Dotty; only the person can remove it.
+                        NoticeCard(kind: .info, text: "Dotty was reset. On this iPhone, open Settings › Bluetooth, tap ⓘ next to “\(name)” and choose Forget This Device. Then pair it again below.")
+                    }
                     nearbyCard
                 }
                 .padding(.horizontal, Spacing.l)

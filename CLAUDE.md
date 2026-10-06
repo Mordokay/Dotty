@@ -258,6 +258,20 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   keeps waiting when Bluetooth drops mid-download (Dotty carries on alone), and shows a
   failure it missed on the Dotty system panel. Tested with the crash build: Info said
   rolledBack 0.9.9 → back to 0.9.3.
+- **Factory reset** (Rescue 1.2.0, launcher 0.9.4): app Dashboard › Settings › Factory reset
+  (confirmation), or on Dotty: hold BOOT 10 s on the launcher home screen → "Erase
+  everything?" Erase / Keep (20 s timeout; serial key `f` opens it for tests). BOOT held at
+  power-on can't be the trigger: the chip starts in USB flashing mode. The launcher sets NVS
+  `rescue/reset` (+ `rescue/install` = the newer launcher the app downloaded first with
+  `library.fetch {install: false}`) and restarts into Rescue, which: copies the running
+  launcher (and the newer file) into PSRAM, formats the card (FAT32, 32 KB clusters, via IDF
+  `esp_vfs_fat_sdcard_format_cfg` — the Arduino SD_MMC wrapper hides the card handle; a
+  broken file system is formatted too), `nvs_flash_erase()` (pairings, Wi-Fi, every
+  setting), erases the ota_0 header, writes the launcher(s) back to the card, sets
+  `rescue/good` (and `trying` for the newer one) and starts the launcher. The app forgets
+  Dotty (`DottyLink.forgetAfterReset`) and the pairing screen asks to Forget This Device in
+  iOS Settings › Bluetooth (apps can't remove iOS bonds). Not yet run for real on the
+  prototype (it erases the user's songs, photos and recordings).
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,

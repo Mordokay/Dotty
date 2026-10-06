@@ -10,6 +10,10 @@
 //     and handed over): Rescue puts the last good launcher (rescue/good, recorded by each
 //     launcher once it has run fine; a copy is kept on the card) back and starts it.
 //   - the bootloader found no bootable OTA slot: the same, or just start the launcher.
+//   - a factory reset (rescue/reset, set by the launcher): format the SD card (FAT32), erase
+//     every setting (the whole NVS partition: pairings, Wi-Fi, cartridge settings) and the
+//     installed cartridge, keep the launcher (or install the newer one the app downloaded
+//     first) and put its copy back on the fresh card, so Rescue still has a good one.
 //
 // No Bluetooth, no Wi-Fi, no touch: the e-paper says what's happening, then it restarts.
 
@@ -19,9 +23,14 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Preferences.h>
 #include <SD_MMC.h>
+#include <driver/sdmmc_host.h>
+#include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_vfs_fat.h>
 #include <mbedtls/sha256.h>
+#include <nvs_flash.h>
+#include <sdmmc_cmd.h>
 
 #include "board_pins.h"
 #include "cartridge.h"
@@ -29,7 +38,7 @@
 #include "log.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("rescue", "Rescue", "1.1.0");
+DOTTY_CARTRIDGE("rescue", "Rescue", "1.2.0");
 
 namespace {
 
@@ -140,6 +149,127 @@ bool installLauncher(const String &version, const char *what, String &error) {
   return true;
 }
 
+// ---------- factory reset ----------
+
+String hexOf(const uint8_t *digest) {
+  char hex[65];
+  for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+  return hex;
+}
+
+// A launcher image held in PSRAM across the card format.
+struct Image {
+  uint8_t *data = nullptr;
+  size_t size = 0;
+  String version;
+};
+
+// The launcher in its slot (the one that asked for the reset: it runs fine).
+bool copyInstalledLauncher(Image &out) {
+  const esp_partition_t *slot = cartridge::launcherSlot();
+  CartridgeInfo info;
+  esp_image_metadata_t meta;
+  const esp_partition_pos_t pos = {slot->address, slot->size};
+  if (!cartridge::readLauncher(info) || esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) != ESP_OK) return false;
+  out.data = static_cast<uint8_t *>(heap_caps_malloc(meta.image_len, MALLOC_CAP_SPIRAM));
+  if (!out.data || esp_partition_read(slot, 0, out.data, meta.image_len) != ESP_OK) return false;
+  out.size = meta.image_len;
+  out.version = info.version;
+  return true;
+}
+
+// A launcher file on the card (e.g. the newer one the app downloaded before the reset).
+bool readLauncherFile(const String &version, Image &out) {
+  File in = SD_MMC.open(launcherPath(version) + ".bin");
+  if (!in) return false;
+  out.data = static_cast<uint8_t *>(heap_caps_malloc(in.size(), MALLOC_CAP_SPIRAM));
+  if (!out.data || in.read(out.data, in.size()) != in.size()) return false;
+  out.size = in.size();
+  out.version = version;
+  return true;
+}
+
+// Writes /cartridges/launcher/firmware/<version>.bin + .json (as the launcher's library does).
+bool writeLauncherFile(const Image &image) {
+  SD_MMC.mkdir("/cartridges");
+  SD_MMC.mkdir("/cartridges/launcher");
+  SD_MMC.mkdir("/cartridges/launcher/firmware");
+  File out = SD_MMC.open(launcherPath(image.version) + ".bin", FILE_WRITE);
+  if (!out || out.write(image.data, image.size) != image.size) return false;
+  out.close();
+  uint8_t digest[32];
+  mbedtls_sha256(image.data, image.size, digest, 0);
+  JsonDocument meta;
+  meta["id"] = "launcher";
+  meta["name"] = "Launcher";
+  meta["version"] = image.version;
+  meta["size"] = image.size;
+  meta["sha256"] = hexOf(digest);
+  File json = SD_MMC.open(launcherPath(image.version) + ".json", FILE_WRITE);
+  return json && serializeJson(meta, json) > 0;
+}
+
+// A fresh FAT32 file system (32 KB clusters, the usual for a card this size). Mounted through
+// IDF directly: the Arduino wrapper doesn't expose the card handle the format call needs.
+bool formatCard() {
+  SD_MMC.end();
+  sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+  sdmmc_slot_config_t slotConfig = SDMMC_SLOT_CONFIG_DEFAULT();
+  slotConfig.width = 1;
+  slotConfig.clk = static_cast<gpio_num_t>(PIN_SD_CLK);
+  slotConfig.cmd = static_cast<gpio_num_t>(PIN_SD_CMD);
+  slotConfig.d0 = static_cast<gpio_num_t>(PIN_SD_D0);
+  slotConfig.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+  esp_vfs_fat_mount_config_t config = {};
+  config.format_if_mount_failed = true;  // a broken file system gets formatted too
+  config.max_files = 4;
+  config.allocation_unit_size = 32 * 1024;
+  sdmmc_card_t *card = nullptr;
+  esp_err_t err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slotConfig, &config, &card);
+  if (err == ESP_OK) err = esp_vfs_fat_sdcard_format_cfg("/sdcard", card, &config);
+  if (card) esp_vfs_fat_sdcard_unmount("/sdcard", card);
+  LOGI("rescue", "card format: %s", esp_err_to_name(err));
+  return err == ESP_OK && SD_MMC.begin("/sdcard", true);
+}
+
+[[noreturn]] void factoryReset(const String &newer) {
+  show("Factory reset", "Erasing everything...", 0, true);
+  Image good, fresh;
+  const bool haveGood = copyInstalledLauncher(good);
+  const bool haveFresh = newer.length() && newer != good.version && readLauncherFile(newer, fresh);
+  LOGI("rescue", "factory reset: keeping launcher %s%s%s", haveGood ? good.version.c_str() : "?",
+       haveFresh ? ", installing " : "", haveFresh ? newer.c_str() : "");
+
+  show("Factory reset", "Formatting the SD card", 20);
+  const bool formatted = formatCard();
+
+  show("Factory reset", "Erasing settings and pairings", 50);
+  nvs_flash_deinit();
+  nvs_flash_erase();  // the whole NVS partition
+  nvs_flash_init();
+  const esp_partition_t *cartridgeSlot =
+      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
+  if (cartridgeSlot) esp_partition_erase_range(cartridgeSlot, 0, 4096);  // no cartridge
+
+  // The launcher(s) back on the card, so Rescue can always put one back.
+  show("Factory reset", "Keeping the system", 70);
+  Preferences prefs;
+  prefs.begin("rescue", false);
+  if (formatted && haveGood && writeLauncherFile(good)) prefs.putString("good", good.version);
+  if (formatted && haveFresh && writeLauncherFile(fresh)) {
+    String error;
+    if (installLauncher(fresh.version, "Factory reset", error)) prefs.putString("trying", fresh.version);
+  }
+  prefs.end();
+  show("Dotty is like new", formatted ? "Pair it again in the Dotty app" : "The SD card couldn't be formatted", -1, true);
+  epd.waitBusy();
+  delay(2000);
+  esp_ota_set_boot_partition(cartridge::launcherSlot());
+  esp_restart();
+  for (;;) {
+  }
+}
+
 void restartIntoLauncher() {
   epd.waitBusy();
   esp_ota_set_boot_partition(cartridge::launcherSlot());
@@ -185,6 +315,15 @@ void setup() {
     prefs.putString("reason", reason);
     prefs.remove("trying");
   };
+
+  // 0. A factory reset (with the newer launcher the app may have downloaded first).
+  if (prefs.getBool("reset", false)) {
+    prefs.remove("reset");
+    prefs.remove("install");
+    prefs.end();
+    if (!card) stuck("No SD card to reset");
+    factoryReset(staged);
+  }
 
   String error;
   // 1. An update the launcher left for us.

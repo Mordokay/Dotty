@@ -7,6 +7,10 @@ struct DashboardView: View {
     /// playlist), and a typed path silently ignores links to anything but Route.
     @State private var path = NavigationPath()
     @State private var confirmForget = false
+    @State private var confirmReset = false
+    /// The factory reset in progress (what it's doing), or its error.
+    @State private var resetStage: String?
+    @State private var resetError: String?
     @State private var showDesignSystem = false
     @State private var wifi: WiFiState?
 
@@ -34,6 +38,13 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Spacing.xl) {
                         header
+                        if let resetStage {
+                            GlassCard(title: "Factory reset", light: DottyLight.ember.color) {
+                                HStack { Spacer(); FireflyLoader(size: 64, label: resetStage); Spacer() }
+                                Text(resetStage).font(.lpCallout).foregroundStyle(Color.ink).padding(Spacing.m)
+                            }
+                        }
+                        if let resetError { NoticeCard(kind: .error, text: resetError) }
                         NotConnectedNotice()
                         dottyCard
                         if let route = Route.screen(for: link.connection == .connected ? link.info : nil),
@@ -56,6 +67,10 @@ struct DashboardView: View {
                         GlassCard(title: "Settings") {
                             LightRow(title: "Forget this Dotty", systemImage: "xmark.circle",
                                      action: { confirmForget = true })
+                            LightRow(title: "Factory reset", subtitle: "Erase everything and start fresh",
+                                     systemImage: "arrow.counterclockwise.circle", action: { confirmReset = true })
+                                .needsDotty(link)
+                                .disabled(resetStage != nil)
                             LightRow(title: "Design system", systemImage: "paintpalette",
                                      action: { showDesignSystem = true })
                         }
@@ -87,6 +102,11 @@ struct DashboardView: View {
             Button("Forget", role: .destructive) { Task { await link.forget() } }
         } message: {
             Text("Dotty forgets this iPhone. Also remove it under Settings › Bluetooth to pair again.")
+        }
+        .confirmationDialog("Erase everything on Dotty?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Erase everything", role: .destructive) { Task { await factoryReset() } }
+        } message: {
+            Text("The SD card is formatted (songs, photos, recordings and every file on it), and every setting goes: Wi-Fi networks, Bluetooth pairings and each cartridge's settings. Dotty keeps only its system, updated to the newest if it can. This can't be undone.")
         }
         .fullScreenCover(isPresented: $showDesignSystem) {
             ShowcaseView()
@@ -163,6 +183,35 @@ struct DashboardView: View {
 
     private var wifiReloadKey: String {
         "\(link.connection == .connected)-\(link.info?.id ?? "")-\(path.count)"
+    }
+
+    /// Rescue erases Dotty (firmware: launcher.factoryReset → cartridges/rescue). First, while
+    /// Dotty still knows the Wi-Fi, it fetches the newest system so that's the one it keeps.
+    private func factoryReset() async {
+        resetError = nil
+        do {
+            resetStage = "Switching to the launcher"
+            try await link.ensureLauncher()
+            var newer: String?
+            if let catalog = try? await Catalog.load(), let launcher = catalog.launcher,
+               let current = link.info?.launcherVersion,
+               launcher.version.compare(current, options: .numeric) == .orderedDescending,
+               let saved = try? await link.send("wifi.list")["networks"] as? [String], !saved.isEmpty {
+                resetStage = "Downloading the newest system"
+                if (try? await link.send("library.fetch", ["id": launcher.id, "name": "Dotty system", "version": launcher.version,
+                                                           "size": launcher.size, "sha256": launcher.sha256, "install": false],
+                                         timeout: 300)) != nil {
+                    newer = launcher.version
+                }
+            }
+            resetStage = "Erasing Dotty"
+            try await link.send("launcher.factoryReset", newer.map { ["launcher": $0] } ?? [:])
+            resetStage = nil
+            link.forgetAfterReset()  // the pairing screen takes over
+        } catch {
+            resetStage = nil
+            resetError = "Couldn't start the factory reset: \(error.localizedDescription)"
+        }
     }
 
     private func loadWiFi() async {

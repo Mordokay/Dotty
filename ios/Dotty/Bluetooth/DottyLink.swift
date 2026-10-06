@@ -95,6 +95,7 @@ final class DottyLink: NSObject {
     /// Keeps a paired Dotty: from now on the app reconnects to it by itself.
     func remember(_ dotty: PairedDotty) {
         dotty.save()
+        UserDefaults.standard.removeObject(forKey: Self.resetNameKey)
         paired = dotty
     }
 
@@ -111,6 +112,19 @@ final class DottyLink: NSObject {
     func disconnect() {
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
     }
+
+    /// After a factory reset: Dotty has already forgotten every phone, so only the app's side
+    /// is left. The pairing screen then explains the iPhone step apps can't do.
+    func forgetAfterReset() {
+        if let paired { UserDefaults.standard.set(paired.name, forKey: Self.resetNameKey) }
+        PairedDotty.clear()
+        paired = nil
+        disconnect()
+        info = nil
+    }
+
+    /// Set after a factory reset (the Dotty's name), cleared once a Dotty is paired again.
+    static let resetNameKey = "dotty.resetName"
 
     /// Unpairs: Dotty forgets this phone, and the app forgets Dotty. The person should also
     /// remove Dotty under Settings › Bluetooth.
