@@ -29,7 +29,7 @@
 #include "log.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("rescue", "Rescue", "1.0.0");
+DOTTY_CARTRIDGE("rescue", "Rescue", "1.1.0");
 
 namespace {
 
@@ -176,16 +176,29 @@ void setup() {
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
   const bool card = SD_MMC.begin("/sdcard", true);
 
+  // What happened, for the launcher to tell the app (rescue/result, resultVer, reason):
+  // "failed" (couldn't install it) or "rolledBack" (it was installed but didn't start). An
+  // update on trial is remembered as rescue/trying; the launcher turns it into "updated".
+  auto record = [&](const char *result, const String &version, const String &reason) {
+    prefs.putString("result", result);
+    prefs.putString("resultVer", version);
+    prefs.putString("reason", reason);
+    prefs.remove("trying");
+  };
+
   String error;
   // 1. An update the launcher left for us.
   if (staged.length()) {
     prefs.remove("install");  // once: a failing install must not loop
     if (!card) error = "no SD card";
     else if (installLauncher(staged, "Installing a new system", error)) {
+      prefs.remove("result");
+      prefs.putString("trying", staged);
       show("New system installed", "Starting launcher " + staged, -1);
       restartIntoLauncher();
     }
     LOGW("rescue", "update to %s failed: %s", staged.c_str(), error.c_str());
+    record("failed", staged, error);
     if (!broken && haveLauncher) {  // the current launcher is untouched or fine: keep it
       show("Update failed", error + ". Keeping launcher " + String(current.version) + ".", -1);
       delay(3000);
@@ -210,8 +223,10 @@ void setup() {
   if (good.length() && std::find(candidates.begin(), candidates.end(), good) == candidates.end()) {
     candidates.push_back(good);  // last resort: even the one that failed
   }
+  const String failed = haveLauncher ? String(current.version) : String();
   for (const String &version : candidates) {
     if (installLauncher(version, "Putting back a working system", error)) {
+      record("rolledBack", failed, "it didn't start, so Dotty went back to " + version);
       show("Dotty is fixed", "Starting launcher " + version, -1);
       restartIntoLauncher();
     }

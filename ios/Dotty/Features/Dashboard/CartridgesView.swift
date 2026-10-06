@@ -261,8 +261,6 @@ struct CartridgesView: View {
     private func systemCard(_ launcher: CatalogCartridge) -> some View {
         let current = link.info?.launcherVersion
         let newer = current.map { launcher.version.compare($0, options: .numeric) == .orderedDescending } ?? false
-        // Launchers before 0.9.0 use the old flash layout (no Rescue): one USB flash moves them.
-        let needsCable = current.map { $0.compare("0.9.0", options: .numeric) == .orderedAscending } ?? false
         return VStack(alignment: .leading, spacing: Spacing.m) {
             HStack(alignment: .center, spacing: Spacing.m) {
                 CartridgeArtwork(cartridge: launcher, size: 56)
@@ -274,23 +272,36 @@ struct CartridgesView: View {
                         .foregroundStyle(newer ? DottyLight.leaf.color : Color.inkMuted)
                 }
                 Spacer(minLength: Spacing.s)
-                if newer && !needsCable {
+                if newer {
                     Button("Update") { Task { await updateSystem(launcher) } }
                         .buttonStyle(.light(DottyLight.leaf.color))
                         .disabled(install != nil && install?.error == nil)
                         .needsDotty(link)
                 }
             }
-            Text(needsCable && newer
-                 ? "This update moves Dotty to a safer layout with a rescue system, which needs a USB cable once. After that, updates come from here."
-                 : "Installs and switches cartridges, and runs Wi-Fi, Bluetooth and the lock screen. Updating keeps your cartridges and their files. If a new version ever fails to start, Dotty puts the previous one back by itself.")
+            Text("Installs and switches cartridges, and runs Wi-Fi, Bluetooth and the lock screen. Updating keeps your cartridges and their files. If a new version ever fails to start, Dotty puts the previous one back by itself.")
                 .font(.lpCallout)
                 .foregroundStyle(Color.inkMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            // An update that went wrong while the app wasn't watching (Dotty keeps the note).
+            if install == nil, let result = link.info?.update, result.failed, let current {
+                NoticeCard(kind: .error, text: Self.explain(result, now: current))
+                Button("OK") { Task { _ = try? await link.send("launcher.updateSeen") } }
+                    .buttonStyle(.quiet())
+            }
         }
         .padding(Spacing.l)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassSurface()
+    }
+
+    /// What Dotty's notes about a failed system update mean, in plain words.
+    static func explain(_ result: DottyInfo.UpdateResult, now: String) -> String {
+        if result.status == "rolledBack" {
+            return "System \(result.version) didn't start, so Dotty went back to \(now) by itself. Nothing was lost."
+        }
+        let why = result.reason.map { ": \($0)" } ?? ""
+        return "Dotty couldn't install system \(result.version)\(why). It kept \(now)."
     }
 
     /// Dotty downloads the new launcher to its SD card and restarts into Rescue, which writes
@@ -310,15 +321,37 @@ struct CartridgesView: View {
                 return
             }
             install?.stage = "Connecting to Wi-Fi"
-            try await link.send("library.fetch", ["id": launcher.id, "name": "Dotty system", "version": launcher.version,
-                                                  "size": launcher.size, "sha256": launcher.sha256], timeout: 300)
+            do {
+                try await link.send("library.fetch", ["id": launcher.id, "name": "Dotty system", "version": launcher.version,
+                                                      "size": launcher.size, "sha256": launcher.sha256], timeout: 300)
+            } catch {
+                // Bluetooth dropping isn't the end: Dotty carries on by itself, so wait for it.
+                guard link.lostConnection(error) else {
+                    install?.error = "The update didn't download: \(error.localizedDescription). Dotty kept its current system."
+                    return
+                }
+            }
             install?.stage = "Rescue is installing the new system"
             install?.progress = nil
+            // Done when the new launcher has confirmed itself, or Dotty reports a failure.
             let deadline = Date().addingTimeInterval(180)
-            while !(link.connection == .connected && link.info?.isLauncher == true && link.info?.version == launcher.version) {
-                guard Date() < deadline else { throw DottyError.timeout }
+            while true {
+                if link.connection == .connected, let now = link.info, now.isLauncher, let result = now.update,
+                   result.version == launcher.version {
+                    if result.failed {
+                        install?.error = Self.explain(result, now: now.version)
+                        _ = try? await link.send("launcher.updateSeen")
+                        return
+                    }
+                    if result.status == "updated" { break }
+                }
+                guard Date() < deadline else {
+                    install?.error = "Dotty didn't come back within 3 minutes. Its screen says what happened; it keeps a working system either way."
+                    return
+                }
                 try await Task.sleep(for: .seconds(1))
             }
+            _ = try? await link.send("launcher.updateSeen")
             if let wasRunning {
                 install?.stage = "Starting \(wasRunning) again"
                 try await link.send("launcher.start")

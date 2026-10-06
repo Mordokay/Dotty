@@ -45,6 +45,17 @@ struct DottyInfo: Decodable, Equatable, Sendable {
     let card: Bool?
     /// Cartridges only: the launcher's version (firmware from the launcher-updates era on).
     let launcher: String?
+    /// Launcher only: how the last system update went, until the app has shown it.
+    let update: UpdateResult?
+
+    struct UpdateResult: Decodable, Equatable, Sendable {
+        /// "updated", "failed" (couldn't be installed) or "rolledBack" (didn't start).
+        let status: String
+        let version: String
+        let reason: String?
+
+        var failed: Bool { status == "failed" || status == "rolledBack" }
+    }
 
     var isLauncher: Bool { role == "launcher" }
 

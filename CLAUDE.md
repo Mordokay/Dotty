@@ -247,8 +247,17 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Tested 2026-10-06: 0.9.0 → 0.9.1 through Rescue; a launcher that aborts in setup
   (`PLATFORMIO_BUILD_FLAGS=-DDOTTY_TEST_CRASH pio run -e launcher`, written to 0xD0000 with an
   otadata of {seq 1 ota_0 VALID, seq 2 ota_1 NEW}) → rolled back → Rescue put 0.9.1 back.
-  Info has `launcher` (its version) in every cartridge; the app offers Update only from
-  launcher ≥ 0.9.0 (older ones need the USB migration).
+  Info has `launcher` (its version) in every cartridge. Only one Dotty exists (the
+  prototype, never released): no compatibility with layout 1 is needed.
+- **Update outcomes reach the user**: Rescue writes NVS `rescue/result` ("failed" with
+  `reason`, or "rolledBack") + `resultVer`, and `rescue/trying` for an update on trial, which
+  the launcher turns into "updated" once it has run 8 s. The launcher's Info has `update`
+  {status, version, reason?} and its home screen says "Update to X failed" until the app
+  sends `launcher.updateSeen`. The app waits for "updated" (not just the version: a launcher
+  can still fail its trial), explains failures ("didn't start, so Dotty went back to…"),
+  keeps waiting when Bluetooth drops mid-download (Dotty carries on alone), and shows a
+  failure it missed on the Dotty system panel. Tested with the crash build: Info said
+  rolledBack 0.9.9 → back to 0.9.3.
 - **Catalog** (`tools/build_catalog.py`): builds every cartridge and the launcher into
   `dist/` (`<id>-<version>.bin` + `catalog.json`: id, name, version, description,
   requires, size, sha256, firmware URL, base64 512-byte icon; root has `format`,

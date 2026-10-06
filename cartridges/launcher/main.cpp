@@ -27,7 +27,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.2");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.3");
 
 namespace {
 
@@ -58,6 +58,25 @@ struct Job {
 };
 Job job;
 
+// The last launcher update's outcome, from Rescue's notes (rescue/result…): "updated",
+// "failed" or "rolledBack", until the app has shown it (launcher.updateSeen).
+struct UpdateResult {
+  String status, version, reason;
+} lastUpdate;
+
+void loadUpdateResult() {
+  Preferences p;
+  p.begin("rescue", true);
+  lastUpdate.status = p.getString("result", "");
+  lastUpdate.version = p.getString("resultVer", "");
+  lastUpdate.reason = p.getString("reason", "");
+  p.end();
+}
+
+bool updateFailed() {
+  return lastUpdate.status == "failed" || lastUpdate.status == "rolledBack";
+}
+
 void drawHome(const char *hint = nullptr) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
@@ -76,6 +95,8 @@ void drawHome(const char *hint = nullptr) {
   }
   if (hint) {
     ui::drawCentered(epd, hint, 192);
+  } else if (updateFailed()) {
+    ui::drawCentered(epd, ui::fitText(epd, "Update to " + lastUpdate.version + " failed", kW - 8), 192);
   } else if (hasCartridge) {
     ui::drawCentered(epd, "BOOT: start", 192);
   }
@@ -343,11 +364,19 @@ bool stageLauncher(const library::Entry &entry, String &error) {
 
 // Once this launcher has run fine: it's the one Rescue puts back if a later update fails,
 // so remember its version and keep a copy of it on the card (a USB-flashed launcher has none).
+// If it was an update on trial, it's now a success.
 void rememberGoodLauncher() {
   Preferences p;
   p.begin("rescue", false);
   if (p.getString("good", "") != cartridge::self().version) p.putString("good", cartridge::self().version);
+  if (p.getString("trying", "") == cartridge::self().version) {
+    p.remove("trying");
+    p.putString("result", "updated");
+    p.putString("resultVer", cartridge::self().version);
+    p.putString("reason", "");
+  }
   p.end();
+  loadUpdateResult();
   library::Entry onCard;
   if (!library::available() || library::find("launcher", cartridge::self().version, onCard)) return;
   String error;
@@ -623,9 +652,16 @@ void setup() {
   } else {
     LOGI("launcher", "no cartridge installed");
   }
+  loadUpdateResult();
   ble::extendInfo([](JsonObject info) {
     info["card"] = library::available();
     info["wifi"] = !net::saved().empty();
+    if (lastUpdate.status.length()) {
+      JsonObject update = info["update"].to<JsonObject>();
+      update["status"] = lastUpdate.status;
+      update["version"] = lastUpdate.version;
+      if (lastUpdate.reason.length()) update["reason"] = lastUpdate.reason;
+    }
     if (!hasCartridge) {
       info["installed"] = nullptr;
       return;
@@ -634,6 +670,17 @@ void setup() {
     cart["id"] = installed.id;
     cart["name"] = installed.name;
     cart["version"] = installed.version;
+  });
+  // The app has told the user how the last launcher update went.
+  ble::on("launcher.updateSeen", [](JsonObjectConst, JsonObject) {
+    Preferences p;
+    p.begin("rescue", false);
+    p.remove("result");
+    p.remove("resultVer");
+    p.remove("reason");
+    p.end();
+    loadUpdateResult();
+    shell::showApp();
   });
   ble::on("launcher.start", [](JsonObjectConst, JsonObject reply) {
     if (!hasCartridge) {
