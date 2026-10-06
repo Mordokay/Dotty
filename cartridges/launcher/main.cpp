@@ -26,7 +26,7 @@
 #include "shell.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.8.0");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.8.1");
 
 namespace {
 
@@ -491,12 +491,6 @@ void registerFetchCommand() {
     if (!install) {
       job.stage = Stage::None;
       hasCartridge = cartridge::readInstalled(installed);
-  if (hasCartridge && strcmp(installed.id, "launcher") == 0) {
-    // What's left of a launcher update (see installSelfIfUpdate): not a cartridge.
-    cartridge::eraseInstalled();
-    hasCartridge = false;
-    LOGI("update", "launcher update finished: %s", cartridge::self().version);
-  }
       shell::showApp();
       return;
     }
@@ -581,6 +575,12 @@ void setup() {
   shell::begin(config);
 
   hasCartridge = cartridge::readInstalled(installed);
+  if (hasCartridge && strcmp(installed.id, "launcher") == 0) {
+    // What's left of a launcher update (see installSelfIfUpdate): not a cartridge.
+    cartridge::eraseInstalled();
+    hasCartridge = false;
+    LOGI("update", "launcher update finished: %s", cartridge::self().version);
+  }
   // Removing the installed cartridge (storage.remove) empties the slot as well.
   storage::onRemove([](const String &id) {
     if (!hasCartridge || id != installed.id) return;
