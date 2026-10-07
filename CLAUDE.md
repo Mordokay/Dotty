@@ -678,7 +678,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (±2 px) + skull bobs; a meter empty = sighs (3 px); discipline call = cross face / looking away;
   egg wobbles; poop steams; the angel floats; paused = still. Asleep it animates every 2 s (a
   calmer breath; the dark screen ghosts most). Animation frames use `shell::refresh(false, false)`
-  with a full refresh every minute (the shell's every-30 full refresh would flash every 30 s), and
+  with a full refresh every 2 minutes with the light on, every minute in the dark (the shell's
+  every-30 full refresh would flash every 30 s), and
   an animation ending in the dark gets a full refresh (the user saw the speech bubble's ghost on
   black); locked stays once a minute.
 - Refusals (play, food, medicine, clean, scold) play in the room as it is (dark with the light

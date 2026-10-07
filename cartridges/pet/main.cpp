@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.4.2");
+DOTTY_CARTRIDGE("pet", "Pet", "0.4.3");
 
 namespace {
 
@@ -47,8 +47,9 @@ constexpr int16_t kPetPx = art::kPetSize * kPetScale;
 constexpr int16_t kPetY = kPlayTop + (kPlayBottom - kPlayTop - kPetPx) / 2;
 constexpr uint32_t kIdleFrameMs = 1000;    // the home screen animates at 1 frame a second while unlocked…
 constexpr uint32_t kSleepFrameMs = 2000;   // …asleep every 2 s: a calmer breath, and the dark screen ghosts most
-constexpr uint32_t kAnimFullMs = 60000;    // animation frames skip the shell's every-30 full refresh (a
-                                           // flash every 30 s): a full refresh every minute instead
+// Animation frames skip the shell's every-30 full refresh (a flash every 30 s): a full refresh
+// every 2 minutes with the light on, every minute in the dark (black ghosts much more).
+constexpr uint32_t kAnimFullLightMs = 120000, kAnimFullDarkMs = 60000;
 constexpr uint32_t kAnimFrameMs = 700;     // animation frames (a partial refresh is ~0.6 s)
 constexpr uint32_t kSaveEveryMinutes = 10;
 
@@ -1522,7 +1523,7 @@ void loop() {
     redraw = fullRedraw = animFrame = false;
     drawApp();
     if (justAnimating) {  // no flash every 30 frames: a full refresh every minute instead
-      const bool clean = millis() - lastFullRefresh >= kAnimFullMs;
+      const bool clean = millis() - lastFullRefresh >= (state.lightsOn ? kAnimFullLightMs : kAnimFullDarkMs);
       if (clean) lastFullRefresh = millis();
       shell::refresh(clean, false);
     } else {
