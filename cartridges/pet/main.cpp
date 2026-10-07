@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.3.4");
+DOTTY_CARTRIDGE("pet", "Pet", "0.3.5");
 
 namespace {
 
@@ -771,14 +771,15 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   const uint16_t ink = dark ? kWhite : kBlack, paper = dark ? kBlack : kWhite;
   if (dark) gfx.fillRoundRect(0, 0, 100, 100, 6, kBlack);
   drawPet(gfx, pose, 2, 2, 2, false, ink);
-  auto badge = [&](art::Icon icon, int16_t x, int16_t y) {
-    gfx.fillRect(x - 1, y - 1, 18, 18, paper);
-    drawIcon(gfx, icon, x, y, 1, ink);
+  auto badge = [&](art::Icon icon, int16_t x, int16_t y, int scale) {
+    gfx.fillRect(x - 1, y - 1, 16 * scale + 2, 16 * scale + 2, paper);
+    drawIcon(gfx, icon, x, y, scale, ink);
   };
   if (alive) {
-    if (state.asleep) badge(art::kZzzIcon, 82, 2);
-    if (state.sick) badge(art::kSkullIcon, 82, state.asleep ? 22 : 2);
-    for (int i = 0; i < state.poops; i++) badge(art::kPoopIcon, 82 - (i % 2) * 18, 82 - (i / 2) * 18);
+    // Zzz and the skull as big as on the home screen (x2), by the top right of its head.
+    if (state.asleep) badge(art::kZzzIcon, 66, 2, 2);
+    if (state.sick) badge(art::kSkullIcon, 66, state.asleep ? 36 : 2, 2);
+    for (int i = 0; i < state.poops; i++) badge(art::kPoopIcon, 82 - (i % 2) * 18, 82 - (i / 2) * 18, 1);
   }
   gfx.fillRect(0, 0, 19, 22, paper);
   gfx.fillRoundRect(2, 9, 15, 11, 2, ink);  // padlock body
