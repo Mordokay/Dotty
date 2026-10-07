@@ -29,7 +29,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.1.4");
+DOTTY_CARTRIDGE("pet", "Pet", "0.2.0");
 
 namespace {
 
@@ -41,7 +41,7 @@ constexpr uint16_t kWhite = EpdDisplay::kWhite;
 // Home layout: icon bars top and bottom, the pet between.
 constexpr int16_t kBarH = 40;
 constexpr int16_t kPlayTop = kBarH, kPlayBottom = kW - kBarH;
-constexpr int kPetScale = 3;  // 32 px art → 96 px
+constexpr int kPetScale = 2;  // 48 px art → 96 px
 constexpr int16_t kPetPx = art::kPetSize * kPetScale;
 constexpr int16_t kPetY = kPlayTop + (kPlayBottom - kPlayTop - kPetPx) / 2;
 constexpr uint32_t kIdleFrameMs = 1500;    // walking about after a touch…
@@ -373,20 +373,19 @@ void drawBars() {
 
 void drawHome() {
   epd.fillScreen(kWhite);
+  if (pet::stage(state) == pet::Stage::Dead) {  // the whole screen: the angel, then a new egg
+    drawPet(epd, art::kIdle, (kW - kPetPx) / 2, 12, kPetScale);
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, "Age " + String(state.age) + ", " + deathName(state.death), 140);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, "Tap for a new egg", 172);
+    return;
+  }
   drawBars();
   const bool dark = !state.lightsOn;
   if (dark) epd.fillRect(0, kPlayTop + 1, kW, kPlayBottom - kPlayTop - 2, kBlack);
   const uint16_t ink = dark ? kWhite : kBlack;
   epd.setTextColor(ink);
-  if (pet::stage(state) == pet::Stage::Dead) {
-    drawPet(epd, art::kIdle, (kW - 64) / 2, kPlayTop + 4, 2, false, ink);
-    epd.setFont(&FreeSansBold9pt7b);
-    ui::drawCentered(epd, "Age " + String(state.age) + ", " + deathName(state.death), kPlayTop + 88);
-    epd.setFont(&FreeSans9pt7b);
-    ui::drawCentered(epd, "Tap for a new egg", kPlayTop + 110);
-    epd.setTextColor(kBlack);
-    return;
-  }
   if (dark && !state.asleep) {
     epd.setFont(&FreeSans9pt7b);
     ui::drawCentered(epd, "Lights off", kPlayTop + 64);
@@ -577,7 +576,7 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
                                                                                                           : art::kIdle;
   // Top left: the pet.
-  drawPet(gfx, pose, 2, 2, 3);
+  drawPet(gfx, pose, 2, 2, 2);
   // Top right: clock + battery, then who it is.
   constexpr int16_t kX = 104;
   gfx.setFont(&FreeSansBold12pt7b);
@@ -732,7 +731,7 @@ void onTap(uint16_t x, uint16_t y) {
   switch (screen) {
     case Screen::Home:
       if (pet::stage(state) == pet::Stage::Dead) {
-        if (y > kPlayTop && y < kPlayBottom) newEgg();
+        newEgg();  // a tap anywhere
         return;
       }
       if (y < kBarH) act(static_cast<Function>(x / 50));

@@ -658,8 +658,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Lumpkin, Mametchi Lumo (best), Ginjirotchi Bramble, Maskutchi Masko (→ secret from a type-2
   teen), Kuchipatchi Chompy, Nyorotchi Wiggle, Tarakotchi Spike, Bill Sir Moss.
 - Art: `tools/pet_art.py` → `images/sprites.h` (+ `tools/pet_art_preview.png`, `icon.png`,
-  `artwork.svg`): 32×32 creatures from shapes + a shared face kit (idle, bob, blink, happy, sad,
-  angry, eat, no), egg (3 frames), angel, 16×16 icons as ASCII grids. Drawn ×3 (home) / ×2 (lock).
+  `artwork.svg`): **48×48** creatures (drawn ×2 = 96 px on the home and lock screens), each a
+  base body + a shared face kit (idle, bob, blink, happy, sad, angry, eat, no), egg (3 frames),
+  angel, 16×16 icons as ASCII grids. The base is `tools/pet_art_src/<key>.png` when present (a
+  picture made with `docs/pet-art-prompts.md` in an image model: black lines on white, face
+  empty; cropped to its ink, scaled to `IMPORT_HEIGHT`, thresholded, stood on the bottom row,
+  face at `FACE` (32-px grid coords, tuned per picture); Masko gets white eyes in its mask,
+  Chompy its big grin, Sir Moss no mouth), else the first-draft shapes (32-px coordinates drawn
+  ×1.5 by `ScaledDraw`). User's choice (2026-10-07): AI pictures for the designs, our face kit
+  for the poses (an image model can't keep 8 poses consistent or produce a real pixel grid).
 - Dotty: home = pet (walks about for 20 s after a touch, 1.5 s frames), poop 2×2, top bar Food ·
   Light · Game · Medicine, bottom Clean · Meter · Discipline · bell (dark while calling). Screens:
   Food (meal/snack, bites), Light, Game (5 rounds left/right, decided before you choose, dots per

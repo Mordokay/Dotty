@@ -3,48 +3,101 @@
 
   python3 tools/pet_art.py            # header + preview sheet (pet_art_preview.png)
 
-Creatures are 32x32 (drawn x3 on Dotty = 96 px, x2 on the lock screen), built from simple
-shapes (a body, then ears, sprouts, feet…) plus one shared face kit, so every species gets
-every pose: idle, bob (the second idle frame), blink, happy, sad (sick), angry (scolded),
-eat (mouth open), no (refusing: looks away). Items and icons are 16x16 ASCII grids.
-Set bit = black, rows MSB-first: what Adafruit_GFX::drawBitmap expects.
+Creatures are 48x48 (drawn x2 on Dotty = 96 px, on the home and lock screens). Each species
+has a base body and one shared face kit adds every pose: idle, bob (the second idle frame),
+blink, happy, sad (sick), angry (scolded), eat (mouth open), no (refusing: looks away).
+
+The base comes from tools/pet_art_src/<key>.png when it exists (a drawing made with the prompts
+in docs/pet-art-prompts.md: black lines on white, face left empty), otherwise from the shapes
+below (the first drafts, laid out on a 32-px grid and drawn at 1.5x). Imported pictures are
+cropped to their ink, scaled to the stage's height (IMPORT_HEIGHT), turned black and white and
+stood on the bottom row; the face goes where FACE says (32-px grid coordinates).
+Items and icons are 16x16 ASCII grids. Set bit = black, rows MSB-first: what
+Adafruit_GFX::drawBitmap expects.
 """
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "cartridges/pet/images/sprites.h"
 PREVIEW = Path(__file__).resolve().parent / "pet_art_preview.png"
 
-N = 32  # creature size
+N = 48  # creature size
+SRC = Path(__file__).resolve().parent / "pet_art_src"
+
+
+class ScaledDraw:
+    """ImageDraw for the first drafts' 32-px coordinates on the 48-px canvas (x1.5): boxes keep
+    covering whole source pixels, 1-px lines become 2 px."""
+    K = 1.5
+
+    def __init__(self, img):
+        self.d = ImageDraw.Draw(img)
+
+    def _box(self, b):
+        x0, y0, x1, y1 = b
+        K = self.K
+        return [round(x0 * K), round(y0 * K), round((x1 + 1) * K) - 1, round((y1 + 1) * K) - 1]
+
+    def _pts(self, pts):
+        return [(x * self.K + 0.25, y * self.K + 0.25) for x, y in pts]
+
+    def _w(self, w):
+        return max(1, round(w * self.K + 0.01))
+
+    def ellipse(self, box, outline=None, fill=None, width=1):
+        self.d.ellipse(self._box(box), outline=outline, fill=fill, width=self._w(width))
+
+    def rectangle(self, box, outline=None, fill=None, width=1):
+        self.d.rectangle(self._box(box), outline=outline, fill=fill, width=self._w(width))
+
+    def line(self, pts, fill=None, width=1):
+        self.d.line(self._pts(pts), fill=fill, width=self._w(width))
+
+    def point(self, pts, fill=None):
+        for x, y in pts:
+            self.d.rectangle(self._box([x, y, x, y]), fill=fill)
+
+    def polygon(self, pts, outline=None, fill=None):
+        self.d.polygon(self._pts(pts), outline=outline, fill=fill, width=2)
+
+    def arc(self, box, start, end, fill=None, width=1):
+        self.d.arc(self._box(box), start, end, fill=fill, width=self._w(width))
+
+    def chord(self, box, start, end, fill=None, outline=None):
+        self.d.chord(self._box(box), start, end, fill=fill, outline=outline)
+
+    def pieslice(self, box, start, end, fill=None, outline=None):
+        self.d.pieslice(self._box(box), start, end, fill=fill, outline=outline)
 POSES = ["idle", "bob", "blink", "happy", "sad", "angry", "eat", "no"]
 
 
 # ---------- the face kit ----------
 
-def face(d, cx, cy, gap, pose, big=False, mouth=True):
-    """Eyes `gap` px either side of cx, mouth below. d draws black (0) on white (1)."""
+def face(d, cx, cy, gap, pose, big=False, mouth=True, ink=0):
+    """Eyes `gap` px either side of cx, mouth below. d draws black (0) on white (1); `ink` = 1
+    draws the eyes and brows in white (eyes inside a black mask)."""
     ex = [cx - gap, cx + gap]
     if pose == "no":
         ex = [x - 2 for x in ex]  # looking away
     eh = 3 if big else 2
     for x in ex:
         if pose in ("blink",):
-            d.line([(x - 1, cy + 1), (x + 1, cy + 1)], fill=0)
+            d.line([(x - 1, cy + 1), (x + 1, cy + 1)], fill=ink)
         elif pose == "happy":  # ^ ^
-            d.point([(x - 1, cy + 1), (x, cy), (x + 1, cy + 1)], fill=0)
+            d.point([(x - 1, cy + 1), (x, cy), (x + 1, cy + 1)], fill=ink)
         else:
-            d.rectangle([x - (1 if big else 0), cy - (1 if big else 0), x + 1, cy - 1 + eh], fill=0)
+            d.rectangle([x - (1 if big else 0), cy - (1 if big else 0), x + 1, cy - 1 + eh], fill=ink)
             if big:
-                d.point([(x, cy - 1)], fill=1)  # a glint
+                d.point([(x, cy - 1)], fill=1 - ink)  # a glint
     if pose == "sad":  # brows down at the sides
         for x, s in ((ex[0], -1), (ex[1], 1)):
-            d.line([(x - s, cy - 3), (x + 2 * s, cy - 2)], fill=0)
+            d.line([(x - s, cy - 3), (x + 2 * s, cy - 2)], fill=ink)
     if pose == "angry":  # brows down in the middle
         for x, s in ((ex[0], 1), (ex[1], -1)):
-            d.line([(x - s, cy - 3), (x + s, cy - 2)], fill=0)
+            d.line([(x - s, cy - 3), (x + s, cy - 2)], fill=ink)
     if not mouth:
         return
     my = cy + (5 if big else 4)
@@ -198,22 +251,95 @@ SPECIES = [("baby", baby), ("child", child), ("teenA", teen_a), ("teenB", teen_b
            ("adult1", adult1), ("adult2", adult2), ("adult3", adult3), ("adult4", adult4),
            ("adult5", adult5), ("adult6", adult6), ("secret", secret)]
 
+# Where the face kit draws on an imported base (32-px grid: centre x, eye line y, eye gap, big
+# eyes). Tuned per picture once it's imported; these match the first drafts.
+FACE = {"baby": (16, 23, 3, False), "child": (16, 20, 4, False), "teenA": (16, 19, 5, False),
+        "teenB": (18, 21, 5, False), "adult1": (16, 17, 6, True), "adult2": (16, 15, 6, True),
+        "adult3": (16, 17, 5, True), "adult4": (16, 15, 7, True), "adult5": (20, 8, 3, False),
+        "adult6": (16, 17, 4, False), "secret": (16, 17, 5, False)}
+# Height of an imported picture on the 48-px canvas, so the stages keep their sizes.
+IMPORT_HEIGHT = {"baby": 22, "child": 30, "teenA": 38, "teenB": 38, "adult1": 46, "adult2": 46,
+                 "adult3": 46, "adult4": 44, "adult5": 46, "adult6": 44, "secret": 46, "egg": 42, "angel": 44}
 
-def creature(draw_fn, pose):
+
+def imported(key):
+    """tools/pet_art_src/<key>.png as a 48x48 black-and-white base, or None."""
+    src = SRC / f"{key}.png"
+    if not src.exists():
+        return None
+    g = Image.open(src).convert("L")
+    ink = g.point(lambda v: 255 if v < 128 else 0)
+    box = ink.getbbox()
+    if not box:
+        return None
+    g = g.crop(box)
+    h = IMPORT_HEIGHT.get(key, 44)
+    w = round(g.width * h / g.height)
+    if w > N - 2:
+        w = N - 2
+        h = round(g.height * w / g.width)
+    small = g.resize((w, h), Image.LANCZOS).point(lambda v: 0 if v < 150 else 255).convert("1")
     img = Image.new("1", (N, N), 1)
-    draw_fn(ImageDraw.Draw(img), "idle" if pose == "bob" else pose)
-    if pose == "bob":  # the second idle frame: squashed down a pixel
-        squashed = img.crop((0, 0, N, N - 1)).resize((N, N - 2), Image.NEAREST)
+    img.paste(small, ((N - w) // 2, N - h))  # standing on the bottom row
+    return img
+
+
+def creature(key_or_fn, pose):
+    """A species' pose: the imported base plus the face kit, or the first-draft drawing."""
+    key = key_or_fn if isinstance(key_or_fn, str) else next(k for k, f in SPECIES if f is key_or_fn)
+    draw_fn = dict(SPECIES)[key]
+    base_pose = "idle" if pose == "bob" else pose
+    img = imported(key)
+    if img is not None:
+        cx, cy, gap, big = FACE[key]
+        d = ScaledDraw(img)
+        if key == "adult3":  # white eyes in its black mask, the usual mouth below
+            face(d, cx, cy, gap, base_pose, big=False, mouth=False, ink=1)
+            my = cy + 6
+            if base_pose == "eat":
+                d.ellipse([cx - 2, my - 1, cx + 2, my + 3], outline=0, fill=1)
+            elif base_pose == "happy":
+                d.chord([cx - 3, my - 2, cx + 3, my + 3], 0, 180, fill=0)
+            elif base_pose in ("sad", "angry", "no"):
+                d.line([(cx - 2, my), (cx + 2, my)], fill=0)
+            else:
+                d.line([(cx - 2, my), (cx - 1, my + 1), (cx + 1, my + 1), (cx + 2, my)], fill=0)
+        elif key == "adult4":  # its giant grin is the face
+            face(d, cx, cy, gap, base_pose, big=big, mouth=False)
+            if base_pose == "eat":
+                d.ellipse([cx - 6, cy + 4, cx + 6, cy + 12], fill=0)
+            elif base_pose in ("sad", "angry", "no"):
+                d.line([(cx - 6, cy + 7), (cx + 6, cy + 7)], fill=0)
+            else:
+                d.chord([cx - 8, cy + 1, cx + 8, cy + 12], 0, 180, fill=0)
+                for x in (cx - 5, cx - 1, cx + 3):
+                    d.rectangle([x, cy + 7, x + 1, cy + 8], fill=1)
+        elif key == "secret":  # the moustache is in the picture: no mouth
+            face(d, cx, cy, gap, base_pose, big=big, mouth=False)
+        else:
+            face(d, cx, cy, gap, base_pose, big=big)
+    else:
         img = Image.new("1", (N, N), 1)
-        img.paste(squashed, (0, 2))
+        draw_fn(ScaledDraw(img), base_pose)
+    if pose == "bob":  # the second idle frame: squashed down a little
+        squashed = img.crop((0, 0, N, N - 1)).resize((N, N - 3), Image.NEAREST)
+        img = Image.new("1", (N, N), 1)
+        img.paste(squashed, (0, 3))
     return img
 
 
 # ---------- other 32x32 pictures ----------
 
 def egg(frame):
+    base = imported("egg")
+    if base is not None:
+        img = Image.new("1", (N, N), 1)
+        img.paste(base, ([0, 2, 0][frame], 0))  # the wobble
+        if frame == 2:
+            ScaledDraw(img).line([(16, 3), (14, 7), (18, 10), (15, 13)], fill=0)
+        return img
     img = Image.new("1", (N, N), 1)
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     dx = [0, 1, 0][frame]
     d.ellipse([8 + dx, 3, 24 + dx, 31], outline=0, fill=1)
     d.line([(9 + dx, 17), (12 + dx, 14), (16 + dx, 18), (20 + dx, 14), (23 + dx, 17)], fill=0)
@@ -225,8 +351,11 @@ def egg(frame):
 
 
 def angel():
+    base = imported("angel")
+    if base is not None:
+        return base
     img = Image.new("1", (N, N), 1)
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.ellipse([10, 1, 22, 5], outline=0)  # halo
     d.polygon([(4, 14), (9, 10), (9, 20)], outline=0, fill=1)  # wings
     d.polygon([(28, 14), (23, 10), (23, 20)], outline=0, fill=1)
@@ -622,9 +751,11 @@ def main():
     # The cartridge's pictures: the install icon (64x64 1-bit) and the app's artwork (SVG in the
     # app icon's night-sky style, the pixel creature glowing on it; rendered with qlmanage).
     hero = creature(adult1, "happy")
-    hero.resize((64, 64), Image.NEAREST).save(REPO / "cartridges/pet/icon.png")
+    icon64 = Image.new("1", (64, 64), 1)  # 1:1 (48 doesn't scale evenly to 64)
+    icon64.paste(hero, (8, 14))
+    icon64.save(REPO / "cartridges/pet/icon.png")
     egg_img = egg(0)
-    px = 18  # one art pixel in the 1024 artwork
+    px = 12  # one art pixel in the 1024 artwork
     rects = []
     for y in range(N):
         for x in range(N):
@@ -634,7 +765,7 @@ def main():
     for y in range(N):
         for x in range(N):
             if egg_img.getpixel((x, y)) == 0:
-                egg_rects.append(f'<rect x="{770 + x * 5}" y="{720 + y * 5}" width="5" height="5"/>')
+                egg_rects.append(f'<rect x="{776 + x * 3}" y="{730 + y * 3}" width="3" height="3"/>')
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
 <!-- Pet artwork for the iOS app (generated by tools/pet_art.py; the e-paper icon is icon.png):
      the adult Lumo, pixel by pixel, glowing under the app icon's night sky, with its egg. -->
