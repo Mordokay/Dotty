@@ -93,8 +93,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   on battery once flashed the lock screen and bounced straight back to the app.
 - **Taps without a finger**: serial keys `1`-`9` tap a 3x3 grid like a phone keypad (`1` =
   the nav bar's left corner, `3` its right corner, `5` the middle); `]` / `[` swipe left / right, `}` / `{` swipe up / down;
-  `k` locks / unlocks (while locked it's read only when Dotty is awake: a locked Dotty without
-  a reading program light-sleeps until the next minute). Send keys with a short
+  `k` locks / unlocks (read in `shell::update` before the locked branch; while locked it's seen
+  only when Dotty is awake: a locked Dotty without a reading program light-sleeps until the next
+  minute). Send keys with a short
   wait before closing the port (`write; flush; sleep 0.3`): closing at once left the byte
   queued in macOS until the next open, where the screenshot's `s` overwrote it.
 - **Screenshots without a camera**: send `s` over serial (only while a computer has the
@@ -687,8 +688,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   and every gap be within ±35 % (min ±0.25 s); beats and claps drawn as two time-spaced rows. Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
   refuse, medicine, clean (duck), scold, hatch, evolve, game end; death = angel + age + cause, tap
   for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake), the user's
-  layout: top half = pet ×2 (a small padlock in its top-left corner, with a white edge: only Lumo's
-  ear reaches there) | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
+  layout: top half = the pet as the home screen shows it (×2; Zzz asleep, skull sick, up to 4
+  poops beside it, the corner dark with the light off; icons with an edge in the background colour;
+  a small padlock top-left — only Lumo's ear reaches there) | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
   skull, poop, bulb, Zzz, pause) or one word ("Hungry!", "Bored!", "All good"); bottom half =
   three big rows: hunger hearts, happy hearts, discipline as one continuous bar (as on the
   Meter screen), icons ×2.

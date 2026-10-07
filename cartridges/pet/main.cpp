@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.3.3");
+DOTTY_CARTRIDGE("pet", "Pet", "0.3.4");
 
 namespace {
 
@@ -764,13 +764,26 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
   const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
                                                                                                           : art::kIdle;
-  // Top left: the pet, and in its corner a small padlock (with a white edge, so it reads even
-  // over Lumo's ear, the only drawing that reaches that far).
-  drawPet(gfx, pose, 2, 2, 2);
-  gfx.fillRect(0, 0, 19, 22, kWhite);
-  gfx.fillRoundRect(2, 9, 15, 11, 2, kBlack);    // body
-  for (int d = 0; d < 2; d++) gfx.drawRoundRect(5 + d, 2 + d, 9 - 2 * d, 12, 4, kBlack);  // shackle
-  gfx.fillRect(9, 12, 2, 4, kWhite);             // keyhole
+  // Top left: the pet as the home screen shows it — Zzz when asleep, the skull when sick, its
+  // poop beside it, dark with the light off — and a small padlock in the corner. Icons get an
+  // edge in the background colour so they read over the drawing.
+  const bool dark = alive && !state.lightsOn;
+  const uint16_t ink = dark ? kWhite : kBlack, paper = dark ? kBlack : kWhite;
+  if (dark) gfx.fillRoundRect(0, 0, 100, 100, 6, kBlack);
+  drawPet(gfx, pose, 2, 2, 2, false, ink);
+  auto badge = [&](art::Icon icon, int16_t x, int16_t y) {
+    gfx.fillRect(x - 1, y - 1, 18, 18, paper);
+    drawIcon(gfx, icon, x, y, 1, ink);
+  };
+  if (alive) {
+    if (state.asleep) badge(art::kZzzIcon, 82, 2);
+    if (state.sick) badge(art::kSkullIcon, 82, state.asleep ? 22 : 2);
+    for (int i = 0; i < state.poops; i++) badge(art::kPoopIcon, 82 - (i % 2) * 18, 82 - (i / 2) * 18);
+  }
+  gfx.fillRect(0, 0, 19, 22, paper);
+  gfx.fillRoundRect(2, 9, 15, 11, 2, ink);  // padlock body
+  for (int d = 0; d < 2; d++) gfx.drawRoundRect(5 + d, 2 + d, 9 - 2 * d, 12, 4, ink);  // shackle
+  gfx.fillRect(9, 12, 2, 4, paper);         // keyhole
   // Top right: clock + battery, then who it is.
   constexpr int16_t kX = 104;
   gfx.setFont(&FreeSansBold12pt7b);
