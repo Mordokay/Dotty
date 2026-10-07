@@ -21,7 +21,6 @@
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/sleep_panda.h"
-#include "images/sleep_portrait.h"
 #include "log.h"
 #include "nav_bar.h"
 #include "shell.h"
@@ -29,7 +28,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("album", "Album Viewer", "0.3.8");
+DOTTY_CARTRIDGE("album", "Album Viewer", "0.3.9");
 
 namespace {
 
@@ -529,7 +528,6 @@ void registerCommands() {
 }
 
 const shell::Picture kOffPictures[] = {
-    {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
     {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
 };
 

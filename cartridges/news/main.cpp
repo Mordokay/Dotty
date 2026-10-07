@@ -17,7 +17,6 @@
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/sleep_panda.h"
-#include "images/sleep_portrait.h"
 #include "log.h"
 #include "nav_bar.h"
 #include "net.h"
@@ -27,7 +26,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("news", "News", "0.2.1");
+DOTTY_CARTRIDGE("news", "News", "0.2.2");
 
 namespace {
 
@@ -408,7 +407,6 @@ void registerCommands() {
 }
 
 const shell::Picture kOffPictures[] = {
-    {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
     {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
 };
 

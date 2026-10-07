@@ -158,7 +158,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   pass a `shell::Config` (drawApp + optional hooks) and run their own logic only while
   `shell::update()` returns true.
 - Launcher screens use the firefly logo on white, not the user's photos; cartridges keep
-  the random portrait/panda off screen. The bitmap comes from
+  the sleeping panda off screen. The bitmap comes from
   `ios/Design/Logo/dotty-mark-epaper.svg`: the flat mark with a light-grey tail, black
   outline and segment stripes (the original pale-yellow tail dithers to almost nothing),
   no glow. Render with `qlmanage -t -s 800`, convert with img2epd (atkinson, 120 px).
@@ -184,9 +184,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Kindle-style lock: PWR short press locks/unlocks; lock screen redraws once a minute
   (panel wear + battery), music keeps playing; auto-lock after 2 min idle. While
   unlocked, 1 refresh/s is fine only when something is actively changing.
-- Screens: lock = clock + padlock icon; power off = a random pick from `kOffPictures`
-  in main.cpp (user's portrait, red panda illustration). Use the user's pictures, not
-  drawn illustrations.
+- Screens: lock = clock + padlock icon; power off = the sleeping red panda (`kOffPictures`
+  in each main.cpp; the user's portrait was dropped on 2026-10-07 at their request).
 - e-paper datasheet: rated "panel life 5 years", refresh at least once per 24 h, no
   refresh-count rating. Keep full refreshes rare and periodic.
 

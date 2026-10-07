@@ -18,7 +18,6 @@
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/sleep_panda.h"
-#include "images/sleep_portrait.h"
 #include "log.h"
 #include "music_library.h"
 #include "nav_bar.h"
@@ -28,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.11.8");
+DOTTY_CARTRIDGE("music", "Music", "0.11.9");
 
 namespace {
 
@@ -616,7 +615,6 @@ void loopTransfer() {
 }
 
 const shell::Picture kOffPictures[] = {
-    {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
     {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
 };
 

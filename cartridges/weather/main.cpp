@@ -15,7 +15,6 @@
 #include "cartridge.h"
 #include "core_ble.h"
 #include "images/sleep_panda.h"
-#include "images/sleep_portrait.h"
 #include "log.h"
 #include "nav_bar.h"
 #include "net.h"
@@ -26,7 +25,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.3.7");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.3.8");
 
 namespace {
 
@@ -420,7 +419,6 @@ void registerCommands() {
 }
 
 const shell::Picture kOffPictures[] = {
-    {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
     {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
 };
 
