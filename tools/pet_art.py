@@ -18,7 +18,7 @@ Adafruit_GFX::drawBitmap expects.
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "cartridges/pet/images/sprites.h"
@@ -253,8 +253,8 @@ SPECIES = [("baby", baby), ("child", child), ("teenA", teen_a), ("teenB", teen_b
 
 # Where the face kit draws on an imported base (32-px grid: centre x, eye line y, eye gap, big
 # eyes). Tuned per picture once it's imported; these match the first drafts.
-FACE = {"baby": (16, 23, 3, False), "child": (16, 20, 4, False), "teenA": (16, 19, 5, False),
-        "teenB": (18, 21, 5, False), "adult1": (16, 17, 6, True), "adult2": (16, 15, 6, True),
+FACE = {"baby": (16, 24, 3, False), "child": (16, 20, 4, False), "teenA": (16, 19, 5, False),
+        "teenB": (14, 18, 4, False), "adult1": (13, 13, 4, True), "adult2": (16, 15, 6, True),
         "adult3": (16, 17, 5, True), "adult4": (16, 15, 7, True), "adult5": (20, 8, 3, False),
         "adult6": (16, 17, 4, False), "secret": (16, 17, 5, False)}
 # Height of an imported picture on the 48-px canvas, so the stages keep their sizes.
@@ -274,6 +274,9 @@ def imported(key):
         return None
     g = g.crop(box)
     h = IMPORT_HEIGHT.get(key, 44)
+    # Thicken the ink first so lines come out ~2 px, not a broken 1 px, after shrinking.
+    grow = max(3, int(g.height / h * 0.6)) | 1
+    g = g.filter(ImageFilter.MinFilter(grow))
     w = round(g.width * h / g.height)
     if w > N - 2:
         w = N - 2
