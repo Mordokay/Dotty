@@ -77,6 +77,7 @@ bool AudioPlayer::play(const char *path) {
   }
   String lower = path;
   lower.toLowerCase();
+  synth_ = false;
   wav_ = lower.endsWith(".wav");
   if (wav_) {
     if (!openWav()) {
@@ -114,6 +115,60 @@ bool AudioPlayer::play(const char *path) {
   stopRequested_ = false;
   playing_ = true;
   return true;
+}
+
+bool AudioPlayer::playNotes(const Note *notes, size_t count) {
+  stop();
+  if (capturing_ || suspended_ || count == 0) return false;
+  noteCount_ = min(count, kMaxNotes);
+  memcpy(notes_, notes, noteCount_ * sizeof(Note));
+  noteIndex_ = 0;
+  noteSamples_ = noteDone_ = 0;
+  synth_ = true;
+  wav_ = false;
+  codec.setMute(false);
+  paused_ = false;
+  stopRequested_ = false;
+  playing_ = true;
+  return true;
+}
+
+// One block of the current tune: square waves at the note's pitch, plucked (a quick attack,
+// then fading to a third) with a short release so notes don't click.
+void AudioPlayer::playSynth() {
+  constexpr size_t kFrames = 256;
+  constexpr int32_t kAmplitude = 6000;
+  const uint32_t rate = sampleRate_;
+  const uint32_t attack = rate * 3 / 1000, release = rate * 8 / 1000;
+  for (size_t i = 0; i < kFrames; i++) {
+    if (noteDone_ >= noteSamples_) {
+      if (noteIndex_ >= noteCount_) {
+        if (i) i2s.write(reinterpret_cast<uint8_t *>(pcm), i * 2 * sizeof(int16_t));
+        synth_ = false;
+        playing_ = false;
+        return;
+      }
+      const Note &n = notes_[noteIndex_++];
+      noteMidi_ = n.midi;
+      noteSamples_ = static_cast<uint32_t>(n.ms) * rate / 1000;
+      noteDone_ = 0;
+      const float freq = 440.0f * powf(2.0f, (static_cast<int>(n.midi) - 69) / 12.0f);
+      phaseStep_ = static_cast<uint32_t>(freq / rate * 4294967296.0f);
+    }
+    int32_t v = 0;
+    if (noteMidi_) {
+      const float progress = static_cast<float>(noteDone_) / noteSamples_;
+      float env = 1.0f - 0.66f * progress;
+      if (noteDone_ < attack) env *= static_cast<float>(noteDone_) / attack;
+      const uint32_t left = noteSamples_ - noteDone_;
+      if (left < release) env *= static_cast<float>(left) / release;
+      v = static_cast<int32_t>((phase_ & 0x80000000u ? kAmplitude : -kAmplitude) * env);
+      phase_ += phaseStep_;
+    }
+    pcm[2 * i] = pcm[2 * i + 1] = static_cast<int16_t>(v);
+    noteDone_++;
+  }
+  i2s.write(reinterpret_cast<uint8_t *>(pcm), kFrames * 2 * sizeof(int16_t));
 }
 
 void AudioPlayer::stop() {
@@ -256,6 +311,7 @@ void AudioPlayer::taskEntry(void *arg) {
 void AudioPlayer::run() {
   for (;;) {
     if (playing_ && stopRequested_) {
+      synth_ = false;
       file.close();
       paused_ = false;
       playing_ = false;
@@ -267,6 +323,10 @@ void AudioPlayer::run() {
     }
     if (!playing_ || paused_) {
       writeSilence();  // keeps I2S clocked and the DMA free of stale samples
+      continue;
+    }
+    if (synth_) {
+      playSynth();
       continue;
     }
     if (wav_) {

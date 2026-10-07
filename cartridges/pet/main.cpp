@@ -13,9 +13,12 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
+#include <Preferences.h>
 #include <SD_MMC.h>
 
+#include "audio_player.h"
 #include "cartridge.h"
+#include <vector>
 #include "core_ble.h"
 #include "images/sleep_panda.h"
 #include "images/sleep_portrait.h"
@@ -82,6 +85,94 @@ struct GameState {
   bool lastWon = false, guessedLeft = false;
 } game;
 
+void notifyChanged();  // the app's pet.changed event (below)
+
+// ---------- sound: synthesised chirps (AudioPlayer::playNotes) ----------
+
+AudioPlayer player;
+bool audioReady = false;
+struct Sound {
+  bool on = true;
+  uint8_t volume = 60;
+  uint16_t quietFrom = 23 * 60 + 30, quietTo = 8 * 60;  // minutes of the day; equal = never quiet
+} sound;
+
+using N = AudioPlayer::Note;
+#define TUNE(name, ...) const N name[] = {__VA_ARGS__}
+TUNE(kTuneCall, {84, 70}, {0, 40}, {88, 110});
+TUNE(kTuneEat, {76, 60}, {0, 50}, {76, 60}, {0, 50}, {79, 90});
+TUNE(kTuneHappy, {72, 80}, {76, 80}, {79, 80}, {84, 180});
+TUNE(kTuneWin, {79, 70}, {84, 140});
+TUNE(kTuneLose, {67, 100}, {60, 200});
+TUNE(kTuneEvolve, {72, 100}, {76, 100}, {79, 100}, {84, 100}, {79, 100}, {84, 320});
+TUNE(kTuneHatch, {84, 60}, {0, 30}, {84, 60}, {0, 30}, {91, 220});
+TUNE(kTunePoop, {55, 80}, {50, 160});
+TUNE(kTuneSick, {64, 160}, {63, 160}, {62, 320});
+TUNE(kTuneMedicine, {72, 60}, {79, 90});
+TUNE(kTuneClean, {72, 35}, {74, 35}, {76, 35}, {77, 35}, {79, 35}, {81, 35}, {83, 35}, {84, 90});
+TUNE(kTuneScold, {60, 120}, {0, 50}, {60, 160});
+TUNE(kTuneNo, {65, 80}, {60, 140});
+TUNE(kTuneDeath, {72, 300}, {71, 300}, {69, 300}, {67, 300}, {65, 700});
+TUNE(kTuneTap, {96, 14});
+#undef TUNE
+#define PLAY(tune) playTune(tune, sizeof(tune) / sizeof(tune[0]))
+
+void loadSound() {
+  Preferences p;
+  p.begin("pet", true);
+  sound.on = p.getBool("sound", true);
+  sound.volume = p.getUChar("volume", 60);
+  sound.quietFrom = p.getUShort("quietFrom", sound.quietFrom);
+  sound.quietTo = p.getUShort("quietTo", sound.quietTo);
+  p.end();
+}
+
+void saveSound() {
+  Preferences p;
+  p.begin("pet", false);
+  p.putBool("sound", sound.on);
+  p.putUChar("volume", sound.volume);
+  p.putUShort("quietFrom", sound.quietFrom);
+  p.putUShort("quietTo", sound.quietTo);
+  p.end();
+  if (audioReady) player.setVolume(sound.volume);
+}
+
+bool quietNow() {
+  if (sound.quietFrom == sound.quietTo) return false;
+  const time_t now = time(nullptr);
+  tm t;
+  gmtime_r(&now, &t);  // the clock keeps local time
+  const int m = t.tm_hour * 60 + t.tm_min;
+  return sound.quietFrom < sound.quietTo ? m >= sound.quietFrom && m < sound.quietTo
+                                         : m >= sound.quietFrom || m < sound.quietTo;
+}
+
+// Plays a tune unless muted or in quiet hours. Locked and asleep, the codec is powered down:
+// wake it for the chirp, wait for it, and power it down again.
+void playTune(const AudioPlayer::Note *notes, size_t count) {
+  if (!audioReady || !sound.on || quietNow()) return;
+  const bool wasDown = !player.isPoweredUp();
+  if (wasDown && !player.powerUp()) return;
+  player.playNotes(notes, count);
+  if (wasDown) {
+    const uint32_t start = millis();
+    while (player.isPlaying() && millis() - start < 4000) delay(10);
+    delay(30);
+    player.powerDown();
+  }
+}
+
+// One sound for what just happened (the most important first).
+void soundFor(uint32_t events) {
+  if (events & pet::kDied) PLAY(kTuneDeath);
+  else if (events & pet::kHatched) PLAY(kTuneHatch);
+  else if (events & pet::kEvolved) PLAY(kTuneEvolve);
+  else if (events & pet::kGotSick) PLAY(kTuneSick);
+  else if (events & pet::kCalled) PLAY(kTuneCall);
+  else if (events & pet::kPooped) PLAY(kTunePoop);
+}
+
 String path(const char *name) {
   return storage::myDataDir() + "/" + name;
 }
@@ -92,6 +183,23 @@ uint32_t nowMinute() {
 
 bool clockValid() {
   return time(nullptr) > 1700000000;
+}
+
+// Our species (the P1's characters get our own names and art).
+const char *const kSpeciesNames[pet::kSpeciesCount] = {"Egg",    "Dotlet", "Puffle", "Sprig",    "Lumpkin", "Lumo",
+                                                       "Bramble", "Masko", "Chompy", "Wiggle", "Spike",  "Sir Moss"};
+const char *speciesName(pet::Species s) {
+  return s < pet::kSpeciesCount ? kSpeciesNames[s] : "?";
+}
+const char *stageName(pet::Stage s) {
+  switch (s) {
+    case pet::Stage::Egg: return "egg";
+    case pet::Stage::Baby: return "baby";
+    case pet::Stage::Child: return "child";
+    case pet::Stage::Teen: return "teen";
+    case pet::Stage::Adult: return "adult";
+    default: return "dead";
+  }
 }
 
 // ---------- saving ----------
@@ -161,6 +269,8 @@ uint32_t advance() {
   if (events & (pet::kHatched | pet::kEvolved | pet::kDied | pet::kGotSick | pet::kCalled | pet::kPooped)) save();
   else if (state.lastMinute - lastSavedMinute >= kSaveEveryMinutes) save();
   pendingEvents |= events;
+  soundFor(events);
+  if (events) notifyChanged();
   return events;
 }
 
@@ -327,13 +437,19 @@ void drawMeter() {
   epd.setCursor(10, y + 13);
   epd.print("Happy");
   drawHearts(epd, kW - 10 - 4 * 18 + 2, y, state.happy);
-  // Pause button.
+  // Pause and sound: two buttons, dark when on.
   const int16_t by = kW - 42;
-  epd.fillRoundRect(40, by, kW - 80, 34, 17, state.paused ? kBlack : kWhite);
-  epd.drawRoundRect(40, by, kW - 80, 34, 17, kBlack);
-  epd.setTextColor(state.paused ? kWhite : kBlack);
+  const struct { bool on; const char *label; } buttons[] = {
+      {state.paused, state.paused ? "Resume" : "Pause"}, {!sound.on, sound.on ? "Sound on" : "Muted"}};
   epd.setFont(&FreeSansBold9pt7b);
-  ui::drawCentered(epd, state.paused ? "Resume" : "Pause", by + 23);
+  for (int i = 0; i < 2; i++) {
+    const int16_t x = 6 + i * 97;
+    epd.fillRoundRect(x, by, 91, 34, 17, buttons[i].on ? kBlack : kWhite);
+    epd.drawRoundRect(x, by, 91, 34, 17, kBlack);
+    epd.setTextColor(buttons[i].on ? kWhite : kBlack);
+    epd.setCursor(x + (91 - ui::textWidth(epd, buttons[i].label)) / 2, by + 23);
+    epd.print(buttons[i].label);
+  }
   epd.setTextColor(kBlack);
 }
 
@@ -441,51 +557,57 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   advance();
   gfx.fillScreen(kWhite);
   gfx.setTextColor(kBlack);
-  // Clock and battery.
-  gfx.setFont(&FreeSansBold18pt7b);
+  const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
+  // Top: a small clock and battery, the pet (x2) on the right, and under the clock whatever
+  // needs seeing as big icons (call, sickness, poop, light, sleep, pause).
+  gfx.setFont(&FreeSansBold12pt7b);
   char clock[6];
   snprintf(clock, sizeof(clock), "%02d:%02d", info.time.tm_hour, info.time.tm_min);
-  gfx.setCursor(8, 34);
+  gfx.setCursor(4, 21);
   gfx.print(info.timeValid ? clock : "--:--");
-  ui::drawBattery(gfx, kW - 8 - 29, 12, info.batteryPercent, info.charging);
-  // The pet (x2) and its meters.
+  ui::drawBattery(gfx, 74, 6, info.batteryPercent, info.charging);
   const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
                                                                                                           : art::kIdle;
-  drawPet(gfx, pose, 6, 50, 2);
-  if (pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg) {
-    drawIcon(gfx, art::kFoodIcon, 78, 52);
-    for (int i = 0; i < 4; i++) drawIcon(gfx, i < state.hunger ? art::kHeartIcon : art::kHeartEmptyIcon, 98 + i * 24, 52);
-    drawIcon(gfx, art::kGameIcon, 78, 76);
-    for (int i = 0; i < 4; i++) drawIcon(gfx, i < state.happy ? art::kHeartIcon : art::kHeartEmptyIcon, 98 + i * 24, 76);
-    // What else is going on: a row of icons.
-    int16_t x = 78;
+  if (!alive) {  // an egg or a memory: just the picture, big
+    drawPet(gfx, pose, (kW - 96) / 2, 40, 3);
+  } else {
+    drawPet(gfx, pose, kW - 66, 0, 2);
+    int16_t x = 2;
     auto add = [&](art::Icon icon) {
-      if (x > kW - 18) return;
-      drawIcon(gfx, icon, x, 100);
-      x += 20;
+      if (x > kW - 66 - 32) return;
+      drawIcon(gfx, icon, x, 28, 2);
+      x += 33;
     };
-    for (int i = 0; i < state.poops; i++) add(art::kPoopIcon);
-    if (state.sick) add(art::kSkullIcon);
-    if (state.lightsCall) add(art::kBulbIcon);
     if (pet::calling(state)) add(art::kAttentionIcon);
+    if (state.sick) add(art::kSkullIcon);
+    for (int i = 0; i < state.poops; i++) add(art::kPoopIcon);
+    if (state.lightsCall) add(art::kBulbIcon);
     if (state.asleep) add(art::kZzzIcon);
     if (state.paused) add(art::kPauseIcon);
+    // The three meters, big, one per row: hunger and happiness in hearts, discipline as the
+    // P1's gauge (4 steps of 25 %).
+    const struct { art::Icon icon; uint8_t value; int16_t y; } rows[] = {
+        {art::kFoodIcon, state.hunger, 66}, {art::kGameIcon, state.happy, 99}};
+    for (const auto &r : rows) {
+      drawIcon(gfx, r.icon, 2, r.y, 2);
+      for (int i = 0; i < 4; i++) drawIcon(gfx, i < r.value ? art::kHeartIcon : art::kHeartEmptyIcon, 40 + i * 40, r.y, 2);
+    }
+    drawIcon(gfx, art::kDisciplineIcon, 2, 132, 2);
+    const int filled = pet::disciplinePercent(state) / 25;
+    for (int i = 0; i < 4; i++) {
+      const int16_t bx = 42 + i * 40;
+      if (i < filled) gfx.fillRoundRect(bx, 138, 34, 22, 4, kBlack);
+      else gfx.drawRoundRect(bx, 138, 34, 22, 4, kBlack);
+    }
   }
-  // What it needs, in words; dark when it's calling for you.
-  const String text = needs();
-  // Dark when something needs doing (anything but "All good", "Sleeping" and "Paused").
-  const bool urgent = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg && !state.paused &&
+  // What it needs, in words: a dark band when something needs doing.
+  const bool urgent = alive && !state.paused &&
                       (pet::calling(state) || state.sick || state.hunger == 0 || state.happy == 0 || state.poops);
-  if (urgent) gfx.fillRoundRect(6, 128, kW - 12, 34, 8, kBlack);
+  if (urgent) gfx.fillRoundRect(2, 168, kW - 4, 31, 8, kBlack);
   gfx.setTextColor(urgent ? kWhite : kBlack);
   gfx.setFont(&FreeSansBold12pt7b);
-  ui::drawCentered(gfx, text, 153);
+  ui::drawCentered(gfx, needs(), 191);
   gfx.setTextColor(kBlack);
-  gfx.setFont(&FreeSans9pt7b);
-  const String line = state.species == pet::kEgg || pet::stage(state) == pet::Stage::Dead
-                          ? String("Unlock to look after it")
-                          : "Age " + String(state.age) + "  -  " + String(state.weight) + " g";
-  ui::drawCentered(gfx, line, 188);
   return false;
 }
 
@@ -493,6 +615,21 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
 
 void startAnim(Anim kind, int frames) {
   anim = {kind, 0, frames, millis() + kAnimFrameMs, false};
+  switch (kind) {  // (hatching and evolving sound with their events)
+    case Anim::Eat:
+    case Anim::Snack: PLAY(kTuneEat); break;
+    case Anim::Refuse:
+    case Anim::Nothing:
+    case Anim::NoScold: PLAY(kTuneNo); break;
+    case Anim::Medicine: PLAY(kTuneMedicine); break;
+    case Anim::Clean: PLAY(kTuneClean); break;
+    case Anim::Scold: PLAY(kTuneScold); break;
+    case Anim::GameEnd:
+      if (game.wins >= 3) PLAY(kTuneHappy);
+      else PLAY(kTuneLose);
+      break;
+    default: break;
+  }
   screen = Screen::Anim;
   redraw = true;
 }
@@ -506,6 +643,7 @@ void act(Function f) {
   uint32_t events = 0;
   const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
   if (!alive && f != kMeter) return;
+  PLAY(kTuneTap);
   switch (f) {
     case kFood: screen = Screen::Food; break;
     case kLight: screen = Screen::Light; break;
@@ -545,6 +683,8 @@ void onGameTap(bool left) {
   if (!game.waiting) return;
   game.guessedLeft = left;
   game.lastWon = pet::roundWon(state, esp_random() & 0xF);
+  if (game.lastWon) PLAY(kTuneWin);
+  else PLAY(kTuneLose);
   if (game.lastWon) {
     game.wins++;
     game.results |= 1 << game.round;
@@ -595,8 +735,14 @@ void onTap(uint16_t x, uint16_t y) {
     case Screen::Meter:
       if (y < nav::kHeight && nav::hit(x, y) == -1) return goHome();
       if (y > kW - 46) {
-        pet::setPaused(state, !state.paused, nowMinute());
-        save();
+        if (x < kW / 2) {
+          pet::setPaused(state, !state.paused, nowMinute());
+          save();
+        } else {
+          sound.on = !sound.on;
+          saveSound();
+          PLAY(kTuneTap);
+        }
         redraw = true;
       }
       break;
@@ -653,6 +799,93 @@ void showEvents() {
   }
 }
 
+// ---------- app (BLE) ----------
+
+void notifyChanged() {
+  JsonDocument event;
+  event["event"] = "pet.changed";
+  ble::notify(event);
+}
+
+void registerCommands() {
+  ble::on("pet.status", [](JsonObjectConst, JsonObject reply) {
+    advance();
+    reply["species"] = speciesName(state.species);
+    reply["stage"] = stageName(pet::stage(state));
+    reply["generation"] = state.generation;
+    reply["age"] = state.age;
+    reply["weight"] = state.weight;
+    reply["hunger"] = state.hunger;
+    reply["happy"] = state.happy;
+    reply["discipline"] = pet::disciplinePercent(state);
+    reply["careMistakes"] = state.careMistakes + state.adultMistakes;
+    reply["disciplineMistakes"] = state.disciplineMistakes;
+    reply["sick"] = state.sick;
+    reply["poops"] = state.poops;
+    reply["asleep"] = state.asleep;
+    reply["lightsOn"] = state.lightsOn;
+    reply["paused"] = state.paused;
+    reply["calling"] = pet::calling(state);
+    reply["needs"] = needs();
+    if (state.death != pet::Death::None) reply["died"] = deathName(state.death);
+    JsonObject s = reply["sound"].to<JsonObject>();
+    s["on"] = sound.on;
+    s["volume"] = sound.volume;
+    s["quietFrom"] = sound.quietFrom;
+    s["quietTo"] = sound.quietTo;
+  });
+  ble::on("pet.pause", [](JsonObjectConst args, JsonObject) {
+    pet::setPaused(state, args["on"] | !state.paused, nowMinute());
+    save();
+    redraw = true;
+    notifyChanged();
+  });
+  // {on?, volume?, quietFrom?, quietTo?} (minutes of the day; equal = no quiet hours)
+  ble::on("pet.sound", [](JsonObjectConst args, JsonObject) {
+    sound.on = args["on"] | sound.on;
+    sound.volume = constrain(args["volume"] | static_cast<int>(sound.volume), 0, 100);
+    sound.quietFrom = constrain(args["quietFrom"] | static_cast<int>(sound.quietFrom), 0, 1439);
+    sound.quietTo = constrain(args["quietTo"] | static_cast<int>(sound.quietTo), 0, 1439);
+    saveSound();
+    if (screen == Screen::Meter) redraw = true;
+  });
+  // The pets that lived before: {pets: [{generation, species, age, weight, cause, born, died}]}
+  // (born/died: local time, minutes since 1970), newest first.
+  ble::on("pet.history", [](JsonObjectConst, JsonObject reply) {
+    JsonArray list = reply["pets"].to<JsonArray>();
+    File f = SD_MMC.open(path("history.tsv"));
+    std::vector<String> lines;
+    while (f && f.available()) lines.push_back(f.readStringUntil('\n'));
+    for (auto it = lines.rbegin(); it != lines.rend() && list.size() < 30; ++it) {
+      char cause[24] = {};
+      unsigned long gen = 0, born = 0, died = 0;
+      int species = 0, age = 0, weight = 0;
+      if (sscanf(it->c_str(), "%lu\t%d\t%d\t%d\t%23[^\t]\t%lu\t%lu", &gen, &species, &age, &weight, cause, &born,
+                 &died) != 7) {
+        continue;
+      }
+      JsonObject o = list.add<JsonObject>();
+      o["generation"] = gen;
+      o["species"] = speciesName(static_cast<pet::Species>(species));
+      o["age"] = age;
+      o["weight"] = weight;
+      o["cause"] = cause;
+      o["born"] = born;
+      o["died"] = died;
+    }
+  });
+  // A new egg; while it's alive only with {force: true} (the app asks first).
+  ble::on("pet.newEgg", [](JsonObjectConst args, JsonObject reply) {
+    if (pet::stage(state) != pet::Stage::Dead && !(args["force"] | false)) {
+      reply["ok"] = false;
+      reply["error"] = "it's still alive";
+      return;
+    }
+    newEgg();
+    notifyChanged();
+  });
+}
+
 const shell::Picture kOffPictures[] = {
     {kSleepPortrait, kSleepPortraitWidth, kSleepPortraitHeight},
     {kSleepPanda, kSleepPandaWidth, kSleepPandaHeight},
@@ -667,10 +900,19 @@ void setup() {
   config.lockedWakeSeconds = 60;
   config.onLockedWake = [] { return advance() != 0; };
   config.beforePowerOff = [] { save(); };
+  config.sleepApp = [] {
+    if (audioReady) player.powerDown();
+  };
+  config.wakeApp = [] {
+    if (audioReady) player.powerUp();
+  };
   config.offPictures = kOffPictures;
   config.offPictureCount = sizeof(kOffPictures) / sizeof(kOffPictures[0]);
   shell::begin(config);
 
+  loadSound();
+  audioReady = player.begin(32000);
+  if (audioReady) player.setVolume(sound.volume);
   sdReady = storage::begin();
   if (sdReady) storage::makeDirs(storage::myDataDir());
   if (load()) {
@@ -682,6 +924,7 @@ void setup() {
     save();
     LOGI("pet", "a new egg");
   }
+  registerCommands();
   lastTouch = millis();
   shell::showApp();
 }

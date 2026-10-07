@@ -1,0 +1,4 @@
+{
+  "description": "A virtual pet with the rules of the 1996 original: feed it, play left-or-right, clean up, give medicine, scold it when it misbehaves and turn the light off at bedtime. How you raise it decides which of seven adults it becomes. Gentle chirps, everything at a glance on the lock screen, and Pause for when you're away.",
+  "requires": ["sd"]
+}

@@ -633,6 +633,58 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   topic": Daily briefing / News outlet → `TopicPicker` sheet (search, several at once), keyword
   field; "Favourites on Dotty now").
 
+## Pet cartridge (`cartridges/pet/`)
+
+- A virtual pet with the **1996 Tamagotchi (P1) rules**, our own species/art/touch/sounds.
+  Source of truth: the P1 ROM datamine at rhubarbtart.neocities.org/p1hackinglog (`stats.txt`
+  per-character timers, `tama_notes.txt` RAM map + evolution vectors, `timeline.py` simulator,
+  `utils.py` discipline routine and old-age step 0xF3D). Bandai's ROM, sprites and names are
+  never used (public repo); avoid "Tamagotchi"/"-gotchi" (trademarks).
+- `pet_engine.*`: plain C++ (no Arduino). Per *awake* minute: heart timers, discipline checks
+  (every Nth heart drop: `m214 = discipline + m214 + 1`, call unless it rolls past 15), poop
+  (180 min; baby 15/25), natural sickness timer, evolve timer (not while sick), age +1 each
+  morning, lights call at bedtime, 15-min call windows → care / discipline mistakes, the
+  datamine's evolution vectors, adult mistakes (5 = death), 3 sicknesses per stage = death (that
+  is also old age: adult life ≈ 3 × its sickness timer), old adults' heart intervals shrink each
+  morning (0xF3D). ★ Unsettled in the datamine, kept as constants: lights mistake after 15 min
+  (ROM guess 64), starvation 720 awake min, untreated sickness 720, poop sickness after 120 min
+  or 4 poops, a snack takes 1 min off the sickness timer.
+- **Verified on the Mac**: `python3 tools/pet_sim/compare.py` downloads the datamine's simulator
+  (feeding it stats.txt instead of the ROM via a stub `rip.py`), runs it and `sim.cpp` (our
+  engine, perfect care) for every character from 3 start times: all 36 timelines match (the
+  only exception, cut by the script: the datamine still counts the old character's heart in the
+  minute it evolves/dies). Then `tests.cpp`: every evolution branch, each death, pause, food,
+  game, the old-age step. Run it after any engine change.
+- Species (P1 order → ours): Babytchi Dotlet, Marutchi Puffle, Tamatchi Sprig, Kuchitamatchi
+  Lumpkin, Mametchi Lumo (best), Ginjirotchi Bramble, Maskutchi Masko (→ secret from a type-2
+  teen), Kuchipatchi Chompy, Nyorotchi Wiggle, Tarakotchi Spike, Bill Sir Moss.
+- Art: `tools/pet_art.py` → `images/sprites.h` (+ `tools/pet_art_preview.png`, `icon.png`,
+  `artwork.svg`): 32×32 creatures from shapes + a shared face kit (idle, bob, blink, happy, sad,
+  angry, eat, no), egg (3 frames), angel, 16×16 icons as ASCII grids. Drawn ×3 (home) / ×2 (lock).
+- Dotty: home = pet (walks about for 20 s after a touch, 1.5 s frames), poop 2×2, top bar Food ·
+  Light · Game · Medicine, bottom Clean · Meter · Discipline · bell (dark while calling). Screens:
+  Food (meal/snack, bites), Light, Game (5 rounds left/right, decided before you choose, dots per
+  round), Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
+  refuse, medicine, clean (duck), scold, hatch, evolve, game end; death = angel + age + cause, tap
+  for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake): small
+  clock + battery, pet ×2 top-right, alert icons under the clock, three big rows (hunger hearts,
+  happy hearts, discipline gauge 4×25 %), what it needs in a band (dark when action is needed).
+- It lives only while this cartridge runs: on boot `lastMinute = now` (power off / another
+  cartridge = paused). Saved as raw `State` in `data/pet.bin` (magic + size; bump
+  `kStateVersion` when the struct changes) on events/actions and every 10 min;
+  `data/history.tsv` per pet that died.
+- Sound: `AudioPlayer::playNotes` (dotty_core) synthesises square-wave tunes with a plucked
+  envelope (no files); tunes in main.cpp (call chirp, eat, happy, win/lose, evolve, hatch, poop,
+  sick, medicine, clean, scold, no, death, tap click). One chirp per call, never repeated;
+  locked + asleep: the codec is powered up for the chirp and down again. NVS `pet`: sound,
+  volume, quietFrom/quietTo (minutes; default 23:30–08:00 so bedtime calls still sound).
+- BLE: `pet.status` (species, stage, generation, age, weight, hunger, happy, discipline %,
+  mistakes, sick, poops, asleep, lightsOn, paused, calling, needs, died?, sound{}),
+  `pet.pause {on}`, `pet.sound {on?, volume?, quietFrom?, quietTo?}`, `pet.history`,
+  `pet.newEgg {force?}`; event `pet.changed`. App: `Features/Pet/PetView.swift`.
+- Dev keys: `F` fast-forward (~20 min/s, saved when stopped), `E` evolve now, `q w e r` / `z x c
+  v` = the eight functions (`p` is the shell's pairing preview, `k` lock).
+
 ## SD library + Wi-Fi fetch (launcher)
 
 - `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/firmware/<version>`

@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 
-// Streams an MP3 or WAV (16-bit PCM) file from the SD card to the speaker, and captures
-// the microphone. Decoding runs in its own FreeRTOS task, so slow e-paper refreshes on
+// Streams an MP3 or WAV (16-bit PCM) file from the SD card to the speaker, plays short
+// synthesised tunes (playNotes: chiptune-style beeps, no files), and captures the microphone. Decoding runs in its own FreeRTOS task, so slow e-paper refreshes on
 // the main loop never interrupt playback.
 class AudioPlayer {
  public:
@@ -18,6 +18,15 @@ class AudioPlayer {
   bool isPoweredUp() const { return !suspended_; }
 
   bool play(const char *path);  // .mp3 or .wav
+
+  // A short tune, synthesised on the fly: square waves with a plucked envelope (a soft
+  // piezo-like chirp). midi 0 = a rest. Replaces whatever was playing; isPlaying() until done.
+  struct Note {
+    uint8_t midi;
+    uint16_t ms;
+  };
+  static constexpr size_t kMaxNotes = 48;
+  bool playNotes(const Note *notes, size_t count);
   void stop();
   void togglePause();
   void setVolume(uint8_t percent);
@@ -43,6 +52,7 @@ class AudioPlayer {
   void writeSilence();
   bool openWav();
   void playWav();
+  void playSynth();
 
   TaskHandle_t task_ = nullptr;
   volatile bool playing_ = false;
@@ -59,4 +69,10 @@ class AudioPlayer {
   bool wav_ = false;
   uint8_t wavChannels_ = 1;
   uint32_t wavRemaining_ = 0;
+  // Synthesised notes.
+  bool synth_ = false;
+  Note notes_[kMaxNotes];
+  size_t noteCount_ = 0, noteIndex_ = 0;
+  uint32_t noteSamples_ = 0, noteDone_ = 0, phase_ = 0, phaseStep_ = 0;
+  uint8_t noteMidi_ = 0;
 };
