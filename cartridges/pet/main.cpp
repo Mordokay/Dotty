@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.1.1");
+DOTTY_CARTRIDGE("pet", "Pet", "0.1.2");
 
 namespace {
 
@@ -654,7 +654,6 @@ void act(Function f) {
   uint32_t events = 0;
   const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
   if (!alive && f != kMeter) return;
-  PLAY(kTuneTap);
   switch (f) {
     case kFood: screen = Screen::Food; break;
     case kLight: screen = Screen::Light; break;
@@ -715,6 +714,7 @@ void newEgg() {
 
 void onTap(uint16_t x, uint16_t y) {
   lastTouch = millis();
+  PLAY(kTuneTap);  // every tap clicks, like the original's buttons (actions then play their own)
   switch (screen) {
     case Screen::Home:
       if (pet::stage(state) == pet::Stage::Dead) {
@@ -752,7 +752,7 @@ void onTap(uint16_t x, uint16_t y) {
         } else {
           sound.on = !sound.on;
           saveSound();
-          PLAY(kTuneTap);
+          if (sound.on) PLAY(kTuneTap);
         }
         redraw = true;
       }

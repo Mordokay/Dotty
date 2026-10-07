@@ -676,7 +676,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `data/history.tsv` per pet that died.
 - Sound: `AudioPlayer::playNotes` (dotty_core) synthesises square-wave tunes with a plucked
   envelope (no files); tunes in main.cpp (call chirp, eat, happy, win/lose, evolve, hatch, poop,
-  sick, medicine, clean, scold, no, death, tap click). One chirp per call, never repeated;
+  sick, medicine, clean, scold, no, death, and a 14 ms click on every tap). One chirp per call, never repeated;
   locked + asleep: the codec is powered up for the chirp and down again. NVS `pet`: sound,
   volume, quietFrom/quietTo (minutes; default 23:30–08:00 so bedtime calls still sound).
 - BLE: `pet.status` (species, stage, generation, age, weight, hunger, happy, discipline %,
