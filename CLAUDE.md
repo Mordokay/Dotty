@@ -676,12 +676,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Animation (unlocked, home screen): a frame every second (`bobFrame`), per state: awake and fine
   = bob + wander every 4th frame; asleep = breathes (2 px) + Zzz drifts up-right; sick = shivers
   (±2 px) + skull bobs; a meter empty = sighs (3 px); discipline call = cross face / looking away;
-  egg wobbles; poop steams; the angel floats; paused = still.
+  egg wobbles; poop steams; the angel floats; paused = still. Asleep it animates every 2 s (a
+  calmer breath; the dark screen ghosts most). Animation frames use `shell::refresh(false, false)`
+  with a full refresh every minute (the shell's every-30 full refresh would flash every 30 s), and
+  an animation ending in the dark gets a full refresh (the user saw the speech bubble's ghost on
+  black); locked stays once a minute.
 - Refusals (play, food, medicine, clean, scold) play in the room as it is (dark with the light
   off; asleep it keeps sleeping, with its Zzz) and say why in a speech bubble: "Shh... sleeping",
-  "Too sick to play/eat", "I'm full!", "I'm not sick!", "Already clean!", "I did nothing!", "No!". Animation frames use
-  `shell::refresh(false, false)` with a full refresh every 120 (the shell's every-30 full refresh
-  would flash every 30 s); locked stays once a minute.
+  "Too sick to play/eat", "I'm full!", "I'm not sick!", "Already clean!", "I did nothing!", "No!".
 - Dotty: home = pet, poop 2×2, top bar Food ·
   Light · Game · Medicine, bottom Clean · Meter · Discipline · bell (dark while calling). Screens:
   Food (meal/snack, bites), Light, **Games** (a 2×3 menu: Left/Right, High/Low, Shells, Memory,
