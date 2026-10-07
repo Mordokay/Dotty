@@ -677,11 +677,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Sound: `AudioPlayer::playNotes` (dotty_core) synthesises square-wave tunes with a plucked
   envelope (no files); tunes in main.cpp (call chirp, eat, happy, win/lose, evolve, hatch, poop,
   sick, medicine, clean, scold, no, death, and a 14 ms click on every tap). One chirp per call, never repeated;
-  locked + asleep: the codec is powered up for the chirp and down again. NVS `pet`: sound,
-  volume, quietFrom/quietTo (minutes; default 23:30–08:00 so bedtime calls still sound).
+  locked + asleep: the codec is powered up for the chirp and down again. Three kinds, each with
+  a switch: clicks (taps), actions (what you do), alerts (what the pet does by itself); `sound`
+  mutes all (Meter screen or app); quiet hours mute only alerts (you're touching Dotty for the
+  others). NVS `pet`: sound, clicks, actions, alerts, volume, quietFrom/quietTo (minutes;
+  default 23:30–08:00 so bedtime calls still sound).
 - BLE: `pet.status` (species, stage, generation, age, weight, hunger, happy, discipline %,
   mistakes, sick, poops, asleep, lightsOn, paused, calling, needs, died?, sound{}),
-  `pet.pause {on}`, `pet.sound {on?, volume?, quietFrom?, quietTo?}`, `pet.history`,
+  `pet.pause {on}`, `pet.sound {on?, clicks?, actions?, alerts?, volume?, quietFrom?, quietTo?}`, `pet.history`,
   `pet.newEgg {force?}`; event `pet.changed`. App: `Features/Pet/PetView.swift`.
 - Dev keys: `F` fast-forward (~20 min/s, saved when stopped), `E` evolve now, `q w e r` / `z x c
   v` = the eight functions (`p` is the shell's pairing preview, `k` lock).

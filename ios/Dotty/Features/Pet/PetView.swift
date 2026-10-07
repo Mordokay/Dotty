@@ -15,7 +15,8 @@ struct PetView: View {
         var careMistakes = 0, disciplineMistakes = 0, poops = 0
         var sick = false, asleep = false, lightsOn = true, paused = false, calling = false
         var died: String?
-        var soundOn = true, volume = 60.0, quietFrom = 1410, quietTo = 480
+        var soundOn = true, clicks = true, actions = true, alerts = true
+        var volume = 60.0, quietFrom = 1410, quietTo = 480
     }
 
     struct Memory: Identifiable {
@@ -125,15 +126,15 @@ struct PetView: View {
 
     private func soundCard(_ s: Status) -> some View {
         GlassCard(title: "Sounds") {
-            Toggle(isOn: Binding(get: { s.soundOn }, set: { on in Task { await send("pet.sound", ["on": on]) } })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Chirps").font(.lpHeadline).foregroundStyle(Color.ink)
-                    Text("One chirp when it calls, also on the lock screen. Never repeated.")
-                        .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                }
+            soundToggle("Sound", "Everything Dotty plays for the pet. Also on its Meter screen.", s.soundOn, key: "on")
+            Group {
+                soundToggle("Button clicks", "A soft tick on every tap.", s.clicks, key: "clicks")
+                soundToggle("Action sounds", "Eating, the game, cleaning, medicine, scolding.", s.actions, key: "actions")
+                soundToggle("Alerts", "When it calls you, poops, gets sick, hatches or grows up. One chirp, never repeated, also when Dotty is locked.",
+                            s.alerts, key: "alerts")
             }
-            .toggleStyle(.light())
-            .padding(Spacing.m)
+            .disabled(!s.soundOn)
+            .opacity(s.soundOn ? 1 : 0.45)
             HStack {
                 Image(systemName: "speaker.wave.1").foregroundStyle(Color.inkMuted)
                 Slider(value: Binding(get: { s.volume }, set: { status?.volume = $0 }), in: 10...100) { editing in
@@ -142,17 +143,34 @@ struct PetView: View {
                 Image(systemName: "speaker.wave.3").foregroundStyle(Color.inkMuted)
             }
             .padding(.horizontal, Spacing.m)
-            HStack {
-                Text("Quiet from").font(.lpCallout).foregroundStyle(Color.ink)
-                Spacer()
-                DatePicker("", selection: timeBinding(\.quietFrom, key: "quietFrom"), displayedComponents: .hourAndMinute)
-                    .labelsHidden()
-                Text("to").font(.lpCallout).foregroundStyle(Color.ink)
-                DatePicker("", selection: timeBinding(\.quietTo, key: "quietTo"), displayedComponents: .hourAndMinute)
-                    .labelsHidden()
+            .disabled(!s.soundOn)
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                HStack {
+                    Text("Quiet from").font(.lpCallout).foregroundStyle(Color.ink)
+                    Spacer()
+                    DatePicker("", selection: timeBinding(\.quietFrom, key: "quietFrom"), displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                    Text("to").font(.lpCallout).foregroundStyle(Color.ink)
+                    DatePicker("", selection: timeBinding(\.quietTo, key: "quietTo"), displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                }
+                Text("Silences alerts. Clicks and action sounds still play while you're using Dotty.")
+                    .font(.lpCaption).foregroundStyle(Color.inkMuted)
             }
             .padding(Spacing.m)
         }
+    }
+
+    private func soundToggle(_ title: String, _ detail: String, _ on: Bool, key: String) -> some View {
+        Toggle(isOn: Binding(get: { on }, set: { value in Task { await send("pet.sound", [key: value]) } })) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.lpHeadline).foregroundStyle(Color.ink)
+                Text(detail).font(.lpCaption).foregroundStyle(Color.inkMuted)
+            }
+        }
+        .toggleStyle(.light())
+        .padding(.horizontal, Spacing.m)
+        .padding(.vertical, Spacing.s)
     }
 
     /// A minutes-of-the-day setting shown as a time picker.
@@ -211,6 +229,9 @@ struct PetView: View {
             s.died = r["died"] as? String
             if let sound = r["sound"] as? [String: Any] {
                 s.soundOn = sound["on"] as? Bool ?? true
+                s.clicks = sound["clicks"] as? Bool ?? true
+                s.actions = sound["actions"] as? Bool ?? true
+                s.alerts = sound["alerts"] as? Bool ?? true
                 s.volume = Double(sound["volume"] as? Int ?? 60)
                 s.quietFrom = sound["quietFrom"] as? Int ?? 1410
                 s.quietTo = sound["quietTo"] as? Int ?? 480

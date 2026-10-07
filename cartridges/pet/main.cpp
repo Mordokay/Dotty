@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.1.2");
+DOTTY_CARTRIDGE("pet", "Pet", "0.1.3");
 
 namespace {
 
@@ -91,8 +91,14 @@ void notifyChanged();  // the app's pet.changed event (below)
 
 AudioPlayer player;
 bool audioReady = false;
+// Three kinds, each with its own switch: clicks (every tap), actions (what you do: eating, the
+// game, cleaning…) and alerts (what the pet does by itself: calls, poop, sickness, hatching,
+// growing up, death). `on` mutes all of them; quiet hours mute only alerts, since clicks and
+// actions only happen while you're touching Dotty.
+enum class SoundKind { Click, Action, Alert };
 struct Sound {
   bool on = true;
+  bool clicks = true, actions = true, alerts = true;
   uint8_t volume = 60;
   uint16_t quietFrom = 23 * 60 + 30, quietTo = 8 * 60;  // minutes of the day; equal = never quiet
 } sound;
@@ -115,12 +121,15 @@ TUNE(kTuneNo, {65, 80}, {60, 140});
 TUNE(kTuneDeath, {72, 300}, {71, 300}, {69, 300}, {67, 300}, {65, 700});
 TUNE(kTuneTap, {96, 14});
 #undef TUNE
-#define PLAY(tune) playTune(tune, sizeof(tune) / sizeof(tune[0]))
+#define PLAY(kind, tune) playTune(SoundKind::kind, tune, sizeof(tune) / sizeof(tune[0]))
 
 void loadSound() {
   Preferences p;
   p.begin("pet", true);
   sound.on = p.getBool("sound", true);
+  sound.clicks = p.getBool("clicks", true);
+  sound.actions = p.getBool("actions", true);
+  sound.alerts = p.getBool("alerts", true);
   sound.volume = p.getUChar("volume", 60);
   sound.quietFrom = p.getUShort("quietFrom", sound.quietFrom);
   sound.quietTo = p.getUShort("quietTo", sound.quietTo);
@@ -131,6 +140,9 @@ void saveSound() {
   Preferences p;
   p.begin("pet", false);
   p.putBool("sound", sound.on);
+  p.putBool("clicks", sound.clicks);
+  p.putBool("actions", sound.actions);
+  p.putBool("alerts", sound.alerts);
   p.putUChar("volume", sound.volume);
   p.putUShort("quietFrom", sound.quietFrom);
   p.putUShort("quietTo", sound.quietTo);
@@ -148,10 +160,13 @@ bool quietNow() {
                                          : m >= sound.quietFrom || m < sound.quietTo;
 }
 
-// Plays a tune unless muted or in quiet hours. Locked and asleep, the codec is powered down:
-// wake it for the chirp, wait for it, and power it down again.
-void playTune(const AudioPlayer::Note *notes, size_t count) {
-  if (!audioReady || !sound.on || quietNow()) return;
+// Plays a tune unless muted (all sound, or this kind) or, for alerts, in quiet hours. Locked and
+// asleep, the codec is powered down: wake it for the chirp, wait for it, and power it down again.
+void playTune(SoundKind kind, const AudioPlayer::Note *notes, size_t count) {
+  if (!audioReady || !sound.on) return;
+  if (kind == SoundKind::Click && !sound.clicks) return;
+  if (kind == SoundKind::Action && !sound.actions) return;
+  if (kind == SoundKind::Alert && (!sound.alerts || quietNow())) return;
   const bool wasDown = !player.isPoweredUp();
   if (wasDown && !player.powerUp()) return;
   player.playNotes(notes, count);
@@ -165,12 +180,12 @@ void playTune(const AudioPlayer::Note *notes, size_t count) {
 
 // One sound for what just happened (the most important first).
 void soundFor(uint32_t events) {
-  if (events & pet::kDied) PLAY(kTuneDeath);
-  else if (events & pet::kHatched) PLAY(kTuneHatch);
-  else if (events & pet::kEvolved) PLAY(kTuneEvolve);
-  else if (events & pet::kGotSick) PLAY(kTuneSick);
-  else if (events & pet::kCalled) PLAY(kTuneCall);
-  else if (events & pet::kPooped) PLAY(kTunePoop);
+  if (events & pet::kDied) PLAY(Alert, kTuneDeath);
+  else if (events & pet::kHatched) PLAY(Alert, kTuneHatch);
+  else if (events & pet::kEvolved) PLAY(Alert, kTuneEvolve);
+  else if (events & pet::kGotSick) PLAY(Alert, kTuneSick);
+  else if (events & pet::kCalled) PLAY(Alert, kTuneCall);
+  else if (events & pet::kPooped) PLAY(Alert, kTunePoop);
 }
 
 String path(const char *name) {
@@ -628,16 +643,16 @@ void startAnim(Anim kind, int frames) {
   anim = {kind, 0, frames, millis() + kAnimFrameMs, false};
   switch (kind) {  // (hatching and evolving sound with their events)
     case Anim::Eat:
-    case Anim::Snack: PLAY(kTuneEat); break;
+    case Anim::Snack: PLAY(Action, kTuneEat); break;
     case Anim::Refuse:
     case Anim::Nothing:
-    case Anim::NoScold: PLAY(kTuneNo); break;
-    case Anim::Medicine: PLAY(kTuneMedicine); break;
-    case Anim::Clean: PLAY(kTuneClean); break;
-    case Anim::Scold: PLAY(kTuneScold); break;
+    case Anim::NoScold: PLAY(Action, kTuneNo); break;
+    case Anim::Medicine: PLAY(Action, kTuneMedicine); break;
+    case Anim::Clean: PLAY(Action, kTuneClean); break;
+    case Anim::Scold: PLAY(Action, kTuneScold); break;
     case Anim::GameEnd:
-      if (game.wins >= 3) PLAY(kTuneHappy);
-      else PLAY(kTuneLose);
+      if (game.wins >= 3) PLAY(Action, kTuneHappy);
+      else PLAY(Action, kTuneLose);
       break;
     default: break;
   }
@@ -693,8 +708,8 @@ void onGameTap(bool left) {
   if (!game.waiting) return;
   game.guessedLeft = left;
   game.lastWon = pet::roundWon(state, esp_random() & 0xF);
-  if (game.lastWon) PLAY(kTuneWin);
-  else PLAY(kTuneLose);
+  if (game.lastWon) PLAY(Action, kTuneWin);
+  else PLAY(Action, kTuneLose);
   if (game.lastWon) {
     game.wins++;
     game.results |= 1 << game.round;
@@ -714,7 +729,7 @@ void newEgg() {
 
 void onTap(uint16_t x, uint16_t y) {
   lastTouch = millis();
-  PLAY(kTuneTap);  // every tap clicks, like the original's buttons (actions then play their own)
+  PLAY(Click, kTuneTap);  // every tap clicks, like the original's buttons (actions then play their own)
   switch (screen) {
     case Screen::Home:
       if (pet::stage(state) == pet::Stage::Dead) {
@@ -752,7 +767,7 @@ void onTap(uint16_t x, uint16_t y) {
         } else {
           sound.on = !sound.on;
           saveSound();
-          if (sound.on) PLAY(kTuneTap);
+          if (sound.on) PLAY(Click, kTuneTap);
         }
         redraw = true;
       }
@@ -841,6 +856,9 @@ void registerCommands() {
     if (state.death != pet::Death::None) reply["died"] = deathName(state.death);
     JsonObject s = reply["sound"].to<JsonObject>();
     s["on"] = sound.on;
+    s["clicks"] = sound.clicks;
+    s["actions"] = sound.actions;
+    s["alerts"] = sound.alerts;
     s["volume"] = sound.volume;
     s["quietFrom"] = sound.quietFrom;
     s["quietTo"] = sound.quietTo;
@@ -851,9 +869,13 @@ void registerCommands() {
     redraw = true;
     notifyChanged();
   });
-  // {on?, volume?, quietFrom?, quietTo?} (minutes of the day; equal = no quiet hours)
+  // {on?, clicks?, actions?, alerts?, volume?, quietFrom?, quietTo?} (minutes of the day; equal
+  // = no quiet hours, which only mute alerts)
   ble::on("pet.sound", [](JsonObjectConst args, JsonObject) {
     sound.on = args["on"] | sound.on;
+    sound.clicks = args["clicks"] | sound.clicks;
+    sound.actions = args["actions"] | sound.actions;
+    sound.alerts = args["alerts"] | sound.alerts;
     sound.volume = constrain(args["volume"] | static_cast<int>(sound.volume), 0, 100);
     sound.quietFrom = constrain(args["quietFrom"] | static_cast<int>(sound.quietFrom), 0, 1439);
     sound.quietTo = constrain(args["quietTo"] | static_cast<int>(sound.quietTo), 0, 1439);
