@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.4.0");
+DOTTY_CARTRIDGE("pet", "Pet", "0.4.1");
 
 namespace {
 
@@ -79,6 +79,7 @@ struct AnimState {
   int frame = 0, frames = 0;
   uint32_t next = 0;
   bool flag = false;  // per animation (e.g. a game round won)
+  const char *says = "";  // a refusal's words, in a speech bubble
 } anim;
 
 // The games. Each is 5 rounds and ends the P1's way (pet::finishGame: 3+ wins = +1 happy,
@@ -706,8 +707,32 @@ void drawAnim() {
     }
     case Anim::Refuse:
     case Anim::Nothing:
-      drawPet(epd, art::kNo, x - 20 + (anim.frame % 2 ? 8 : -8), kPetY, kPetScale);
+    case Anim::NoScold: {
+      // A refusal, in the room as it is (dark with the light off; still asleep if it sleeps),
+      // with what it means in a speech bubble.
+      const bool dark = !state.lightsOn;
+      const uint16_t ink = dark ? kWhite : kBlack, paper = dark ? kBlack : kWhite;
+      if (dark) epd.fillRect(0, kPlayTop + 1, kW, kPlayBottom - kPlayTop - 2, kBlack);
+      const int16_t px = (kW - kPetPx) / 2, py = kPetY + 4;
+      if (state.asleep) {
+        drawPet(epd, art::kBlink, px, py + (anim.frame % 2 ? 2 : 0), kPetScale, false, ink);
+        drawIcon(epd, art::kZzzIcon, px + kPetPx - 6, py + 22, 2, ink);  // beside its head, clear of the bubble
+      } else {
+        drawPet(epd, art::kNo, px + (anim.kind == Anim::NoScold ? 0 : anim.frame % 2 ? 8 : -8), py, kPetScale,
+                false, ink);
+      }
+      epd.setFont(&FreeSansBold9pt7b);
+      const int16_t tw = ui::textWidth(epd, anim.says) + 20, bx = (kW - tw) / 2, by = kPlayTop + 4;
+      epd.fillRoundRect(bx, by, tw, 26, 13, paper);
+      epd.drawRoundRect(bx, by, tw, 26, 13, ink);
+      epd.drawRoundRect(bx + 1, by + 1, tw - 2, 24, 12, ink);
+      epd.fillTriangle(kW / 2 - 6, by + 24, kW / 2 + 6, by + 24, kW / 2 + 2, by + 32, ink);  // the tail
+      epd.setTextColor(ink);
+      epd.setCursor(bx + 10, by + 18);
+      epd.print(anim.says);
+      epd.setTextColor(kBlack);
       break;
+    }
     case Anim::Medicine:
       drawPet(epd, anim.frame == anim.frames - 1 ? (state.sick ? art::kSad : art::kHappy) : art::kSad, x, kPetY, kPetScale);
       if (anim.frame < anim.frames - 1) drawIcon(epd, art::kSyringeIcon, 10 + anim.frame * 14, kPetY + 10, 2);
@@ -722,12 +747,6 @@ void drawAnim() {
     case Anim::Scold:
       drawPet(epd, anim.frame == 0 ? art::kAngry : art::kSad, x - 20, kPetY, kPetScale);
       drawIcon(epd, art::kAttentionIcon, 14, kPetY + 10, 2);
-      break;
-    case Anim::NoScold:
-      drawPet(epd, art::kNo, x - 20, kPetY, kPetScale);
-      epd.setFont(&FreeSansBold18pt7b);
-      epd.setCursor(20, kPetY + 50);
-      epd.print("?");
       break;
     case Anim::GameEnd:
       drawPet(epd, game.wins >= 3 ? art::kHappy : art::kSad, x - 20, kPetY, kPetScale);
@@ -870,8 +889,15 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
 
 // ---------- actions ----------
 
-void startAnim(Anim kind, int frames) {
-  anim = {kind, 0, frames, millis() + kAnimFrameMs, false};
+// Why it won't eat (food) or play.
+const char *refusal(bool food) {
+  if (state.asleep) return "Shh... sleeping";
+  if (state.sick) return food ? "Too sick to eat" : "Too sick to play";
+  return "No!";
+}
+
+void startAnim(Anim kind, int frames, const char *says = "No!") {
+  anim = {kind, 0, frames, millis() + kAnimFrameMs, false, says};
   switch (kind) {  // (hatching and evolving sound with their events)
     case Anim::Eat:
     case Anim::Snack: PLAY(Action, kTuneEat); break;
@@ -904,20 +930,20 @@ void act(Function f) {
     case kFood: screen = Screen::Food; break;
     case kLight: screen = Screen::Light; break;
     case kGame:
-      if (!pet::canPlay(state)) return startAnim(Anim::Refuse, 3);
+      if (!pet::canPlay(state)) return startAnim(Anim::Refuse, 3, refusal(false));
       screen = Screen::GameMenu;
       break;
     case kMedicine:
-      if (!pet::medicine(state, events)) return startAnim(Anim::Nothing, 3);
+      if (!pet::medicine(state, events)) return startAnim(Anim::Nothing, 3, state.asleep ? "Shh... sleeping" : "I'm not sick!");
       save();
       return startAnim(Anim::Medicine, 3);
     case kClean:
-      if (!pet::clean(state)) return startAnim(Anim::Nothing, 3);
+      if (!pet::clean(state)) return startAnim(Anim::Nothing, 3, "Already clean!");
       save();
       return startAnim(Anim::Clean, 3);
     case kMeter: screen = Screen::Meter; break;
     case kDiscipline:
-      if (!pet::scold(state)) return startAnim(Anim::NoScold, 2);
+      if (!pet::scold(state)) return startAnim(Anim::NoScold, 3, state.asleep ? "Shh... sleeping" : "I did nothing!");
       save();
       return startAnim(Anim::Scold, 2);
     case kAttention: break;
@@ -929,7 +955,7 @@ void onFood(bool meal) {
   uint32_t events = 0;
   const bool ok = meal ? pet::feedMeal(state) : pet::feedSnack(state, events);
   pendingEvents |= events;
-  if (!ok) return startAnim(Anim::Refuse, 3);
+  if (!ok) return startAnim(Anim::Refuse, 3, meal && state.hunger >= 4 && !state.asleep && !state.sick ? "I'm full!" : refusal(true));
   save();
   startAnim(meal ? Anim::Eat : Anim::Snack, pet::info(state.species).bites + 1);
 }

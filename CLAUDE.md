@@ -676,7 +676,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Animation (unlocked, home screen): a frame every second (`bobFrame`), per state: awake and fine
   = bob + wander every 4th frame; asleep = breathes (2 px) + Zzz drifts up-right; sick = shivers
   (±2 px) + skull bobs; a meter empty = sighs (3 px); discipline call = cross face / looking away;
-  egg wobbles; poop steams; the angel floats; paused = still. Animation frames use
+  egg wobbles; poop steams; the angel floats; paused = still.
+- Refusals (play, food, medicine, clean, scold) play in the room as it is (dark with the light
+  off; asleep it keeps sleeping, with its Zzz) and say why in a speech bubble: "Shh... sleeping",
+  "Too sick to play/eat", "I'm full!", "I'm not sick!", "Already clean!", "I did nothing!", "No!". Animation frames use
   `shell::refresh(false, false)` with a full refresh every 120 (the shell's every-30 full refresh
   would flash every 30 s); locked stays once a minute.
 - Dotty: home = pet, poop 2×2, top bar Food ·
