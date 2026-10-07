@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.1.0");
+DOTTY_CARTRIDGE("pet", "Pet", "0.1.1");
 
 namespace {
 
@@ -553,61 +553,72 @@ void drawApp() {
 
 // ---------- lock screen: everything at a glance ----------
 
+// The user's layout: top half = the pet (x3) | its data (clock, name, stage, age, weight, and
+// what needs seeing as big icons); bottom half = the three meters as big rows.
 bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   advance();
   gfx.fillScreen(kWhite);
   gfx.setTextColor(kBlack);
   const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
-  // Top: a small clock and battery, the pet (x2) on the right, and under the clock whatever
-  // needs seeing as big icons (call, sickness, poop, light, sleep, pause).
+  const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
+                                                                                                          : art::kIdle;
+  // Top left: the pet.
+  drawPet(gfx, pose, 2, 2, 3);
+  // Top right: clock + battery, then who it is.
+  constexpr int16_t kX = 104;
   gfx.setFont(&FreeSansBold12pt7b);
   char clock[6];
   snprintf(clock, sizeof(clock), "%02d:%02d", info.time.tm_hour, info.time.tm_min);
-  gfx.setCursor(4, 21);
+  gfx.setCursor(kX, 20);
   gfx.print(info.timeValid ? clock : "--:--");
-  ui::drawBattery(gfx, 74, 6, info.batteryPercent, info.charging);
-  const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
-                                                                                                          : art::kIdle;
-  if (!alive) {  // an egg or a memory: just the picture, big
-    drawPet(gfx, pose, (kW - 96) / 2, 40, 3);
+  ui::drawBattery(gfx, kW - 2 - 29, 6, info.batteryPercent, info.charging);
+  gfx.setFont(&FreeSansBold9pt7b);
+  gfx.setCursor(kX, 44);
+  gfx.print(ui::fitText(gfx, speciesName(state.species), kW - kX - 2));
+  gfx.setFont(&FreeSans9pt7b);
+  gfx.setCursor(kX, 64);
+  if (!alive) {
+    gfx.print(state.species == pet::kEgg ? "Hatching soon" : "Passed away");
   } else {
-    drawPet(gfx, pose, kW - 66, 0, 2);
-    int16_t x = 2;
+    gfx.print("Age " + String(state.age) + "  " + String(state.weight) + " g");
+  }
+  if (alive) {
+    // What needs seeing, as big icons (or "All good").
+    int16_t x = kX - 2;
     auto add = [&](art::Icon icon) {
-      if (x > kW - 66 - 32) return;
-      drawIcon(gfx, icon, x, 28, 2);
-      x += 33;
+      if (x > kW - 32) return;
+      drawIcon(gfx, icon, x, 70, 2);
+      x += 32;
     };
     if (pet::calling(state)) add(art::kAttentionIcon);
     if (state.sick) add(art::kSkullIcon);
-    for (int i = 0; i < state.poops; i++) add(art::kPoopIcon);
+    if (state.poops) add(art::kPoopIcon);
     if (state.lightsCall) add(art::kBulbIcon);
     if (state.asleep) add(art::kZzzIcon);
     if (state.paused) add(art::kPauseIcon);
-    // The three meters, big, one per row: hunger and happiness in hearts, discipline as the
-    // P1's gauge (4 steps of 25 %).
+    if (x == kX - 2) {
+      gfx.setFont(&FreeSansBold9pt7b);
+      gfx.setCursor(kX, 92);
+      gfx.print(state.hunger == 0 ? "Hungry!" : state.happy == 0 ? "Bored!" : "All good");
+    }
+    // Bottom half: hunger, happiness, discipline (the P1's 4-step gauge).
     const struct { art::Icon icon; uint8_t value; int16_t y; } rows[] = {
-        {art::kFoodIcon, state.hunger, 66}, {art::kGameIcon, state.happy, 99}};
+        {art::kFoodIcon, state.hunger, 104}, {art::kGameIcon, state.happy, 136}};
     for (const auto &r : rows) {
       drawIcon(gfx, r.icon, 2, r.y, 2);
       for (int i = 0; i < 4; i++) drawIcon(gfx, i < r.value ? art::kHeartIcon : art::kHeartEmptyIcon, 40 + i * 40, r.y, 2);
     }
-    drawIcon(gfx, art::kDisciplineIcon, 2, 132, 2);
+    drawIcon(gfx, art::kDisciplineIcon, 2, 168, 2);
     const int filled = pet::disciplinePercent(state) / 25;
     for (int i = 0; i < 4; i++) {
       const int16_t bx = 42 + i * 40;
-      if (i < filled) gfx.fillRoundRect(bx, 138, 34, 22, 4, kBlack);
-      else gfx.drawRoundRect(bx, 138, 34, 22, 4, kBlack);
+      if (i < filled) gfx.fillRoundRect(bx, 173, 34, 22, 4, kBlack);
+      else gfx.drawRoundRect(bx, 173, 34, 22, 4, kBlack);
     }
+  } else {
+    gfx.setFont(&FreeSans9pt7b);
+    ui::drawCentered(gfx, "Unlock to look after it", 150);
   }
-  // What it needs, in words: a dark band when something needs doing.
-  const bool urgent = alive && !state.paused &&
-                      (pet::calling(state) || state.sick || state.hunger == 0 || state.happy == 0 || state.poops);
-  if (urgent) gfx.fillRoundRect(2, 168, kW - 4, 31, 8, kBlack);
-  gfx.setTextColor(urgent ? kWhite : kBlack);
-  gfx.setFont(&FreeSansBold12pt7b);
-  ui::drawCentered(gfx, needs(), 191);
-  gfx.setTextColor(kBlack);
   return false;
 }
 

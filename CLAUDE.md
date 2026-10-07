@@ -666,9 +666,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Food (meal/snack, bites), Light, Game (5 rounds left/right, decided before you choose, dots per
   round), Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
   refuse, medicine, clean (duck), scold, hatch, evolve, game end; death = angel + age + cause, tap
-  for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake): small
-  clock + battery, pet ×2 top-right, alert icons under the clock, three big rows (hunger hearts,
-  happy hearts, discipline gauge 4×25 %), what it needs in a band (dark when action is needed).
+  for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake), the user's
+  layout: top half = pet ×3 | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
+  skull, poop, bulb, Zzz, pause) or one word ("Hungry!", "Bored!", "All good"); bottom half =
+  three big rows: hunger hearts, happy hearts, discipline gauge (4 × 25 %), icons ×2.
 - It lives only while this cartridge runs: on boot `lastMinute = now` (power off / another
   cartridge = paused). Saved as raw `State` in `data/pet.bin` (magic + size; bump
   `kStateVersion` when the struct changes) on events/actions and every 10 min;
