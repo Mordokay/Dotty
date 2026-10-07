@@ -29,7 +29,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.2.1");
+DOTTY_CARTRIDGE("pet", "Pet", "0.2.2");
 
 namespace {
 
@@ -542,11 +542,32 @@ void drawAnim() {
       epd.setFont(&FreeSansBold9pt7b);
       ui::drawCentered(epd, String(game.wins) + " of 5" + (game.wins >= 3 ? " - happy!" : ""), kPlayBottom - 6);
       break;
+    case Anim::Hatch: {
+      // The egg cracks, its top tips off and falls to the side, and out comes the baby.
+      const int16_t cx = (kW - kPetPx) / 2;
+      auto shell = [&](int i, int16_t x) {
+        drawScaled(epd, art::kShell[i], art::kPetSize, art::kPetSize, x, kPetY, kPetScale, kBlack);
+      };
+      if (anim.frame == 0) {
+        drawScaled(epd, art::kEgg[2], art::kPetSize, art::kPetSize, cx, kPetY, kPetScale, kBlack);
+      } else if (anim.frame == 1) {
+        shell(0, cx);
+        shell(1, cx);
+      } else if (anim.frame == 2) {
+        shell(0, cx - 56);
+        shell(2, cx + 58);
+        drawPet(epd, art::kBlink, cx, kPetY, kPetScale);
+      } else {
+        drawPet(epd, art::kHappy, cx, kPetY, kPetScale);
+        epd.setFont(&FreeSansBold9pt7b);
+        ui::drawCentered(epd, "Hatched!", kPlayBottom - 6);
+      }
+      break;
+    }
     case Anim::Evolve:
-    case Anim::Hatch:
       drawPet(epd, anim.frame == 0 ? art::kBlink : art::kHappy, (kW - kPetPx) / 2, kPetY, kPetScale);
       epd.setFont(&FreeSansBold9pt7b);
-      ui::drawCentered(epd, anim.kind == Anim::Hatch ? "Hatched!" : "Grew up!", kPlayBottom - 6);
+      ui::drawCentered(epd, "Grew up!", kPlayBottom - 6);
       break;
     default:
       break;
@@ -621,13 +642,13 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
       drawIcon(gfx, r.icon, 2, r.y, 2);
       for (int i = 0; i < 4; i++) drawIcon(gfx, i < r.value ? art::kHeartIcon : art::kHeartEmptyIcon, 40 + i * 40, r.y, 2);
     }
+    // Discipline: one continuous bar, as on the Meter screen.
     drawIcon(gfx, art::kDisciplineIcon, 2, 168, 2);
-    const int filled = pet::disciplinePercent(state) / 25;
-    for (int i = 0; i < 4; i++) {
-      const int16_t bx = 42 + i * 40;
-      if (i < filled) gfx.fillRoundRect(bx, 173, 34, 22, 4, kBlack);
-      else gfx.drawRoundRect(bx, 173, 34, 22, 4, kBlack);
-    }
+    constexpr int16_t kBarX = 42, kBarW = kW - kBarX - 4;
+    gfx.drawRoundRect(kBarX, 172, kBarW, 24, 5, kBlack);
+    gfx.drawRoundRect(kBarX + 1, 173, kBarW - 2, 22, 4, kBlack);
+    const int16_t fill = (kBarW - 8) * pet::disciplinePercent(state) / 100;
+    if (fill > 0) gfx.fillRoundRect(kBarX + 4, 176, fill, 16, 3, kBlack);
   } else {
     gfx.setFont(&FreeSans9pt7b);
     ui::drawCentered(gfx, "Unlock to look after it", 150);
@@ -813,7 +834,7 @@ void showEvents() {
     goHome();
     fullRedraw = true;
   } else if (events & pet::kHatched) {
-    startAnim(Anim::Hatch, 2);
+    startAnim(Anim::Hatch, 4);
     fullRedraw = true;
   } else if (events & pet::kEvolved) {
     startAnim(Anim::Evolve, 2);

@@ -254,24 +254,44 @@ SPECIES = [("baby", baby), ("child", child), ("teenA", teen_a), ("teenB", teen_b
 # Where the face kit draws on an imported base (32-px grid: centre x, eye line y, eye gap, big
 # eyes). Tuned per picture once it's imported; these match the first drafts.
 FACE = {"baby": (16, 24, 3, False), "child": (16, 20, 4, False), "teenA": (16, 19, 5, False),
-        "teenB": (14, 18, 4, False), "adult1": (13, 13, 4, True), "adult2": (16, 15, 6, True),
-        "adult3": (16, 17, 5, True), "adult4": (16, 15, 7, True), "adult5": (20, 8, 3, False),
-        "adult6": (16, 17, 4, False), "secret": (16, 17, 5, False)}
+        "teenB": (14, 18, 4, False), "adult1": (13, 13, 4, True), "adult2": (16, 8, 4, True),
+        "adult3": (16, 14, 5, False), "adult4": (16, 14, 7, True), "adult5": (15, 6, 3, False),
+        "adult6": (16, 12, 5, False), "secret": (16, 13, 5, False), "angel": (17, 15, 4, False)}
+# Where Chompy's closed mouth goes (32-px grid), for the poses without its grin.
+MOUTH = {"adult4": (16, 22)}
 # Height of an imported picture on the 48-px canvas, so the stages keep their sizes.
 IMPORT_HEIGHT = {"baby": 22, "child": 30, "teenA": 38, "teenB": 38, "adult1": 46, "adult2": 46,
-                 "adult3": 46, "adult4": 44, "adult5": 46, "adult6": 44, "secret": 46, "egg": 42, "angel": 44}
+                 "adult3": 46, "adult4": 44, "adult5": 47, "adult6": 44, "secret": 46, "egg": 42, "angel": 44}
 
 
-def imported(key):
+# Edits to a source picture before it's shrunk: flood fills from seed points (in the source's
+# pixels) with black (0) or white (255). "default" applies to every pose; another variant on top.
+SRC_EDITS = {
+    "adult3": {"default": [((485, 585), 0), ((765, 585), 0)]},  # Masko: fill the mask's eye holes (ours go there)
+    "adult4": {"eat": [((620, 800), 0)],      # Chompy's own grin, filled black: eating
+               "closed": [((620, 940), 255)]},  # the grin erased: a straight mouth instead
+}
+
+
+def imported(key, variant="default"):
     """tools/pet_art_src/<key>.png as a 48x48 black-and-white base, or None."""
     src = SRC / f"{key}.png"
     if not src.exists():
         return None
     g = Image.open(src).convert("L")
+    edits = SRC_EDITS.get(key, {})
+    for seed, value in edits.get("default", []) + (edits.get(variant, []) if variant != "default" else []):
+        ImageDraw.floodfill(g, seed, value, thresh=100)
     ink = g.point(lambda v: 255 if v < 128 else 0)
     box = ink.getbbox()
     if not box:
         return None
+    return shrink(g, key, box)
+
+
+def shrink(g, key, box):
+    """A source picture (grey) → 48x48 black and white: `box` of it scaled to the stage's height,
+    the ink thickened first so lines come out ~2 px, stood on the bottom row."""
     g = g.crop(box)
     h = IMPORT_HEIGHT.get(key, 44)
     # Thicken the ink first so lines come out ~2 px, not a broken 1 px, after shrinking.
@@ -292,7 +312,10 @@ def creature(key_or_fn, pose):
     key = key_or_fn if isinstance(key_or_fn, str) else next(k for k, f in SPECIES if f is key_or_fn)
     draw_fn = dict(SPECIES)[key]
     base_pose = "idle" if pose == "bob" else pose
-    img = imported(key)
+    variant = "default"
+    if key == "adult4" and imported(key) is not None:  # Chompy's grin is part of its picture
+        variant = "eat" if base_pose == "eat" else "closed" if base_pose in ("sad", "angry", "no") else "default"
+    img = imported(key, variant)
     if img is not None:
         cx, cy, gap, big = FACE[key]
         d = ScaledDraw(img)
@@ -307,16 +330,11 @@ def creature(key_or_fn, pose):
                 d.line([(cx - 2, my), (cx + 2, my)], fill=0)
             else:
                 d.line([(cx - 2, my), (cx - 1, my + 1), (cx + 1, my + 1), (cx + 2, my)], fill=0)
-        elif key == "adult4":  # its giant grin is the face
+        elif key == "adult4":  # its own grin (open, filled when eating, gone when unhappy)
             face(d, cx, cy, gap, base_pose, big=big, mouth=False)
-            if base_pose == "eat":
-                d.ellipse([cx - 6, cy + 4, cx + 6, cy + 12], fill=0)
-            elif base_pose in ("sad", "angry", "no"):
-                d.line([(cx - 6, cy + 7), (cx + 6, cy + 7)], fill=0)
-            else:
-                d.chord([cx - 8, cy + 1, cx + 8, cy + 12], 0, 180, fill=0)
-                for x in (cx - 5, cx - 1, cx + 3):
-                    d.rectangle([x, cy + 7, x + 1, cy + 8], fill=1)
+            if variant == "closed":
+                mx, my = MOUTH["adult4"]
+                d.line([(mx - 6, my), (mx + 6, my)], fill=0, width=2)
         elif key == "secret":  # the moustache is in the picture: no mouth
             face(d, cx, cy, gap, base_pose, big=big, mouth=False)
         else:
@@ -353,9 +371,45 @@ def egg(frame):
     return img
 
 
+def shells():
+    """The hatching egg in pieces, on the egg's own grid: [bottom half, top half tipping off to
+    the right, top half fallen on its side]. Cut along the egg's zigzag."""
+    src = SRC / "egg.png"
+    if src.exists():
+        g = Image.open(src).convert("L")
+        box = g.point(lambda v: 255 if v < 128 else 0).getbbox()
+        # Each column splits at the middle of the dark run around the zigzag (rows 560-730).
+        line = []
+        for x in range(0, g.width, 2):
+            ys = [y for y in range(560, 730, 2) if g.getpixel((x, y)) < 128]
+            line.append((x, (min(ys) + max(ys)) // 2 if ys else 645))
+        mask = Image.new("L", g.size, 0)  # 255 = the top half
+        ImageDraw.Draw(mask).polygon([(0, 0), (g.width, 0)] + [(g.width, line[-1][1])] + line[::-1] + [(0, line[0][1])], fill=255)
+        white = Image.new("L", g.size, 255)
+        top = shrink(Image.composite(g, white, mask), "egg", box)
+        bottom = shrink(Image.composite(white, g, mask), "egg", box)
+    else:  # the first-draft egg: split at its band
+        whole = egg(0)
+        top, bottom = whole.copy(), whole.copy()
+        ImageDraw.Draw(top).rectangle([0, 26, N, N], fill=1)
+        ImageDraw.Draw(bottom).rectangle([0, 0, N, 25], fill=1)
+    ink = ImageOps.invert(top.convert("L")).getbbox()
+    pivot = (ink[2], ink[3])  # the top half's lower right corner: it tips over that edge
+    tipping = top.rotate(-28, resample=Image.NEAREST, center=pivot, fillcolor=1)
+    tipping = ImageOps.invert(ImageOps.invert(tipping.convert("L")).transform(
+        tipping.size, Image.AFFINE, (1, 0, -3, 0, 1, 3), resample=Image.NEAREST)).convert("1")
+    lying = top.rotate(-100, resample=Image.NEAREST, expand=True, fillcolor=1)
+    lying = lying.crop(ImageOps.invert(lying.convert("L")).getbbox())
+    fallen = Image.new("1", (N, N), 1)
+    fallen.paste(lying, ((N - lying.width) // 2, N - lying.height))  # on the ground
+    return [bottom, tipping, fallen]
+
+
 def angel():
     base = imported("angel")
     if base is not None:
+        cx, cy, gap, big = FACE["angel"]
+        face(ScaledDraw(base), cx, cy, gap, "blink", big=big)  # at peace
         return base
     img = Image.new("1", (N, N), 1)
     d = ScaledDraw(img)
@@ -729,7 +783,7 @@ def main():
             sheet.paste(img.resize((N * 3, N * 3), Image.NEAREST), (10 + pi * N * 3, 5 + si * (N * 3 + 10)))
         lines.append("  },")
     lines.append("};")
-    extra = [("kEgg", [egg(0), egg(1), egg(2)]), ("kAngel", [angel()])]
+    extra = [("kEgg", [egg(0), egg(1), egg(2)]), ("kShell", shells()), ("kAngel", [angel()])]
     row, col = len(SPECIES), 0
     for name, imgs in extra:
         lines.append(f"const uint8_t {name}[{len(imgs)}][{N * N // 8}] PROGMEM = {{")

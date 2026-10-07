@@ -664,7 +664,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   picture made with `docs/pet-art-prompts.md` in an image model: black lines on white, face
   empty; cropped to its ink, scaled to `IMPORT_HEIGHT`, thresholded, stood on the bottom row,
   face at `FACE` (32-px grid coords, tuned per picture); Masko gets white eyes in its mask,
-  Chompy its big grin, Sir Moss no mouth), else the first-draft shapes (32-px coordinates drawn
+  Chompy its own grin (`SRC_EDITS` flood fills: filled for eating, erased for the unhappy
+  poses, then a straight `MOUTH`), Sir Moss no mouth; all 13 pictures are the user's, 2026-10-07).
+  `shells()` cuts the egg along its zigzag (per column, the middle of the dark run) into
+  `kShell`: bottom, top tipping off (−28° about its lower right corner), top fallen (−100°). The
+  hatch animation: crack → top tips → shells on either side of the blinking baby → happy baby.
+  Else the first-draft shapes (32-px coordinates drawn
   ×1.5 by `ScaledDraw`). User's choice (2026-10-07): AI pictures for the designs, our face kit
   for the poses (an image model can't keep 8 poses consistent or produce a real pixel grid).
 - Dotty: home = pet (walks about for 20 s after a touch, 1.5 s frames), poop 2×2, top bar Food ·
@@ -675,7 +680,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake), the user's
   layout: top half = pet ×3 | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
   skull, poop, bulb, Zzz, pause) or one word ("Hungry!", "Bored!", "All good"); bottom half =
-  three big rows: hunger hearts, happy hearts, discipline gauge (4 × 25 %), icons ×2.
+  three big rows: hunger hearts, happy hearts, discipline as one continuous bar (as on the
+  Meter screen), icons ×2.
 - It lives only while this cartridge runs: on boot `lastMinute = now` (power off / another
   cartridge = paused). Saved as raw `State` in `data/pet.bin` (magic + size; bump
   `kStateVersion` when the struct changes) on events/actions and every 10 min;
