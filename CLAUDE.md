@@ -707,8 +707,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   mistakes, sick, poops, asleep, lightsOn, paused, calling, needs, died?, sound{}),
   `pet.pause {on}`, `pet.sound {on?, clicks?, actions?, alerts?, volume?, quietFrom?, quietTo?}`, `pet.history`,
   `pet.newEgg {force?}`; event `pet.changed`. App: `Features/Pet/PetView.swift`.
-- Icons: the thin outline ones (`BOLD_ICONS`: discipline, bell, bulb, syringe, duck, Zzz, empty
-  heart, meter) get 2-px strokes; detailed ones keep 1 px (thickened, the fork and ball blobbed).
+- Icons: the thin outline ones (`BOLD_ICONS`: bell, syringe, duck, Zzz, empty heart, meter) get
+  2-px strokes, the bulb only vertically (`BOLD_X_ICONS`, lighter); the discipline triangle
+  (a 2-px "!") and the Game icon (a ▶ in a ring: "play", also the happy row's icon) are drawn bold
+  in their grids; detailed ones keep 1 px (thickened, the fork and candy blobbed).
 - Dev keys: `F` fast-forward (~20 min/s, saved when stopped), `E` evolve now, `q w e r` / `z x c
   v` = the eight functions, in the game menu `a b c e f` pick a tile (`d` is the logger's
   replay key), `C` = a clap while listening (`p` is the shell's pairing preview, `k` lock).
