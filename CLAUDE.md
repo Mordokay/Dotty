@@ -673,7 +673,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Else the first-draft shapes (32-px coordinates drawn
   ×1.5 by `ScaledDraw`). User's choice (2026-10-07): AI pictures for the designs, our face kit
   for the poses (an image model can't keep 8 poses consistent or produce a real pixel grid).
-- Dotty: home = pet (walks about for 20 s after a touch, 1.5 s frames), poop 2×2, top bar Food ·
+- Animation (unlocked, home screen): a frame every second (`bobFrame`), per state: awake and fine
+  = bob + wander every 4th frame; asleep = breathes (2 px) + Zzz drifts up-right; sick = shivers
+  (±2 px) + skull bobs; a meter empty = sighs (3 px); discipline call = cross face / looking away;
+  egg wobbles; poop steams; the angel floats; paused = still. Animation frames use
+  `shell::refresh(false, false)` with a full refresh every 120 (the shell's every-30 full refresh
+  would flash every 30 s); locked stays once a minute.
+- Dotty: home = pet, poop 2×2, top bar Food ·
   Light · Game · Medicine, bottom Clean · Meter · Discipline · bell (dark while calling). Screens:
   Food (meal/snack, bites), Light, **Games** (a 2×3 menu: Left/Right, High/Low, Shells, Memory,
   Clap!, Surprise; every game is 5 rounds with a dot per round and ends with `pet::finishGame` —

@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.3.5");
+DOTTY_CARTRIDGE("pet", "Pet", "0.4.0");
 
 namespace {
 
@@ -45,8 +45,9 @@ constexpr int16_t kPlayTop = kBarH, kPlayBottom = kW - kBarH;
 constexpr int kPetScale = 2;  // 48 px art → 96 px
 constexpr int16_t kPetPx = art::kPetSize * kPetScale;
 constexpr int16_t kPetY = kPlayTop + (kPlayBottom - kPlayTop - kPetPx) / 2;
-constexpr uint32_t kIdleFrameMs = 1500;    // walking about after a touch…
-constexpr uint32_t kIdleForMs = 20000;     // …for this long, then it holds still (panel wear)
+constexpr uint32_t kIdleFrameMs = 1000;    // the home screen animates at 1 frame a second while unlocked
+constexpr int kAnimFullEvery = 120;        // animation frames skip the shell's every-30 full refresh
+                                           // (a flash every 30 s): one full refresh every 2 min instead
 constexpr uint32_t kAnimFrameMs = 700;     // animation frames (a partial refresh is ~0.6 s)
 constexpr uint32_t kSaveEveryMinutes = 10;
 
@@ -64,7 +65,10 @@ uint32_t pendingEvents = 0;  // since the screen last looked
 uint32_t lastTouch = 0;
 uint32_t nextIdleFrame = 0;
 int16_t petX = (kW - kPetPx) / 2;
-bool bobFrame = false;
+bool bobFrame = false;  // the animation's two frames, swapped every second
+int walkTick = 0;       // it wanders every few frames
+bool animFrame = false;  // this redraw is only an animation step
+int animPartials = 0;
 uint32_t lastSavedMinute = 0;
 bool fastForward = false;  // developer aid (serial F): a minute every pass
 
@@ -356,13 +360,30 @@ void drawPet(Adafruit_GFX &gfx, art::Pose pose, int16_t x, int16_t y, int scale,
   drawScaled(gfx, art::kPets[artIndex(state.species)][pose], art::kPetSize, art::kPetSize, x, y, scale, color, mirror);
 }
 
-// The pose that tells how it is right now.
-art::Pose moodPose() {
-  if (state.asleep) return art::kBlink;
-  if (state.sick) return art::kSad;
-  if (state.hunger == 0 || state.happy == 0) return art::kSad;
-  if (state.disciplineCall) return art::kAngry;
+// The pose that tells how it is right now, and how it moves (two frames, a second each):
+// asleep it breathes, sick it shivers, hungry or bored it sighs, misbehaving it alternates its
+// cross face with looking away, otherwise it bobs (and wanders: see stepAnimations).
+art::Pose moodPose(int16_t &dx, int16_t &dy) {
+  dx = dy = 0;
+  if (state.paused) return state.asleep ? art::kBlink : art::kIdle;  // time stands still
+  if (state.asleep) {
+    dy = bobFrame ? 2 : 0;
+    return art::kBlink;
+  }
+  if (state.sick) {
+    dx = bobFrame ? 2 : -2;
+    return art::kSad;
+  }
+  if (state.hunger == 0 || state.happy == 0) {
+    dy = bobFrame ? 3 : 0;
+    return art::kSad;
+  }
+  if (state.disciplineCall) return bobFrame ? art::kAngry : art::kNo;
   return bobFrame ? art::kBob : art::kIdle;
+}
+art::Pose moodPose() {
+  int16_t dx, dy;
+  return moodPose(dx, dy);
 }
 
 void drawHearts(Adafruit_GFX &gfx, int16_t x, int16_t y, uint8_t full, int scale = 1) {
@@ -403,8 +424,8 @@ void drawBars() {
 
 void drawHome() {
   epd.fillScreen(kWhite);
-  if (pet::stage(state) == pet::Stage::Dead) {  // the whole screen: the angel, then a new egg
-    drawPet(epd, art::kIdle, (kW - kPetPx) / 2, 12, kPetScale);
+  if (pet::stage(state) == pet::Stage::Dead) {  // the whole screen: the angel (floating), then a new egg
+    drawPet(epd, art::kIdle, (kW - kPetPx) / 2, bobFrame ? 8 : 14, kPetScale);
     epd.setFont(&FreeSansBold9pt7b);
     ui::drawCentered(epd, "Age " + String(state.age) + ", " + deathName(state.death), 140);
     epd.setFont(&FreeSans9pt7b);
@@ -420,14 +441,18 @@ void drawHome() {
     epd.setFont(&FreeSans9pt7b);
     ui::drawCentered(epd, "Lights off", kPlayTop + 64);
   } else {
-    drawPet(epd, moodPose(), petX, kPetY, kPetScale, false, ink);
+    int16_t dx, dy;
+    const art::Pose pose = moodPose(dx, dy);
+    drawPet(epd, pose, petX + dx, kPetY + dy, kPetScale, false, ink);
   }
   // Poop bottom-right, up to 4 (2 x 2).
   for (int i = 0; i < state.poops && !dark; i++) {
     drawIcon(epd, bobFrame ? art::kPoop2Icon : art::kPoopIcon, kW - 68 + (i % 2) * 34, kPlayBottom - 36 - (i / 2) * 34, 2, ink);
   }
-  if (state.asleep) drawIcon(epd, art::kZzzIcon, petX + kPetPx - 20, kPetY - 6, 2, ink);
-  if (state.sick) drawIcon(epd, art::kSkullIcon, 6, kPlayTop + 8, 2, ink);
+  // Zzz drifting up-right and back; the skull bobbing.
+  const bool moving = !state.paused && bobFrame;
+  if (state.asleep) drawIcon(epd, art::kZzzIcon, petX + kPetPx - 20 + (moving ? 5 : 0), kPetY - 6 - (moving ? 5 : 0), 2, ink);
+  if (state.sick) drawIcon(epd, art::kSkullIcon, 6, kPlayTop + 8 + (moving ? 3 : 0), 2, ink);
   if (state.paused) {
     epd.fillRect(0, kPlayBottom - 26, kW, 24, kBlack);
     epd.setTextColor(kWhite);
@@ -1240,11 +1265,18 @@ void stepAnimations() {
     }
   }
   stepGame();
-  // Walking about for a while after a touch.
-  if (screen == Screen::Home && now - lastTouch < kIdleForMs && now >= nextIdleFrame && !state.asleep) {
+  // The home screen's animation: a frame a second while unlocked (the egg wobbles, the pet
+  // bobs, breathes, shivers or sighs, poop steams, the angel floats); it wanders every 4th frame
+  // when it's awake and fine. Paused, everything holds still.
+  if (screen == Screen::Home && now >= nextIdleFrame && !state.paused) {
     nextIdleFrame = now + kIdleFrameMs;
     bobFrame = !bobFrame;
-    if (!bobFrame) petX = constrain(petX + static_cast<int>(esp_random() % 41) - 20, 6, kW - kPetPx - 40);
+    const bool fine = !state.asleep && !state.sick && state.hunger && state.happy && !state.disciplineCall &&
+                      pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
+    if (fine && ++walkTick % 4 == 0) {
+      petX = constrain(petX + static_cast<int>(esp_random() % 41) - 20, 6, kW - kPetPx - 40);
+    }
+    if (!redraw && !fullRedraw) animFrame = true;
     redraw = true;
   }
 }
@@ -1458,9 +1490,16 @@ void loop() {
 
   if ((redraw || fullRedraw) && !epd.isBusy()) {
     const bool full = fullRedraw;
-    redraw = fullRedraw = false;
+    const bool justAnimating = animFrame && !full;
+    redraw = fullRedraw = animFrame = false;
     drawApp();
-    shell::refresh(full);
+    if (justAnimating) {  // no flash every 30 frames: a full refresh every 2 minutes instead
+      const bool clean = ++animPartials >= kAnimFullEvery;
+      if (clean) animPartials = 0;
+      shell::refresh(clean, false);
+    } else {
+      shell::refresh(full);
+    }
   }
   delay(10);
 }
