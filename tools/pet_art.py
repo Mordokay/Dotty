@@ -737,13 +737,24 @@ ICONS = {
 }
 
 
+# The thin outline icons get 2-px strokes (as thick as the creatures' outlines): every ink pixel
+# also inks its right and lower neighbour. Icons with fine detail (the fork's tines, the ball's
+# pattern) keep their 1-px lines: thickened, they turned into blobs.
+BOLD_ICONS = {"discipline", "bell", "bulb", "syringe", "duck", "zzz", "heart_empty", "meter"}
+
+
 def icon(name):
     rows = [r for r in ICONS[name].strip("\n").split("\n")]
-    img = Image.new("1", (16, 16), 1)
+    ink = set()
     for y, row in enumerate(rows[:16]):
         for x, ch in enumerate(row[:16]):
             if ch == "#":
-                img.putpixel((x, y), 0)
+                ink.add((x, y))
+    if name in BOLD_ICONS:
+        ink |= {(x + 1, y) for x, y in ink if x < 15} | {(x, y + 1) for x, y in ink if y < 15}
+    img = Image.new("1", (16, 16), 1)
+    for p in ink:
+        img.putpixel(p, 0)
     return img
 
 

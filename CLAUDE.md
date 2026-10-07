@@ -674,8 +674,17 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   for the poses (an image model can't keep 8 poses consistent or produce a real pixel grid).
 - Dotty: home = pet (walks about for 20 s after a touch, 1.5 s frames), poop 2×2, top bar Food ·
   Light · Game · Medicine, bottom Clean · Meter · Discipline · bell (dark while calling). Screens:
-  Food (meal/snack, bites), Light, Game (5 rounds left/right, decided before you choose, dots per
-  round), Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
+  Food (meal/snack, bites), Light, **Games** (a 2×3 menu: Left/Right, High/Low, Shells, Memory,
+  Clap!, Surprise; every game is 5 rounds with a dot per round and ends with `pet::finishGame` —
+  3+ wins = +1 happy, −1 weight — so the 1996 rules stay; only how a round is won differs):
+  Left/Right = the P1's (decided at random before you choose, per-character odds); High/Low =
+  the P2's (1–9, the number carries over); Shells = the pet under one of 3 cups, 2–5 swaps shown
+  one per 1.1 s as a curved arrow between two cups (e-paper can't move them), tap the cup;
+  Memory = 4 quarters with icons + notes (C E G C), sequences of 3–7 shown 0.75 s each, repeat by
+  tapping; Clap! = Dotty beeps a rhythm (2–6 beats, gaps 0.5/1/1.5 s) and the microphone times
+  your claps (`player.startCapture(30)`, 10 ms blocks; the room's level over 0.3 s ×4, min 4000,
+  is the clap threshold; 150 ms between claps; done 1.8 s after the last): the count must match
+  and every gap be within ±35 % (min ±0.25 s); beats and claps drawn as two time-spaced rows. Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
   refuse, medicine, clean (duck), scold, hatch, evolve, game end; death = angel + age + cause, tap
   for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake), the user's
   layout: top half = pet ×3 | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
@@ -698,8 +707,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   mistakes, sick, poops, asleep, lightsOn, paused, calling, needs, died?, sound{}),
   `pet.pause {on}`, `pet.sound {on?, clicks?, actions?, alerts?, volume?, quietFrom?, quietTo?}`, `pet.history`,
   `pet.newEgg {force?}`; event `pet.changed`. App: `Features/Pet/PetView.swift`.
+- Icons: the thin outline ones (`BOLD_ICONS`: discipline, bell, bulb, syringe, duck, Zzz, empty
+  heart, meter) get 2-px strokes; detailed ones keep 1 px (thickened, the fork and ball blobbed).
 - Dev keys: `F` fast-forward (~20 min/s, saved when stopped), `E` evolve now, `q w e r` / `z x c
-  v` = the eight functions (`p` is the shell's pairing preview, `k` lock).
+  v` = the eight functions, in the game menu `a b c e f` pick a tile (`d` is the logger's
+  replay key), `C` = a clap while listening (`p` is the shell's pairing preview, `k` lock).
+  Rounds are logged ("Memory round 1: lost").
 
 ## SD library + Wi-Fi fetch (launcher)
 

@@ -12,6 +12,7 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Preferences.h>
 #include <SD_MMC.h>
@@ -29,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.2.2");
+DOTTY_CARTRIDGE("pet", "Pet", "0.3.1");
 
 namespace {
 
@@ -49,7 +50,7 @@ constexpr uint32_t kIdleForMs = 20000;     // …for this long, then it holds st
 constexpr uint32_t kAnimFrameMs = 700;     // animation frames (a partial refresh is ~0.6 s)
 constexpr uint32_t kSaveEveryMinutes = 10;
 
-enum class Screen { Home, Food, Light, Game, Meter, Anim };
+enum class Screen { Home, Food, Light, GameMenu, Game, Meter, Anim };
 enum Function { kFood, kLight, kGame, kMedicine, kClean, kMeter, kDiscipline, kAttention };
 const art::Icon kBarIcons[8] = {art::kFoodIcon,  art::kBulbIcon,  art::kGameIcon,       art::kSyringeIcon,
                                 art::kDuckIcon,  art::kMeterIcon, art::kDisciplineIcon, art::kBellIcon};
@@ -76,13 +77,42 @@ struct AnimState {
   bool flag = false;  // per animation (e.g. a game round won)
 } anim;
 
-// The game: 5 rounds of left or right.
+// The games. Each is 5 rounds and ends the P1's way (pet::finishGame: 3+ wins = +1 happy,
+// always -1 weight), so the rules stay the 1996 ones; only how a round is won differs.
+enum class GameKind : uint8_t { LeftRight, HigherLower, Shells, Memory, Clap, kCount };
+const char *const kGameNames[] = {"Left/Right", "High/Low", "Shells", "Memory", "Clap!"};
+enum class Phase : uint8_t { Show, Input, Result };  // watch, play, see how it went
 struct GameState {
+  GameKind kind = GameKind::LeftRight;
   int round = 0, wins = 0;
   uint8_t results = 0;  // bit per round: won
-  bool waiting = true;  // for the player's guess
-  bool lastWon = false, guessedLeft = false;
+  Phase phase = Phase::Input;
+  bool lastWon = false;
+  uint32_t next = 0;  // when the timed step (showing, the result) moves on
+  // Left or right
+  bool guessedLeft = false;
+  // Higher or lower (the P2's game)
+  uint8_t number = 5, nextNumber = 5;
+  bool guessedHigher = false;
+  // Shells: which cup hides the pet, and the swaps shown one by one
+  uint8_t petAt = 0, picked = 0;
+  uint8_t swaps[6][2] = {};
+  int swapCount = 0, swapIndex = -1;
+  // Memory: a sequence of quarters to repeat
+  uint8_t seq[8] = {};
+  int seqLen = 0, seqIndex = 0, inputIndex = 0;
+  int8_t lit = -1;
+  uint32_t litUntil = 0;
+  // Clap the rhythm: Dotty beeps a pattern, the microphone times your claps
+  uint8_t target = 0, claps = 0;  // beats in the pattern, claps heard
+  uint16_t beatAt[8] = {}, clapAt[8] = {};  // ms from the first beat / the first clap
+  uint16_t patternMs = 0;
+  bool listening = false, loud = false;
+  uint32_t listenStart = 0, lastClap = 0;
+  int32_t floorSum = 0;
+  int floorBlocks = 0, threshold = 0;
 } game;
+uint8_t hiloNumber = 5;  // Higher or lower carries its number over, as on the P2
 
 void notifyChanged();  // the app's pet.changed event (below)
 
@@ -466,30 +496,167 @@ void drawMeter() {
   epd.setTextColor(kBlack);
 }
 
+// The game menu: the five games and Surprise me, 2 x 3.
+void drawGameMenu() {
+  epd.fillScreen(kWhite);
+  nav::draw(epd, "Games", nav::Icon::Back, nav::Icon::None);
+  const int16_t top = nav::kHeight + 2, h = (kW - top) / 3;
+  epd.setFont(&FreeSansBold9pt7b);
+  for (int i = 0; i < 6; i++) {
+    const int16_t x = (i % 2) * 100, y = top + (i / 2) * h;
+    epd.drawRoundRect(x + 3, y + 3, 94, h - 6, 8, kBlack);
+    const char *label = i < 5 ? kGameNames[i] : "Surprise";
+    epd.setCursor(x + (100 - ui::textWidth(epd, label)) / 2, y + h / 2 + 6);
+    epd.print(label);
+  }
+}
+
+// Shells: a cup at one of three places, lifted (showing what's under it) or down.
+constexpr int16_t kCupY = 150;
+int16_t cupX(int i) { return 40 + i * 60; }
+void drawCup(int i, bool lifted) {
+  const int16_t cx = cupX(i), base = lifted ? kCupY - 34 : kCupY;
+  for (int d = 0; d < 2; d++) {  // a cup: a trapezoid, bottom wider, 2 px outline
+    epd.drawLine(cx - 16 + d, base - 34, cx - 22 + d, base, kBlack);
+    epd.drawLine(cx + 16 - d, base - 34, cx + 22 - d, base, kBlack);
+  }
+  epd.fillRect(cx - 16, base - 36, 33, 4, kBlack);
+  epd.fillRect(cx - 23, base - 1, 47, 4, kBlack);
+}
+
+// Memory: four quarters with an icon each; the lit one is dark.
+constexpr int16_t kQuadTop = 70;
+const art::Icon kQuadIcons[4] = {art::kHeartIcon, art::kBulbIcon, art::kSnackIcon, art::kDuckIcon};
+void drawQuads(int lit) {
+  const int16_t h = (kW - kQuadTop) / 2;
+  for (int q = 0; q < 4; q++) {
+    const int16_t x = (q % 2) * 100, y = kQuadTop + (q / 2) * h;
+    if (q == lit) epd.fillRoundRect(x + 3, y + 3, 94, h - 6, 10, kBlack);
+    else epd.drawRoundRect(x + 3, y + 3, 94, h - 6, 10, kBlack);
+    drawIcon(epd, kQuadIcons[q], x + 34, y + (h - 32) / 2, 2, q == lit ? kWhite : kBlack);
+  }
+}
+
 void drawGame() {
   epd.fillScreen(kWhite);
-  nav::draw(epd, "Left or right?", nav::Icon::Back, nav::Icon::None);
+  String title = kGameNames[static_cast<int>(game.kind)];
+  if (game.kind == GameKind::Memory) title = game.phase == Phase::Show ? "Watch..." : game.phase == Phase::Input ? "Your turn" : "Memory";
+  nav::draw(epd, title, nav::Icon::Back, nav::Icon::None);
   // Score: a dot per round, filled when won.
   for (int i = 0; i < 5; i++) {
-    const int16_t cx = kW / 2 - 40 + i * 20, cy = nav::kHeight + 14;
-    if (i < game.round) {  // played: filled when won
+    const int16_t cx = kW / 2 - 40 + i * 20, cy = nav::kHeight + 12;
+    if (i < game.round || (i == game.round && game.phase == Phase::Result)) {
       if (game.results & (1 << i)) epd.fillCircle(cx, cy, 6, kBlack);
       else epd.drawCircle(cx, cy, 6, kBlack);
     } else {
       epd.drawCircle(cx, cy, 3, kBlack);
     }
   }
-  const int16_t py = nav::kHeight + 28;
-  if (game.waiting) {
-    drawPet(epd, art::kIdle, (kW - kPetPx) / 2, py, kPetScale);
-    epd.setFont(&FreeSans9pt7b);
-    ui::drawCentered(epd, "Tap left or right", kW - 8);
-  } else {
-    // It looked one way: the same as the guess when the round was won.
-    const bool lookedLeft = game.lastWon ? game.guessedLeft : !game.guessedLeft;
-    drawPet(epd, game.lastWon ? art::kHappy : art::kNo, (kW - kPetPx) / 2, py, kPetScale, !lookedLeft);
-    epd.setFont(&FreeSansBold12pt7b);
-    ui::drawCentered(epd, game.lastWon ? "Yes!" : "No...", kW - 8);
+  const bool result = game.phase == Phase::Result;
+  const char *verdict = game.lastWon ? "Yes!" : "No...";
+  switch (game.kind) {
+    case GameKind::LeftRight: {
+      const int16_t py = nav::kHeight + 26;
+      if (!result) {
+        drawPet(epd, art::kIdle, (kW - kPetPx) / 2, py, kPetScale);
+        epd.setFont(&FreeSans9pt7b);
+        ui::drawCentered(epd, "Which way will it look?", kW - 8);
+      } else {  // it looked one way: the guessed one when the round was won
+        const bool lookedLeft = game.lastWon ? game.guessedLeft : !game.guessedLeft;
+        drawPet(epd, game.lastWon ? art::kHappy : art::kNo, (kW - kPetPx) / 2, py, kPetScale, !lookedLeft);
+        epd.setFont(&FreeSansBold12pt7b);
+        ui::drawCentered(epd, verdict, kW - 8);
+      }
+      break;
+    }
+    case GameKind::HigherLower: {
+      epd.setFont(&FreeSansBold24pt7b);
+      const String shown = result ? String(game.number) + "  " + String(game.nextNumber) : String(game.number);
+      ui::drawCentered(epd, shown, 128);
+      if (result) {
+        epd.setFont(&FreeSansBold12pt7b);
+        ui::drawCentered(epd, verdict, 180);
+      } else {
+        epd.setFont(&FreeSans9pt7b);
+        ui::drawCentered(epd, "Is the next one", 84);
+        epd.setFont(&FreeSansBold9pt7b);
+        for (int i = 0; i < 2; i++) {
+          const int16_t x = 8 + i * 96;
+          epd.drawRoundRect(x, 152, 88, 40, 20, kBlack);
+          epd.drawRoundRect(x + 1, 153, 86, 38, 19, kBlack);
+          const char *label = i ? "Higher" : "Lower";
+          epd.setCursor(x + (88 - ui::textWidth(epd, label)) / 2, 178);
+          epd.print(label);
+        }
+      }
+      if (result) {  // a little arrow between the two numbers
+        epd.fillTriangle(kW / 2 - 6, 106, kW / 2 + 6, 112, kW / 2 - 6, 118, kBlack);
+      }
+      break;
+    }
+    case GameKind::Shells: {
+      const bool showPet = game.phase == Phase::Show && game.swapIndex < 0;
+      for (int i = 0; i < 3; i++) {
+        const bool lifted = showPet ? i == game.petAt : result && (i == game.petAt || i == game.picked);
+        if (lifted && i == game.petAt) {
+          drawPet(epd, result && !game.lastWon ? art::kSad : art::kHappy, cupX(i) - 24, kCupY - 46, 1);
+        }
+        drawCup(i, lifted);
+      }
+      epd.setFont(&FreeSans9pt7b);
+      if (game.phase == Phase::Show && game.swapIndex >= 0) {  // the swap: a curved arrow between two cups
+        const int a = game.swaps[game.swapIndex][0], b = game.swaps[game.swapIndex][1];
+        const int16_t x0 = cupX(min(a, b)), x1 = cupX(max(a, b)), top = 82;
+        for (int d = 0; d < 3; d++) {
+          epd.drawLine(x0, 108 - d, x0 + 10, top - d, kBlack);
+          epd.drawLine(x0 + 10, top - d, x1 - 10, top - d, kBlack);
+          epd.drawLine(x1 - 10, top - d, x1, 108 - d, kBlack);
+        }
+        epd.fillTriangle(x0 - 6, 100, x0 + 6, 100, x0, 112, kBlack);
+        epd.fillTriangle(x1 - 6, 100, x1 + 6, 100, x1, 112, kBlack);
+        ui::drawCentered(epd, String(game.swapIndex + 1) + " of " + String(game.swapCount), kW - 6);
+      } else if (showPet) {
+        ui::drawCentered(epd, "Watch the cups!", kW - 6);
+      } else if (game.phase == Phase::Input) {
+        ui::drawCentered(epd, "Where is it?", kW - 6);
+      } else {
+        epd.setFont(&FreeSansBold12pt7b);
+        ui::drawCentered(epd, verdict, kW - 6);
+      }
+      break;
+    }
+    case GameKind::Memory:
+      drawQuads(game.lit);
+      if (result) {  // over the quarters: how it went
+        epd.fillRoundRect(40, 115, 120, 40, 12, kWhite);
+        epd.drawRoundRect(40, 115, 120, 40, 12, kBlack);
+        epd.setFont(&FreeSansBold12pt7b);
+        ui::drawCentered(epd, verdict, 143);
+      }
+      break;
+    case GameKind::Clap: {
+      drawPet(epd, result ? (game.lastWon ? art::kHappy : art::kSad) : game.listening ? art::kEat : art::kIdle,
+              (kW - 48) / 2, nav::kHeight + 18, 1);
+      epd.setFont(&FreeSansBold12pt7b);
+      ui::drawCentered(epd, result ? verdict : game.listening ? "Clap it back!" : "Listen...", 136);
+      // The rhythm as dots spaced by time: Dotty's beats, and under them your claps.
+      const uint16_t span = max<uint16_t>(game.patternMs, 1);
+      auto at = [&](uint16_t ms) { return static_cast<int16_t>(min<int>(20 + 160L * ms / span, kW - 8)); };
+      for (int i = 0; i < game.target; i++) epd.fillCircle(at(game.beatAt[i]), 154, 6, kBlack);
+      if (game.listening || result) {
+        for (int i = 0; i < game.claps && i < 8; i++) {
+          const int16_t x = at(game.clapAt[i]);
+          epd.fillRect(x - 5, 172, 11, 11, kBlack);
+        }
+        epd.setFont(&FreeSans9pt7b);
+        if (result && !game.lastWon) {
+          ui::drawCentered(epd, game.claps == game.target ? "Close! Mind the gaps" : String(game.claps) + " claps, " + String(game.target) + " beats", kW - 2);
+        }
+      }
+      break;
+    }
+    default:
+      break;
   }
 }
 
@@ -579,6 +746,7 @@ void drawApp() {
     case Screen::Home: drawHome(); break;
     case Screen::Food: drawChoice("Food", art::kMealIcon, "Meal", art::kSnackIcon, "Snack"); break;
     case Screen::Light: drawChoice("Light", art::kBulbIcon, "On", art::kZzzIcon, "Off"); break;
+    case Screen::GameMenu: drawGameMenu(); break;
     case Screen::Game: drawGame(); break;
     case Screen::Meter: drawMeter(); break;
     case Screen::Anim: drawAnim(); break;
@@ -693,8 +861,7 @@ void act(Function f) {
     case kLight: screen = Screen::Light; break;
     case kGame:
       if (!pet::canPlay(state)) return startAnim(Anim::Refuse, 3);
-      game = GameState();
-      screen = Screen::Game;
+      screen = Screen::GameMenu;
       break;
     case kMedicine:
       if (!pet::medicine(state, events)) return startAnim(Anim::Nothing, 3);
@@ -723,20 +890,250 @@ void onFood(bool meal) {
   startAnim(meal ? Anim::Eat : Anim::Snack, pet::info(state.species).bites + 1);
 }
 
-void onGameTap(bool left) {
-  if (!game.waiting) return;
-  game.guessedLeft = left;
-  game.lastWon = pet::roundWon(state, esp_random() & 0xF);
-  if (game.lastWon) PLAY(Action, kTuneWin);
-  else PLAY(Action, kTuneLose);
-  if (game.lastWon) {
+// ---------- the games ----------
+
+using N = AudioPlayer::Note;
+const N kQuadNotes[4][1] = {{{72, 320}}, {{76, 320}}, {{79, 320}}, {{84, 320}}};  // C E G C: one per quarter
+
+void quadTone(int q) {
+  playTune(SoundKind::Action, kQuadNotes[q], 1);
+}
+
+void stopListening() {
+  if (game.listening) player.stopCapture();
+  game.listening = false;
+}
+
+void endRound(bool won) {
+  LOGI("pet", "%s round %d: %s", kGameNames[static_cast<int>(game.kind)], game.round + 1, won ? "won" : "lost");
+  stopListening();
+  game.lastWon = won;
+  if (won) {
     game.wins++;
     game.results |= 1 << game.round;
+    PLAY(Action, kTuneWin);
+  } else {
+    PLAY(Action, kTuneLose);
   }
-  game.round++;
-  game.waiting = false;
-  anim.next = millis() + 1500;  // show the result, then the next round
+  game.phase = Phase::Result;
+  game.next = millis() + 1800;
   redraw = true;
+}
+
+// Sets up a round of the current game.
+void beginRound() {
+  const uint32_t now = millis();
+  game.phase = Phase::Input;
+  game.lit = -1;
+  switch (game.kind) {
+    case GameKind::LeftRight:
+      break;
+    case GameKind::HigherLower:
+      game.number = hiloNumber;
+      break;
+    case GameKind::Shells: {
+      static const int kSwaps[5] = {2, 3, 3, 4, 5};
+      game.petAt = esp_random() % 3;
+      game.swapCount = kSwaps[game.round];
+      for (int i = 0; i < game.swapCount; i++) {
+        const uint8_t a = esp_random() % 3;
+        game.swaps[i][0] = a;
+        game.swaps[i][1] = (a + 1 + esp_random() % 2) % 3;
+      }
+      game.swapIndex = -1;  // first, where it is
+      game.phase = Phase::Show;
+      game.next = now + 1800;
+      break;
+    }
+    case GameKind::Memory:
+      game.seqLen = 3 + game.round;  // 3 to 7
+      for (int i = 0; i < game.seqLen; i++) game.seq[i] = esp_random() % 4;
+      game.seqIndex = 0;
+      game.inputIndex = 0;
+      game.phase = Phase::Show;
+      game.next = now + 1000;
+      break;
+    case GameKind::Clap: {
+      // A pattern of 2 to 6 beats, 0.5 / 1 / 1.5 s apart, beeped now; then it listens.
+      static const uint16_t kGaps[3] = {500, 1000, 1500};
+      game.target = 2 + game.round;
+      game.claps = 0;
+      game.beatAt[0] = 0;
+      for (int i = 1; i < game.target; i++) game.beatAt[i] = game.beatAt[i - 1] + kGaps[esp_random() % 3];
+      game.patternMs = game.beatAt[game.target - 1];
+      static AudioPlayer::Note tune[16];
+      int n = 0;
+      tune[n++] = {0, 900};  // a moment to get ready
+      for (int i = 0; i < game.target; i++) {
+        tune[n++] = {88, 90};
+        if (i + 1 < game.target) tune[n++] = {0, static_cast<uint16_t>(game.beatAt[i + 1] - game.beatAt[i] - 90)};
+      }
+      playTune(SoundKind::Action, tune, n);
+      game.phase = Phase::Show;
+      game.next = now + 900 + game.patternMs + 700;
+      break;
+    }
+    default:
+      break;
+  }
+  redraw = true;
+}
+
+void startGame(GameKind kind) {
+  game = GameState();
+  game.kind = kind;
+  screen = Screen::Game;
+  beginRound();
+}
+
+// The claps match the pattern: as many, and each gap within 35 % (at least 0.25 s) of the beat's.
+bool rhythmMatches() {
+  if (game.claps != game.target) return false;
+  for (int i = 1; i < game.target; i++) {
+    const int want = game.beatAt[i] - game.beatAt[i - 1], got = game.clapAt[i] - game.clapAt[i - 1];
+    if (abs(got - want) > max(250, want * 35 / 100)) return false;
+  }
+  return true;
+}
+
+// The microphone, while listening for claps: one 10 ms block per call. A clap is a sharp
+// peak well above the room's own level (measured over the first 0.3 s), with a pause between
+// counts so a clap's echo isn't counted twice. Each clap's time is kept, from the first one.
+void listenForClaps() {
+  constexpr size_t kBlock = 320;  // 10 ms at 32 kHz
+  static int16_t samples[kBlock];
+  static uint32_t firstClap = 0;
+  const size_t got = player.capture(samples, kBlock);
+  int peak = 0;
+  for (size_t i = 0; i < got; i++) peak = max(peak, abs(static_cast<int>(samples[i])));
+  const uint32_t now = millis();
+  if (game.floorBlocks < 30) {  // the room's level first
+    game.floorSum += peak;
+    if (++game.floorBlocks == 30) game.threshold = max(4000, static_cast<int>(game.floorSum / 30) * 4);
+    return;
+  }
+  if (!game.loud && peak > game.threshold && now - game.lastClap > 150) {
+    game.loud = true;
+    if (game.claps == 0) firstClap = now;
+    if (game.claps < 8) game.clapAt[game.claps] = now - firstClap;
+    game.claps++;
+    game.lastClap = now;
+    redraw = true;
+  } else if (game.loud && peak < game.threshold / 2) {
+    game.loud = false;
+  }
+  // Done 1.8 s after the last clap, with too many claps, or after 6 s of silence.
+  if ((game.claps && now - game.lastClap > 1800) || game.claps > game.target + 2 ||
+      (!game.claps && now - game.listenStart > 6000)) {
+    endRound(rhythmMatches());
+  }
+}
+
+// Timed steps: showing the cups, the sequence, the clap prompt, and moving on after a result.
+void stepGame() {
+  if (screen != Screen::Game) return;
+  const uint32_t now = millis();
+  if (game.kind == GameKind::Memory && game.phase == Phase::Input && game.lit >= 0 && now >= game.litUntil) {
+    game.lit = -1;
+    redraw = true;
+  }
+  if (game.phase == Phase::Input && game.kind == GameKind::Clap && game.listening) {
+    listenForClaps();
+    return;
+  }
+  if (now < game.next) return;
+  if (game.phase == Phase::Result) {
+    if (game.kind == GameKind::HigherLower) hiloNumber = game.nextNumber;
+    if (++game.round >= 5) {
+      pet::finishGame(state, game.wins);
+      save();
+      startAnim(Anim::GameEnd, 3);
+    } else {
+      beginRound();
+    }
+    return;
+  }
+  if (game.phase != Phase::Show) return;
+  switch (game.kind) {
+    case GameKind::Shells:
+      if (game.swapIndex >= 0) {  // that swap happened: the pet moves with its cup
+        const uint8_t a = game.swaps[game.swapIndex][0], b = game.swaps[game.swapIndex][1];
+        if (game.petAt == a) game.petAt = b;
+        else if (game.petAt == b) game.petAt = a;
+      }
+      if (++game.swapIndex >= game.swapCount) {
+        game.phase = Phase::Input;
+      } else {
+        game.next = now + 1100;
+      }
+      redraw = true;
+      break;
+    case GameKind::Memory:
+      if (game.lit < 0) {  // light the next one
+        game.lit = game.seq[game.seqIndex];
+        quadTone(game.lit);
+        game.next = now + 750;
+      } else {
+        game.lit = -1;
+        if (++game.seqIndex >= game.seqLen) game.phase = Phase::Input;
+        game.next = now + 350;
+      }
+      redraw = true;
+      break;
+    case GameKind::Clap:
+      if (player.startCapture(30, 0)) {
+        game.listening = true;
+        game.phase = Phase::Input;
+        game.listenStart = now;
+        game.floorSum = game.floorBlocks = 0;
+        game.loud = false;
+        game.lastClap = 0;
+      } else {
+        endRound(false);
+      }
+      redraw = true;
+      break;
+    default:
+      break;
+  }
+}
+
+void onGameTap(uint16_t x, uint16_t y) {
+  if (game.phase != Phase::Input) return;
+  switch (game.kind) {
+    case GameKind::LeftRight:
+      game.guessedLeft = x < kW / 2;
+      endRound(pet::roundWon(state, esp_random() & 0xF));  // the P1's way: decided at random
+      break;
+    case GameKind::HigherLower: {
+      if (y < 140) return;
+      game.guessedHigher = x >= kW / 2;
+      do {
+        game.nextNumber = 1 + esp_random() % 9;
+      } while (game.nextNumber == game.number);
+      endRound(game.guessedHigher == (game.nextNumber > game.number));
+      break;
+    }
+    case GameKind::Shells:
+      if (y < 90) return;
+      game.picked = x < 70 ? 0 : x < 130 ? 1 : 2;
+      endRound(game.picked == game.petAt);
+      break;
+    case GameKind::Memory: {
+      if (y < kQuadTop) return;
+      const int q = (x < kW / 2 ? 0 : 1) + (y < kQuadTop + (kW - kQuadTop) / 2 ? 0 : 2);
+      LOGI("pet", "memory tap %d (wanted %d, %d of %d)", q, game.seq[game.inputIndex], game.inputIndex + 1, game.seqLen);
+      game.lit = q;
+      game.litUntil = millis() + 300;
+      quadTone(q);
+      if (q != game.seq[game.inputIndex]) endRound(false);
+      else if (++game.inputIndex >= game.seqLen) endRound(true);
+      redraw = true;
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 void newEgg() {
@@ -773,9 +1170,26 @@ void onTap(uint16_t x, uint16_t y) {
         goHome();
       }
       break;
+    case Screen::GameMenu:
+      if (y < nav::kHeight) {
+        if (nav::hit(x, y) == -1) goHome();
+        return;
+      }
+      {
+        const int16_t top = nav::kHeight + 2, h = (kW - top) / 3;
+        const int cell = (x < 100 ? 0 : 1) + 2 * min(2, (y - top) / h);
+        startGame(cell < 5 ? static_cast<GameKind>(cell) : static_cast<GameKind>(esp_random() % 5));
+      }
+      break;
     case Screen::Game:
-      if (y < nav::kHeight && nav::hit(x, y) == -1) return goHome();
-      onGameTap(x < kW / 2);
+      if (y < nav::kHeight) {
+        if (nav::hit(x, y) == -1) {
+          stopListening();
+          goHome();
+        }
+        return;
+      }
+      onGameTap(x, y);
       break;
     case Screen::Meter:
       if (y < nav::kHeight && nav::hit(x, y) == -1) return goHome();
@@ -806,16 +1220,7 @@ void stepAnimations() {
       redraw = true;
     }
   }
-  if (screen == Screen::Game && !game.waiting && now >= anim.next) {
-    if (game.round >= 5) {
-      pet::finishGame(state, game.wins);
-      save();
-      startAnim(Anim::GameEnd, 3);
-    } else {
-      game.waiting = true;
-      redraw = true;
-    }
-  }
+  stepGame();
   // Walking about for a while after a touch.
   if (screen == Screen::Home && now - lastTouch < kIdleForMs && now >= nextIdleFrame && !state.asleep) {
     nextIdleFrame = now + kIdleFrameMs;
@@ -997,6 +1402,7 @@ void loop() {
     LOGI("pet", "fast-forward %s", fastForward ? "on" : "off");
   }
   if (input.key == 'E') state.toEvolve = 1;
+  const bool menuWasOpen = screen == Screen::GameMenu;
   if (const char *k = input.key ? strchr("qwerzxcv", input.key) : nullptr) {
     lastTouch = millis();
     if (screen == Screen::Home) act(static_cast<Function>(k - "qwerzxcv"));
@@ -1012,7 +1418,22 @@ void loop() {
   }
 
   if (input.gesture == Touch::Gesture::Tap) onTap(shell::touch.x(), shell::touch.y());
-  if (input.boot && screen != Screen::Home && screen != Screen::Anim) goHome();
+  if (input.boot && screen != Screen::Home && screen != Screen::Anim) {
+    stopListening();
+    goHome();
+  }
+  // Developer aids in the games: a b c d e f pick a menu cell, C counts a clap.
+  if (menuWasOpen && screen == Screen::GameMenu && input.key >= 'a' && input.key <= 'f') {
+    const int cell = input.key - 'a';
+    startGame(cell < 5 ? static_cast<GameKind>(cell) : static_cast<GameKind>(esp_random() % 5));
+  }
+  if (screen == Screen::Game && game.listening && input.key == 'C' && game.claps < 8) {  // a clap
+    static uint32_t first = 0;
+    if (game.claps == 0) first = millis();
+    game.clapAt[game.claps++] = millis() - first;
+    game.lastClap = millis();
+    redraw = true;
+  }
   stepAnimations();
   if (screen == Screen::Home || screen == Screen::Anim) showEvents();
 
