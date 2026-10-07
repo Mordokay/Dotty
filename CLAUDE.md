@@ -687,7 +687,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   and every gap be within ±35 % (min ±0.25 s); beats and claps drawn as two time-spaced rows. Meter (age, weight, discipline bar, hearts, Pause + Sound buttons), animations for eat,
   refuse, medicine, clean (duck), scold, hatch, evolve, game end; death = angel + age + cause, tap
   for a new egg. Lock screen (`Config::lockScreen`, steps the engine each minute wake), the user's
-  layout: top half = pet ×3 | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
+  layout: top half = pet ×2 (a small padlock in its top-left corner, with a white edge: only Lumo's
+  ear reaches there) | clock + battery, name, "Age 3  12 g", then alert icons ×2 (call,
   skull, poop, bulb, Zzz, pause) or one word ("Hungry!", "Bored!", "All good"); bottom half =
   three big rows: hunger hearts, happy hearts, discipline as one continuous bar (as on the
   Meter screen), icons ×2.

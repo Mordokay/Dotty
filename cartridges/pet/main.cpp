@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.3.2");
+DOTTY_CARTRIDGE("pet", "Pet", "0.3.3");
 
 namespace {
 
@@ -764,8 +764,13 @@ bool drawPetLock(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   const bool alive = pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
   const art::Pose pose = state.asleep ? art::kBlink : (state.sick || state.hunger == 0 || state.happy == 0) ? art::kSad
                                                                                                           : art::kIdle;
-  // Top left: the pet.
+  // Top left: the pet, and in its corner a small padlock (with a white edge, so it reads even
+  // over Lumo's ear, the only drawing that reaches that far).
   drawPet(gfx, pose, 2, 2, 2);
+  gfx.fillRect(0, 0, 19, 22, kWhite);
+  gfx.fillRoundRect(2, 9, 15, 11, 2, kBlack);    // body
+  for (int d = 0; d < 2; d++) gfx.drawRoundRect(5 + d, 2 + d, 9 - 2 * d, 12, 4, kBlack);  // shackle
+  gfx.fillRect(9, 12, 2, 4, kWhite);             // keyhole
   // Top right: clock + battery, then who it is.
   constexpr int16_t kX = 104;
   gfx.setFont(&FreeSansBold12pt7b);
