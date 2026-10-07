@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.4.1");
+DOTTY_CARTRIDGE("pet", "Pet", "0.4.2");
 
 namespace {
 
@@ -45,9 +45,10 @@ constexpr int16_t kPlayTop = kBarH, kPlayBottom = kW - kBarH;
 constexpr int kPetScale = 2;  // 48 px art → 96 px
 constexpr int16_t kPetPx = art::kPetSize * kPetScale;
 constexpr int16_t kPetY = kPlayTop + (kPlayBottom - kPlayTop - kPetPx) / 2;
-constexpr uint32_t kIdleFrameMs = 1000;    // the home screen animates at 1 frame a second while unlocked
-constexpr int kAnimFullEvery = 120;        // animation frames skip the shell's every-30 full refresh
-                                           // (a flash every 30 s): one full refresh every 2 min instead
+constexpr uint32_t kIdleFrameMs = 1000;    // the home screen animates at 1 frame a second while unlocked…
+constexpr uint32_t kSleepFrameMs = 2000;   // …asleep every 2 s: a calmer breath, and the dark screen ghosts most
+constexpr uint32_t kAnimFullMs = 60000;    // animation frames skip the shell's every-30 full refresh (a
+                                           // flash every 30 s): a full refresh every minute instead
 constexpr uint32_t kAnimFrameMs = 700;     // animation frames (a partial refresh is ~0.6 s)
 constexpr uint32_t kSaveEveryMinutes = 10;
 
@@ -68,7 +69,7 @@ int16_t petX = (kW - kPetPx) / 2;
 bool bobFrame = false;  // the animation's two frames, swapped every second
 int walkTick = 0;       // it wanders every few frames
 bool animFrame = false;  // this redraw is only an animation step
-int animPartials = 0;
+uint32_t lastFullRefresh = 0;
 uint32_t lastSavedMinute = 0;
 bool fastForward = false;  // developer aid (serial F): a minute every pass
 
@@ -1285,6 +1286,7 @@ void stepAnimations() {
   if (screen == Screen::Anim && now >= anim.next) {
     if (++anim.frame >= anim.frames) {
       goHome();
+      if (!state.lightsOn) fullRedraw = true;  // the dark screen ghosts most: clear the bubble's ghost
     } else {
       anim.next = now + kAnimFrameMs;
       redraw = true;
@@ -1295,7 +1297,7 @@ void stepAnimations() {
   // bobs, breathes, shivers or sighs, poop steams, the angel floats); it wanders every 4th frame
   // when it's awake and fine. Paused, everything holds still.
   if (screen == Screen::Home && now >= nextIdleFrame && !state.paused) {
-    nextIdleFrame = now + kIdleFrameMs;
+    nextIdleFrame = now + (state.asleep ? kSleepFrameMs : kIdleFrameMs);
     bobFrame = !bobFrame;
     const bool fine = !state.asleep && !state.sick && state.hunger && state.happy && !state.disciplineCall &&
                       pet::stage(state) != pet::Stage::Dead && state.species != pet::kEgg;
@@ -1519,11 +1521,12 @@ void loop() {
     const bool justAnimating = animFrame && !full;
     redraw = fullRedraw = animFrame = false;
     drawApp();
-    if (justAnimating) {  // no flash every 30 frames: a full refresh every 2 minutes instead
-      const bool clean = ++animPartials >= kAnimFullEvery;
-      if (clean) animPartials = 0;
+    if (justAnimating) {  // no flash every 30 frames: a full refresh every minute instead
+      const bool clean = millis() - lastFullRefresh >= kAnimFullMs;
+      if (clean) lastFullRefresh = millis();
       shell::refresh(clean, false);
     } else {
+      if (full) lastFullRefresh = millis();
       shell::refresh(full);
     }
   }
