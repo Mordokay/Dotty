@@ -781,7 +781,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - GPIO17 (power latch) is `gpio_hold_en`'d for life; GPIO6/42/46 are held during sleep.
 - Power off on USB power: the latch can't cut power, so it deep-sleeps with PWR (ext0)
   as the wake source; waking is a fresh boot.
-- Battery voltage is logged every 10 minutes (`power: battery ... mV`) to measure drain.
+- Battery voltage is logged every 10 minutes (`power: battery ... mV`) to measure drain, and
+  appended to the SD card's `/logs/battery.tsv` (time, epoch, mV, smoothed, % shown, external, USB,
+  locked, cartridge, event: boot / off / empty) by every firmware, to fit the % curve to this
+  battery from a real discharge (2026-10-12: the generic curve showed 4-5 % at 3.57-3.61 V and Dotty
+  still ran over a day; ~6 mV/h locked). Serial `B` prints the file between `#BATTERY <size>` and
+  `#END`.
 - `battery.*` (no fuel gauge, no charge-status pin: STAT only lights the orange LED, and no
   GPIO sees VBUS — checked in the schematic): voltage EMA sampled every 5 s (every wake
   while locked); on battery the shown % only drops when a lower level lasts 1 min (load

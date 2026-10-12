@@ -4,6 +4,7 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 #include <Preferences.h>
+#include <SD_MMC.h>
 #include <Wire.h>
 
 #include "battery.h"
@@ -151,8 +152,11 @@ void unlock() {
   showApp();
 }
 
+void batteryLine(const char *event);  // below
+
 [[noreturn]] void powerOff() {
   LOGI("power", "power off");
+  batteryLine("off");
   cartridge::confirmHealthy();  // switched off on purpose: not a crash to roll back
   if (cfg.beforePowerOff) cfg.beforePowerOff();
   epd.fillScreen(EpdDisplay::kWhite);
@@ -369,19 +373,44 @@ void reportPreviousCrash() {
   free(summary);
 }
 
+// The battery's history on the SD card, to fit the voltage → percentage curve to this battery:
+// /logs/battery.tsv gets a line every 10 minutes, at boot, at power-off and when it's empty.
+// time (local) · epoch · mV now · mV smoothed · % shown · external power · USB host · locked ·
+// cartridge · event. A few bytes, appended; nothing happens without a card.
+void batteryLine(const char *event) {
+  if (SD_MMC.cardType() == CARD_NONE) return;
+  const bool fresh = !SD_MMC.exists("/logs/battery.tsv");
+  if (fresh) SD_MMC.mkdir("/logs");
+  File f = SD_MMC.open("/logs/battery.tsv", FILE_APPEND);
+  if (!f) return;
+  if (fresh) f.println("time\tepoch\tmv\tsmoothed\tpercent\texternal\tusb\tlocked\tcartridge\tevent");
+  const time_t now = time(nullptr);
+  tm t;
+  gmtime_r(&now, &t);  // the clock keeps local time
+  char when[20];
+  strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &t);
+  f.printf("%s\t%ld\t%lu\t%lu\t%u\t%d\t%d\t%d\t%s\t%s\n", when, static_cast<long>(now), battery::readMillivolts(),
+           battery::millivolts(), battery::percent(), battery::external(), power::usbHostConnected(), isLocked,
+           cartridge::self().id, event);
+  f.close();
+}
+
 void logBattery() {
   static uint32_t lastLog = 0;
   if (lastLog != 0 && millis() - lastLog < kBatteryLogIntervalMs) return;
+  const bool first = lastLog == 0;
   lastLog = millis();
   LOGI("power", "battery %lu mV now, %lu mV smoothed, %u%%%s%s", battery::readMillivolts(),
        battery::millivolts(), battery::percent(), battery::external() ? ", external power" : "",
        power::usbHostConnected() ? " (USB host)" : "");
+  batteryLine(first ? "boot" : "");
 }
 
 // The battery is flat: say so on the screen (the e-paper keeps it) and switch off. Dotty
 // stays off until it's charged; on battery the next PWR press shows this again.
 [[noreturn]] void batteryEmptyOff() {
   LOGW("power", "battery empty (%lu mV): switching off", battery::millivolts());
+  batteryLine("empty");
   cartridge::confirmHealthy();
   if (cfg.beforePowerOff) cfg.beforePowerOff();
   epd.waitBusy();
@@ -499,6 +528,18 @@ bool update(Input &input) {
   const char key = dlog::takeKey();
   if (key == 's') sendScreenshot();
   input.key = key == 's' ? 0 : key;
+  if (key == 'B' && HWCDC::isPlugged()) {  // developer aid: the battery log on the card, over serial
+    File f = SD_MMC.open("/logs/battery.tsv");
+    Serial.printf("#BATTERY %u\n", f ? static_cast<unsigned>(f.size()) : 0);
+    while (f && f.available()) {
+      uint8_t buf[256];
+      const size_t n = f.read(buf, sizeof(buf));
+      Serial.write(buf, n);
+      Serial.flush();
+    }
+    Serial.println("#END");
+    input.key = 0;
+  }
   if (key == 'k') {  // developer aid: serial k locks / unlocks (read here, before the locked branch)
     if (isLocked) unlock();
     else lock();

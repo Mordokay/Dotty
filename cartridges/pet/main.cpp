@@ -30,7 +30,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("pet", "Pet", "0.4.3");
+DOTTY_CARTRIDGE("pet", "Pet", "0.4.4");
 
 namespace {
 
