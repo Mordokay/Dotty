@@ -797,8 +797,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   apart; at −89 dBm the launcher's broke off after 80 s). The screen says "Download failed" when
   the catalog was read, and network errors in words ("The Wi-Fi let it down…"). Once (2026-10-14,
   after that failure, BLE connected) every HTTPS open failed at once for minutes, even at −42 dBm,
-  until a restart: `net` now logs the esp_err and the internal heap when an open fails — read it
-  if it recurs. Dev key `u`. The loop's order matters:
+  until a restart: `net` now logs the esp_err and the internal heap when an open fails. Cause
+  found with it: ESP_ERR_HTTP_CONNECT with 49.6 KB internal free, largest block 31.7 KB — BLE
+  connected plus the parsed catalog (~15 KB, internal: allocations < 16 KB stay internal) left
+  mbedTLS too little. 0.9.25 reads and parses the catalog in PSRAM (`PsramAllocator` for
+  ArduinoJson, a 64 KB PSRAM buffer) and frees it before the first download; the log says the
+  heap before downloading. Keep big buffers out of internal RAM in anything that opens HTTPS
+  with BLE up. Dev key `u`. The loop's order matters:
   open screens (Updates, calibration, Wi-Fi setup, picker) take their taps before the home
   buttons' hit tests (0.9.22 opened calibration from a tap on the Wi-Fi password field).
 - **Cartridge picker on Dotty** (no phone, no internet): tap the launcher's home screen ("BOOT:
