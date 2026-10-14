@@ -597,7 +597,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
     the first topics), NYT, Washington Post, NBC, ABC, CBS, NPR, Fox, Bloomberg, FT, Guardian,
     Al Jazeera, Sky, Euronews, TechCrunch, Ars, The Verge (Atom). Checked 2026-10-06: CNN's and
     WSJ's feeds stopped updating (2023 / early 2025), MSNBC's is empty (NBC's works), Reuters
-    and AP have none → keywords like `site:wsj.com` (headlines only).
+    and AP have none → keywords like `site:wsj.com` (headlines only). The Washington Post's
+    feeds went 502 on 2026-10-14 (its site doesn't answer either): its sections are now Google
+    News searches `site:washingtonpost.com/<section> when:1d` (a feed whose URL is Google News
+    is parsed like a keyword, source = the outlet). Check every feed with curl when one fails.
   - **Kagi News daily briefings** (key `c:<file>`, e.g. `formula_1.json`; ~188 categories, the
     app reads https://kite.kagi.com/kite.json itself): the day's ~12 big stories, each clustered
     from 40-60 outlets with an AI summary; once a day (~12:00 UTC). Files are 100-450 KB: saved
@@ -615,8 +618,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Fetch task (`news_store.*`, core 0, 12 KB) every 30 min (also locked: the loop runs at every
   minute wake, Network wake lock while fetching), 5 s after a topic add/remove, retry 10 min.
   RSS is parsed while streaming (`<item>` by `<item>`; CDATA, entities, tags stripped), stopping
-  after 20 items (Google's feeds are 130 KB); a topic keeps its 10 best stories ≤ 48 h old; a
-  topic whose feed fails keeps its old stories. Measured: 4 topics, 36 stories in 11 s.
+  after 20 items (Google's feeds are 130 KB); a topic keeps its 10 best stories ≤ 48 h old, only
+  ≤ 24 h when it has ≥ 3 of those (Google ranks by relevance: 40 h old stories topped topics); a
+  topic whose feed fails keeps its old stories, but nothing past 48 h is ever shown or carried
+  over (a dead feed used to keep its stories for days). Measured: 4 topics, 36 stories in 11 s.
+  Dotty fetches by itself (no app needed); the menu's top-left corner (↻) = sync now: a Sync
+  screen with "Joining Wi-Fi...", a bar by topics, "Last time: 6 min ago", then "Up to date / 100
+  stories" (2 s) or "Some topics failed" + the error (8 s); back leaves it fetching. Dev key `r`.
 - Ranking: score = feed position + 0.5 × hours old − 2 per extra topic carrying the same
   title (a big story); Favourites = starred topics (all if none starred), deduplicated.
 - Dotty: menu (★ Favourites + each topic with counts, 38 px rows, paged), story screen
@@ -629,7 +637,7 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   name, section|kagi|query, star, count}]}, `news.sections` (outlet feeds: {id, outlet, section,
   name}), `news.topic.add {section | kagi + name | query, name?, star?}`, `news.topic.remove {key}`, `news.topic.star {key, on}`, `news.topic.move
   {from, to}`, `news.refresh`, `news.stories {topic?, limit?}`; event `news.changed`. Dev key
-  `r` fetches now. App: `Features/News/NewsView.swift` (topics with ★ and a menu; "Add a
+  `r` = the sync corner. App: `Features/News/NewsView.swift` (topics with ★ and a menu; "Add a
   topic": Daily briefing / News outlet → `TopicPicker` sheet (search, several at once), keyword
   field; "Favourites on Dotty now").
 

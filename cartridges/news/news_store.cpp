@@ -16,7 +16,9 @@ namespace {
 
 constexpr int kScanItems = 20;          // read this many from each feed (then stop the download)
 constexpr int kPerTopic = 10;           // keep this many stories per topic
-constexpr uint32_t kMaxAge = 48 * 3600; // older stories are dropped
+constexpr uint32_t kMaxAge = 48 * 3600; // older stories are dropped (also from the screen)
+constexpr uint32_t kFreshAge = 24 * 3600;  // preferred: a topic with enough of these drops the rest
+constexpr int kEnoughFresh = 3;
 constexpr uint32_t kRefreshMs = 30 * 60 * 1000;
 constexpr uint32_t kRetryMs = 10 * 60 * 1000;
 constexpr uint32_t kAfterChangeMs = 5000;  // a topic change fetches soon (edits come in bursts)
@@ -27,8 +29,14 @@ constexpr const char *kKagiIndex = "https://kite.kagi.com/kite.json";
 // Outlets with working feeds (checked 2026-10-06: fresh, a summary on every story). CNN and
 // WSJ feeds stopped updating, Reuters and AP have none: they're reachable as keywords
 // (Google News, e.g. "site:wsj.com"), headlines only. The BBC ids stay short (the first topics).
+// The Washington Post's feeds (feeds.washingtonpost.com) answer 502 since 2026-10-14 and its
+// site doesn't answer at all: its sections are Google News searches of its pages (headlines
+// only, the last day).
 #define BBC "https://feeds.bbci.co.uk/news/"
 #define NYT "https://rss.nytimes.com/services/xml/rss/nyt/"
+#define WAPO(section)                                                                    \
+  "https://news.google.com/rss/search?q=site%3Awashingtonpost.com%2F" section "%20when%3A1d" \
+  "&hl=en-US&gl=US&ceid=US%3Aen"
 const std::vector<Feed> kFeeds = {
     {"top", "BBC", "Top stories", BBC "rss.xml"},
     {"world", "BBC", "World", BBC "world/rss.xml"},
@@ -49,9 +57,9 @@ const std::vector<Feed> kFeeds = {
     {"nyt-science", "NYT", "Science", NYT "Science.xml"},
     {"nyt-health", "NYT", "Health", NYT "Health.xml"},
     {"nyt-arts", "NYT", "Arts", NYT "Arts.xml"},
-    {"wapo-politics", "Washington Post", "Politics", "https://feeds.washingtonpost.com/rss/politics"},
-    {"wapo-world", "Washington Post", "World", "https://feeds.washingtonpost.com/rss/world"},
-    {"wapo-business", "Washington Post", "Business", "https://feeds.washingtonpost.com/rss/business"},
+    {"wapo-politics", "Washington Post", "Politics", WAPO("politics")},
+    {"wapo-world", "Washington Post", "World", WAPO("world")},
+    {"wapo-business", "Washington Post", "Business", WAPO("business")},
     {"nbc", "NBC News", "", "https://feeds.nbcnews.com/nbcnews/public/news"},
     {"abc", "ABC News", "Top stories", "https://abcnews.go.com/abcnews/topstories"},
     {"abc-world", "ABC News", "World", "https://abcnews.go.com/abcnews/internationalheadlines"},
@@ -81,6 +89,9 @@ const std::vector<Feed> kFeeds = {
 };
 #undef BBC
 #undef NYT
+#undef WAPO
+
+constexpr const char *kGoogleNews = "https://news.google.com/";
 
 const Feed *findFeed(const String &id) {
   for (const Feed &f : kFeeds) {
@@ -308,6 +319,8 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
     error = "unknown feed";
     return false;
   }
+  // Google News results (keywords, and outlets read through it): "Headline - Source".
+  const bool google = keyword || strncmp(feed->url, kGoogleNews, strlen(kGoogleNews)) == 0;
   auto takeItem = [&](const String &item) {
     const int position = seen++;
     Item it;
@@ -316,9 +329,9 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
     if (it.published && now > it.published && now - it.published > kMaxAge) return;
     it.position = position;
     it.title = tagText(item, "title");
-    if (keyword) {
+    if (google) {
       // Google News: "Headline - Source", the source also in <source>; no usable summary.
-      it.source = tagText(item, "source");
+      it.source = keyword ? tagText(item, "source") : String(feed->outlet);
       const int dash = it.title.lastIndexOf(" - ");
       if (dash > 0) {
         if (it.source.isEmpty()) it.source = it.title.substring(dash + 3);
@@ -329,7 +342,7 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
       const String description = tagText(item, "description");
       it.summary = shortSummary(description.length() ? description : tagText(item, "summary"));
     }
-    if (it.title.length() && static_cast<int>(items.size()) < kPerTopic) items.push_back(it);
+    if (it.title.length()) items.push_back(it);
   };
   const bool ok = net::download(
       feedUrl(topic),
@@ -357,6 +370,13 @@ bool fetchFeed(const Topic &topic, std::vector<Item> &items, String &error) {
       },
       nullptr, error);
   if (!ok && seen < kScanItems) return false;  // a real failure, not our early stop
+  // Today's news when there's enough of it: Google ranks by relevance and slow feeds reach
+  // back, so a 40-hour-old story could otherwise top a topic.
+  const auto stale = [&](const Item &it) { return it.published && now > it.published && now - it.published > kFreshAge; };
+  if (std::count_if(items.begin(), items.end(), [&](const Item &it) { return !stale(it); }) >= kEnoughFresh) {
+    items.erase(std::remove_if(items.begin(), items.end(), stale), items.end());
+  }
+  if (static_cast<int>(items.size()) > kPerTopic) items.resize(kPerTopic);
   error = "";
   return true;
 }
@@ -520,6 +540,13 @@ void fetchTask(void *) {
 }
 
 // ---------- the pool ----------
+
+// Past the 48 hours: hidden, and not carried over when its topic's feed fails (a feed that
+// stopped working used to keep its last stories on Dotty for days).
+bool tooOld(const Story &s) {
+  const uint32_t now = nowUtc();
+  return s.published && now > s.published && now - s.published > kMaxAge;
+}
 
 void scorePool() {
   const uint32_t now = nowUtc();
@@ -694,7 +721,7 @@ std::vector<const Story *> stories(const String &topicKey) {
     }
   }
   for (const Story &s : pool) {
-    if (std::find(keys.begin(), keys.end(), String(s.topic)) == keys.end()) continue;
+    if (tooOld(s) || std::find(keys.begin(), keys.end(), String(s.topic)) == keys.end()) continue;
     const bool dup = std::any_of(out.begin(), out.end(), [&](const Story *o) { return strcasecmp(o->title, s.title) == 0; });
     if (!dup) out.push_back(&s);
   }
@@ -703,7 +730,7 @@ std::vector<const Story *> stories(const String &topicKey) {
 }
 
 size_t storyCount() {
-  return pool.size();
+  return std::count_if(pool.begin(), pool.end(), [](const Story &s) { return !tooOld(s); });
 }
 
 const Story *lockStory(const tm &now) {
@@ -753,7 +780,7 @@ void startFetch() {
   for (size_t i = 0; i < fetchTopics.size(); i++) {
     const String key = fetchTopics[i].key();
     for (const Story &s : pool) {
-      if (key != s.topic) continue;
+      if (key != s.topic || tooOld(s)) continue;
       previousLines[i] += key + "\t" + String(s.published) + "\t" + String(s.position) + "\t" + s.source + "\t" +
                           s.title + "\t" + s.summary + "\n";
     }

@@ -3,7 +3,7 @@
 // the SD card so they can be read offline.
 //
 // Screens: the menu (★ Favourites = the starred topics together, then each topic with its
-// story count; paged) → a story (headline, source and age, the one-sentence summary; swipe
+// story count; paged; the top-left corner = sync now, with a progress screen) → a story (headline, source and age, the one-sentence summary; swipe
 // up/down scrolls, swipe left/right or BOOT = next/previous story; the "3/10" corner = next).
 // While locked, the lock screen shows a favourite headline that changes every 5 minutes.
 // Topics are managed in the app (news.topic.*).
@@ -26,7 +26,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("news", "News", "0.2.3");
+DOTTY_CARTRIDGE("news", "News", "0.2.4");
 
 namespace {
 
@@ -47,7 +47,7 @@ constexpr int16_t kRowH = 38;
 constexpr int kListRows = (EpdDisplay::kSize - nav::kHeight - 2) / kRowH;  // 4
 constexpr int kLockHeadlineLines = 3;  // + the source line = 4
 
-enum class Screen { Menu, Story, Message };
+enum class Screen { Menu, Story, Message, Sync };
 Screen screen = Screen::Menu;
 bool sdReady = false;
 bool redraw = true;
@@ -61,6 +61,14 @@ std::vector<const news::Story *> list;
 int storyIndex = 0;
 String shownTitle;  // to find the same story again after a reload
 int scrollLine = 0;
+
+// The sync screen: progress while the fetch runs, then how it went for a few seconds.
+constexpr uint32_t kSyncOkMs = 2000, kSyncProblemMs = 8000;
+String syncNote;          // why it couldn't start (no Wi-Fi, no topics), else ""
+bool syncDone = false;    // the fetch finished while the screen was open
+String syncError;         // that fetch's problem ("" = every topic came back)
+uint32_t syncDoneAt = 0;
+int syncShownDone = -1;   // the progress on screen (redraw when it moves)
 
 // ---------- menu rows ----------
 
@@ -98,12 +106,35 @@ std::vector<Line> storyLines(const news::Story &s) {
   return lines;
 }
 
+// Two arrows chasing each other round a circle: "sync now" (the menu's top-left corner).
+void drawSyncIcon(int16_t cx, int16_t cy, uint16_t color) {
+  auto at = [&](float degrees, float r, int16_t &x, int16_t &y) {
+    x = cx + lroundf(r * cosf(degrees * PI / 180));
+    y = cy + lroundf(r * sinf(degrees * PI / 180));
+  };
+  int16_t x, y, x1, y1, x2, y2;
+  for (int start : {200, 20}) {  // the top arc, then the bottom one, both clockwise
+    const float end = start + 120;
+    for (float d = start; d <= end; d += 2) {
+      for (float r = 7.5f; r <= 9.5f; r += 1) {
+        at(d, r, x, y);
+        epd.drawPixel(x, y, color);
+      }
+    }
+    at(end + 30, 8.5f, x, y);  // the arrow's tip, further round the circle
+    at(end, 3.5f, x1, y1);
+    at(end, 13.5f, x2, y2);
+    epd.fillTriangle(x, y, x1, y1, x2, y2, color);
+  }
+}
+
 void drawMenu() {
   epd.fillScreen(kWhite);
   const std::vector<MenuRow> rows = menuRows();
   const int pages = menuPages();
   menuPage = constrain(menuPage, 0, pages - 1);
   nav::draw(epd, "News", nav::Icon::None, nav::Icon::None, nav::pageLabel(menuPage, pages));
+  drawSyncIcon(nav::kButton / 2, nav::kHeight / 2, kWhite);
   epd.setFont(&FreeSans9pt7b);
   for (int row = 0; row < kListRows; row++) {
     const int i = menuPage * kListRows + row;
@@ -184,12 +215,62 @@ void drawMessage() {
   }
 }
 
+// "12 min ago" for the last good fetch (local time, like Dotty's clock).
+String fetchedAgo(uint32_t fetchedAt) {
+  const uint32_t now = time(nullptr);
+  if (!fetchedAt || now < fetchedAt) return "";
+  const uint32_t minutes = (now - fetchedAt) / 60;
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return String(minutes) + " min ago";
+  if (minutes < 48 * 60) return String(minutes / 60) + " h ago";
+  return String(minutes / 1440) + " days ago";
+}
+
+void drawSync() {
+  epd.fillScreen(kWhite);
+  nav::draw(epd, "Sync", nav::Icon::Back, nav::Icon::None);
+  const news::FetchState fetch = news::fetchState();
+  if (syncNote.length()) {
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, "Can't sync", 85);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawWrapped(epd, syncNote, 115, kW - 24, 3, 20);
+    return;
+  }
+  if (!syncDone) {
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, "Getting the news", 88);
+    // A bar by topics done.
+    constexpr int16_t kBarX = 20, kBarY = 104, kBarW = kW - 40, kBarH = 12;
+    epd.drawRoundRect(kBarX, kBarY, kBarW, kBarH, 3, kBlack);
+    const int16_t filled = fetch.total ? (kBarW - 4) * fetch.done / fetch.total : 0;
+    if (filled > 0) epd.fillRect(kBarX + 2, kBarY + 2, filled, kBarH - 4, kBlack);
+    epd.setFont(&FreeSans9pt7b);
+    // Joining Wi-Fi takes the first ~10 s, before any topic.
+    ui::drawCentered(epd, fetch.done ? String(fetch.done) + " of " + String(fetch.total) + " topics" : String("Joining Wi-Fi..."), 140);
+    if (fetch.fetchedAt) ui::drawCentered(epd, "Last time: " + fetchedAgo(fetch.fetchedAt), 166);
+    return;
+  }
+  epd.setFont(&FreeSansBold9pt7b);
+  if (syncError.isEmpty()) {
+    ui::drawCentered(epd, "Up to date", 95);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, String(news::storyCount()) + " stories", 125);
+    return;
+  }
+  ui::drawCentered(epd, "Some topics failed", 80);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawWrapped(epd, ui::printable(syncError), 108, kW - 24, 3, 20);
+  ui::drawCentered(epd, "The others are up to date", 180);
+}
+
 void drawApp() {
   if (screen == Screen::Message && news::storyCount()) screen = Screen::Menu;
   switch (screen) {
     case Screen::Menu: drawMenu(); break;
     case Screen::Story: drawStory(); break;
     case Screen::Message: drawMessage(); break;
+    case Screen::Sync: drawSync(); break;
   }
 }
 
@@ -211,6 +292,20 @@ void showStory(int index) {
   }
   scrollLine = 0;
   screen = Screen::Story;
+}
+
+// The menu's sync corner: fetch every topic now and watch it happen. Leaving the screen
+// doesn't stop the fetch.
+void openSync() {
+  syncNote = "";
+  syncDone = false;
+  syncError = "";
+  syncShownDone = -1;
+  if (net::saved().empty()) syncNote = "Dotty needs Wi-Fi to get the news. Add a network in the app.";
+  else if (news::topics().empty()) syncNote = "No topics yet. Add some in the app.";
+  else news::startFetch();
+  syncDoneAt = syncNote.length() ? millis() : 0;
+  screen = Screen::Sync;
 }
 
 void openList(const MenuRow &row) {
@@ -242,6 +337,7 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
       if (gesture == G::SwipeLeft || gesture == G::SwipeUp) menuPage = (menuPage + 1) % pages;
       else if (gesture == G::SwipeRight || gesture == G::SwipeDown) menuPage = (menuPage + pages - 1) % pages;
       else if (gesture != G::Tap) return;
+      else if (nav::hit(x, y) == -1) openSync();
       else if (nav::hit(x, y) == 1 && pages > 1) menuPage = (menuPage + 1) % pages;
       else if (y >= nav::kHeight + 2) {
         const std::vector<MenuRow> rows = menuRows();
@@ -263,6 +359,11 @@ void onGesture(Touch::Gesture gesture, uint16_t x, uint16_t y) {
       else if (nav::hit(x, y) == -1) screen = Screen::Menu;
       else if (nav::hit(x, y) == 1) showStory(storyIndex + 1);
       else return;
+      break;
+    case Screen::Sync:
+      // Back (or, once it's done, a tap anywhere) returns to the menu; the fetch carries on.
+      if (gesture != G::Tap || (nav::hit(x, y) != -1 && !syncDone && syncNote.isEmpty())) return;
+      screen = Screen::Menu;
       break;
     case Screen::Message:
       return;
@@ -445,6 +546,11 @@ void loop() {
     measureLockFit();
     refreshList();
     notifyChanged();
+    if (screen == Screen::Sync && syncNote.isEmpty()) {
+      syncDone = true;
+      syncError = news::fetchState().error;
+      syncDoneAt = millis();
+    }
     redraw = true;
   }
   if (!unlocked) return;
@@ -454,7 +560,28 @@ void loop() {
     showStory(storyIndex + 1);
     redraw = true;
   }
-  if (input.key == 'r') news::startFetch();  // developer aid: fetch now
+  if (input.boot && screen == Screen::Sync) {
+    screen = Screen::Menu;
+    redraw = true;
+  }
+  if (input.key == 'r') {  // developer aid: the sync corner
+    openSync();
+    redraw = true;
+  }
+
+  // The sync screen: follow the progress, then back to the menu after a moment.
+  if (screen == Screen::Sync) {
+    if (!syncDone && syncNote.isEmpty() && news::fetchState().done != syncShownDone) {
+      syncShownDone = news::fetchState().done;
+      redraw = true;
+    }
+    const uint32_t shownFor = syncNote.length() || syncError.length() ? kSyncProblemMs : kSyncOkMs;
+    if ((syncDone || syncNote.length()) && millis() - syncDoneAt > shownFor && syncDoneAt) {
+      screen = Screen::Menu;
+      syncDoneAt = 0;
+      redraw = true;
+    }
+  }
 
   // Fetch progress on the "no news yet" screen.
   static uint32_t lastProgress = 0;
