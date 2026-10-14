@@ -28,7 +28,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.4.11");
+DOTTY_CARTRIDGE("tape", "Tape Recorder", "0.4.12");
 
 namespace {
 

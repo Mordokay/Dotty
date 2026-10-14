@@ -1,5 +1,6 @@
 #include "touch.h"
 
+#include <Preferences.h>
 #include <Wire.h>
 
 #include "board_pins.h"
@@ -8,6 +9,12 @@
 namespace {
 
 constexpr uint32_t kLongPressMs = 900;
+
+float poly(const float *c, float u, float v) {
+  return c[0] + c[1] * u + c[2] * v + c[3] * u * v + c[4] * u * u + c[5] * v * v;
+}
+
+constexpr uint32_t kCalibrationMagic = 0x54430002;  // "TC" v2: the quadratic
 
 volatile bool interruptSeen = false;
 
@@ -26,7 +33,46 @@ uint8_t readRegs(uint8_t reg, uint8_t *buf, uint8_t len) {
 
 }  // namespace
 
+void Touch::setCalibration(const Calibration &cal, bool save) {
+  cal_ = cal;
+  if (!save) return;
+  Preferences p;
+  p.begin("touch", false);
+  p.clear();  // the straight-line keys of the first version
+  p.putULong("magic", kCalibrationMagic);
+  p.putBytes("cal", &cal_, sizeof(cal_));
+  p.end();
+  calibrated_ = true;
+  LOGI("touch", "calibration saved: x = %.2f %+.2fu %+.2fv %+.2fuv %+.2fu2 %+.2fv2, y = %.2f %+.2fu %+.2fv %+.2fuv %+.2fu2 %+.2fv2",
+       cal.x[0], cal.x[1], cal.x[2], cal.x[3], cal.x[4], cal.x[5], cal.y[0], cal.y[1], cal.y[2], cal.y[3], cal.y[4], cal.y[5]);
+}
+
+void Touch::toScreen(const Calibration &cal, uint16_t rawX, uint16_t rawY, float &x, float &y) {
+  const float u = (rawX - 100.0f) / 100, v = (rawY - 100.0f) / 100;
+  x = poly(cal.x, u, v);
+  y = poly(cal.y, u, v);
+  // At the clamp: halfway between where the clamp starts and the screen's edge.
+  if (rawX == 0) x = max(0.0f, poly(cal.x, -1.0f, v)) / 2;
+  if (rawX >= kRawMax) x = (min(float(kRawMax), poly(cal.x, (kRawMax - 100.0f) / 100, v)) + kRawMax) / 2;
+  if (rawY == 0) y = max(0.0f, poly(cal.y, u, -1.0f)) / 2;
+  if (rawY >= kRawMax) y = (min(float(kRawMax), poly(cal.y, u, (kRawMax - 100.0f) / 100)) + kRawMax) / 2;
+}
+
+void Touch::bands(const Calibration &cal, float &left, float &right) {
+  left = poly(cal.x, -1.0f, 0);
+  right = poly(cal.x, (kRawMax - 100.0f) / 100, 0);
+}
+
 bool Touch::begin() {
+  Preferences p;
+  if (p.begin("touch", true)) {
+    Calibration saved;
+    if (p.getULong("magic", 0) == kCalibrationMagic && p.getBytes("cal", &saved, sizeof(saved)) == sizeof(saved)) {
+      cal_ = saved;
+      calibrated_ = true;
+    }
+    p.end();
+  }
   pinMode(PIN_TP_INT, INPUT_PULLUP);
   attachInterrupt(PIN_TP_INT, onTouchInterrupt, FALLING);
   return wake();
@@ -68,11 +114,11 @@ Touch::Gesture Touch::poll() {
       longReported_ = false;
       moved_ = false;
       downAt_ = millis();
-      readPoint(x_, y_);
+      readPoint(x_, y_, true);
       lastX_ = x_;
       lastY_ = y_;
     } else {
-      readPoint(lastX_, lastY_);
+      readPoint(lastX_, lastY_, false);
       if (abs(lastX_ - x_) >= kSwipePx || abs(lastY_ - y_) >= kSwipePx) moved_ = true;
       if (!moved_ && !longReported_ && millis() - downAt_ >= kLongPressMs) {
         longReported_ = true;
@@ -103,9 +149,13 @@ uint8_t Touch::touchCount() {
   return count <= 2 ? count : 0;
 }
 
-void Touch::readPoint(uint16_t &x, uint16_t &y) {
+void Touch::readPoint(uint16_t &x, uint16_t &y, bool first) {
   uint8_t buf[4];
   if (readRegs(0x03, buf, sizeof(buf)) != sizeof(buf)) return;
-  x = (buf[0] & 0x0F) << 8 | buf[1];
-  y = (buf[2] & 0x0F) << 8 | buf[3];
+  const uint16_t rawX = (buf[0] & 0x0F) << 8 | buf[1], rawY = (buf[2] & 0x0F) << 8 | buf[3];
+  if (first) rawX_ = rawX, rawY_ = rawY;  // where it went down, like x()/y()
+  float sx, sy;
+  toScreen(cal_, rawX, rawY, sx, sy);
+  x = constrain(lroundf(sx), 0, kRawMax);
+  y = constrain(lroundf(sy), 0, kRawMax);
 }

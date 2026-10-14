@@ -29,9 +29,10 @@
 #include "transfer.h"
 #include "shell.h"
 #include "ui.h"
+#include "touch_calibration.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.20");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.21");
 
 namespace {
 
@@ -104,12 +105,13 @@ bool updateFailed() {
 // ---------- welcome (first steps after switching on, or a factory reset) ----------
 
 // Where setting Dotty up has got to: paired with a phone, on Wi-Fi, with a cartridge.
-enum class Setup { Welcome, WiFi, Cartridge, Ready };
+enum class Setup { Touch, Welcome, WiFi, Cartridge, Ready };
 
 int previewStage = -1;  // developer aid (serial key 'w'): show a welcome step as if it were real
 
 Setup setupStage() {
   if (previewStage >= 0) return static_cast<Setup>(previewStage);
+  if (!shell::touch.calibrated()) return Setup::Touch;  // the calibration screen comes first
   if (ble::bondCount() == 0) return Setup::Welcome;
   if (net::saved().empty()) return Setup::WiFi;
   if (!hasCartridge) return Setup::Cartridge;
@@ -120,9 +122,10 @@ String joiningSsid;           // wifi.add is joining this network right now
 String joinFailedSsid;        // …and couldn't: said for a moment
 uint32_t joinFailedUntil = 0;
 
-// The Wi-Fi button in the home screen's top-left corner (the battery is in the other one):
-// a fan of three arcs over a dot. A tap within kWifiTouch of the corner opens wifi_setup.
-constexpr int16_t kWifiTouch = 60;
+// The home screen's left edge, beside the firefly: the Wi-Fi button in the top corner (the
+// battery is in the other one), a fan of three arcs over a dot, opening wifi_setup; under it
+// the touch calibration's, a crosshair. Each takes taps a little beyond its icon.
+constexpr int16_t kWifiTouchH = 54, kButtonsTouchW = 50, kCalibrateTouchBottom = 100;
 
 void drawWifiButton() {
   const int16_t cx = 22, cy = 28;
@@ -137,7 +140,22 @@ void drawWifiButton() {
 }
 
 bool wifiButtonHit(uint16_t x, uint16_t y) {
-  return x < kWifiTouch && y < kWifiTouch;
+  return x < kButtonsTouchW + 10 && y < kWifiTouchH;
+}
+
+void drawCalibrateButton() {
+  const int16_t cx = 22, cy = 74;
+  epd.drawCircle(cx, cy, 9, kBlack);
+  epd.drawCircle(cx, cy, 8, kBlack);
+  epd.drawFastHLine(cx - 14, cy, 10, kBlack);
+  epd.drawFastHLine(cx + 5, cy, 10, kBlack);
+  epd.drawFastVLine(cx, cy - 14, 10, kBlack);
+  epd.drawFastVLine(cx, cy + 5, 10, kBlack);
+  epd.fillCircle(cx, cy, 1, kBlack);
+}
+
+bool calibrateButtonHit(uint16_t x, uint16_t y) {
+  return x < kButtonsTouchW && y >= kWifiTouchH && y < kCalibrateTouchBottom;
 }
 
 // The firefly, a friendly title and two short lines: no jargon.
@@ -147,6 +165,7 @@ void drawGreeting(const String &title, const String &line1, const String &line2)
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
   drawWifiButton();
+  drawCalibrateButton();
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, title, 146);
   epd.setFont(&FreeSans9pt7b);
@@ -201,6 +220,7 @@ void drawHome(const char *hint = nullptr) {
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
   drawWifiButton();
+  drawCalibrateButton();
 
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, "Dotty", 144);
@@ -942,6 +962,8 @@ void drawApp() {
     drawCardTransfer();
   } else if (askResetUntil) {
     drawResetQuestion();
+  } else if (job.stage == Stage::None && calibrate::active()) {
+    calibrate::draw();
   } else if (job.stage == Stage::None && wifisetup::active()) {
     wifisetup::draw();
   } else if (job.stage == Stage::None && pickerOpen) {
@@ -1036,6 +1058,17 @@ void setup() {
     p.remove("reason");
     p.end();
     loadUpdateResult();
+    shell::showApp();
+  });
+  // The touch calibration screen (the app's Settings).
+  ble::on("touch.calibrate", [](JsonObjectConst, JsonObject reply) {
+    if (job.stage != Stage::None || transfer::active()) {
+      reply["ok"] = false;
+      reply["error"] = "Dotty is busy";
+      return;
+    }
+    pickerOpen = false;
+    calibrate::open(false);
     shell::showApp();
   });
   ble::on("launcher.start", [](JsonObjectConst, JsonObject reply) {
@@ -1162,6 +1195,17 @@ void loop() {
       askResetUntil = 0;
       shell::showApp();
     }
+  } else if (calibrate::active()) {
+    if (calibrate::loop(input)) {
+      drawApp();
+      shell::refresh(false);
+    }
+    if (!calibrate::active()) shell::showApp();
+  } else if (input.key == 't' || setupStage() == Setup::Touch ||
+             (input.gesture == Touch::Gesture::LongPress && !pickerOpen) ||
+             (input.gesture == Touch::Gesture::Tap && !pickerOpen && calibrateButtonHit(shell::touch.x(), shell::touch.y()))) {
+    calibrate::open(setupStage() == Setup::Touch);  // serial t: developer aid
+    shell::showApp();
   } else if (wifisetup::active()) {
     // Partial refreshes while typing; taps during one are kept and drawn together next.
     if (wifisetup::loop(input)) {

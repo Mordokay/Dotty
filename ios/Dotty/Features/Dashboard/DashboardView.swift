@@ -11,6 +11,8 @@ struct DashboardView: View {
     /// The factory reset in progress (what it's doing), or its error.
     @State private var resetStage: String?
     @State private var resetError: String?
+    /// Opening the touch calibration on Dotty: what's happening, or what went wrong.
+    @State private var calibrateNote: String?
     @State private var showDesignSystem = false
     @State private var wifi: WiFiState?
 
@@ -71,6 +73,10 @@ struct DashboardView: View {
                                      action: { confirmForget = true })
                             LightRow(title: "Backups", subtitle: "Copy Dotty's SD card to this iPhone, or put a copy back",
                                      systemImage: "externaldrive", action: { path.append(Route.backups) })
+                            LightRow(title: "Calibrate touch",
+                                     subtitle: calibrateNote ?? "Tap a few targets on Dotty so every tap lands where you aim",
+                                     systemImage: "scope", action: { Task { await calibrateTouch() } })
+                                .needsDotty(link)
                             LightRow(title: "Factory reset", subtitle: "Erase everything and start fresh",
                                      systemImage: "arrow.counterclockwise.circle", action: { confirmReset = true })
                                 .needsDotty(link)
@@ -224,6 +230,18 @@ struct DashboardView: View {
         } catch {
             resetStage = nil
             resetError = "Couldn't start the factory reset: \(error.localizedDescription)"
+        }
+    }
+
+    /// The launcher's calibration screen (touch.calibrate); the tapping happens on Dotty.
+    private func calibrateTouch() async {
+        do {
+            calibrateNote = "Switching to the launcher…"
+            try await link.ensureLauncher()
+            try await link.send("touch.calibrate")
+            calibrateNote = "Now tap the crosses on Dotty"
+        } catch {
+            if !link.lostConnection(error) { calibrateNote = "Couldn't open it: \(error.localizedDescription)" }
         }
     }
 

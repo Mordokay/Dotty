@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#include "keyboard.h"
 #include "log.h"
 #include "nav_bar.h"
 #include "net.h"
@@ -23,60 +24,9 @@ constexpr uint16_t kWhite = EpdDisplay::kWhite;
 constexpr int16_t kRowH = 38;
 constexpr int kRows = (kW - nav::kHeight - 2) / kRowH;
 
-// The keyboard: 8 columns x 4 rows of 25 x 31 px keys under the nav bar and the password
-// field, like a phone's: letters first (QWERTY, each row's overflow moved down to the right
-// end of the row below), "123" for digits and punctuation, "#+=" for the rest of ASCII. Join
-// is the nav bar's right corner (as on the iPhone's Wi-Fi password screen). Shift is
-// one-shot; tapped twice in a row it locks (caps lock).
-constexpr int16_t kKeyW = 25, kKeyH = 31;
-constexpr int kCols = 8, kKeyRows = 4;
-constexpr int16_t kKeysTop = kW - 1 - kKeyRows * kKeyH;  // 75: the last row's bottom edge on the screen's last line
-constexpr int16_t kFieldTop = nav::kHeight + 3, kFieldH = kKeysTop - 3 - kFieldTop;
-constexpr uint32_t kCapsLockMs = 800;  // shift tapped again within this: caps lock
-
-enum class Kind : uint8_t { Char, Shift, Back, Space, Layer };
-enum Layer : uint8_t { kLetters, kNumbers, kSymbols };
-struct Key {
-  int8_t row, col, span;
-  Kind kind;
-  char ch;         // Char
-  Layer to;        // Layer: the page it opens
-  const char *label;
-};
-
-std::vector<Key> layout(Layer layer) {
-  std::vector<Key> keys;
-  auto chars = [&](int row, int col, const char *s) {
-    for (int i = 0; s[i]; i++) keys.push_back({int8_t(row), int8_t(col + i), 1, Kind::Char, s[i], kLetters, nullptr});
-  };
-  auto special = [&](int row, int col, int span, Kind kind, Layer to = kLetters, const char *label = nullptr) {
-    keys.push_back({int8_t(row), int8_t(col), int8_t(span), kind, 0, to, label});
-  };
-  if (layer == kLetters) {
-    chars(0, 0, "qwertyui");
-    chars(1, 0, "asdfghop");
-    chars(2, 0, "zxcvbjkl");
-    special(3, 0, 1, Kind::Shift);
-    chars(3, 1, "nm");
-    special(3, 3, 1, Kind::Layer, kNumbers, "123");
-  } else {
-    // Digits and the common punctuation; "#+=" has brackets, maths and the rare ones.
-    if (layer == kNumbers) {
-      chars(0, 0, "12345678");
-      chars(1, 0, "90-/:;()");
-    } else {
-      chars(0, 0, "[]{}#%^*");
-      chars(1, 0, "+=\\|<>~`");
-    }
-    chars(2, 0, "$&@\".,?!");
-    special(3, 0, 1, Kind::Layer, layer == kNumbers ? kSymbols : kNumbers, layer == kNumbers ? "#+=" : "123");
-    chars(3, 1, "'_");
-    special(3, 3, 1, Kind::Layer, kLetters, "ABC");
-  }
-  special(3, 4, 3, Kind::Space);
-  special(3, 7, 1, Kind::Back);
-  return keys;
-}
+// The password screen: the nav bar (back · network · "Join" in the right corner, as on the
+// iPhone's Wi-Fi password screen), the password field, the keyboard (keyboard.h).
+constexpr int16_t kFieldTop = nav::kHeight + 3, kFieldH = keyboard::kTop - 3 - kFieldTop;
 
 constexpr size_t kMaxPassword = 63;           // WPA2's longest passphrase
 
@@ -91,9 +41,6 @@ std::vector<net::Network> found;
 int page = 0;
 net::Network chosen;
 String password;
-Layer layer = kLetters;
-bool shift = false, capsLock = false;
-uint32_t shiftAt = 0;
 bool reveal = false;      // the whole password in plain text (tap the field)
 bool lastVisible = false; // the character just typed shows until the next key
 String error;
@@ -164,70 +111,6 @@ void drawList() {
   }
 }
 
-// A key's frame: neighbours share their 1 px border (the right edge stays on the screen).
-void keyFrame(const Key &k, bool dark) {
-  const int16_t x = k.col * kKeyW, y = kKeysTop + k.row * kKeyH, w = min<int16_t>(k.span * kKeyW + 1, kW - x);
-  if (dark) epd.fillRect(x, y, w, kKeyH + 1, kBlack);
-  else epd.drawRect(x, y, w, kKeyH + 1, kBlack);
-}
-
-// Centred across, on one baseline per row (so "g" and "y" don't jump about).
-void keyLabel(const Key &k, const String &label, bool dark) {
-  int16_t bx, by;
-  uint16_t bw, bh;
-  epd.getTextBounds(label, 0, 0, &bx, &by, &bw, &bh);
-  const int16_t cx = k.col * kKeyW + k.span * kKeyW / 2, baseline = kKeysTop + k.row * kKeyH + 21;
-  epd.setTextColor(dark ? kWhite : kBlack);
-  epd.setCursor(cx - bw / 2 - bx, baseline);
-  epd.print(label);
-  epd.setTextColor(kBlack);
-}
-
-void drawKeys() {
-  for (const Key &k : layout(layer)) {
-    const int16_t cx = k.col * kKeyW + k.span * kKeyW / 2, cy = kKeysTop + k.row * kKeyH + kKeyH / 2;
-    switch (k.kind) {
-      case Kind::Char:
-        keyFrame(k, false);
-        epd.setFont(&FreeSans9pt7b);
-        keyLabel(k, String(shift && isalpha(k.ch) ? static_cast<char>(toupper(k.ch)) : k.ch), false);
-        break;
-      case Kind::Shift: {  // an up arrow, dark while on; caps lock adds a bar under it
-        keyFrame(k, shift);
-        const uint16_t ink = shift ? kWhite : kBlack;
-        epd.fillTriangle(cx, cy - 8, cx - 8, cy, cx + 8, cy, ink);
-        epd.fillRect(cx - 3, cy, 7, 5, ink);
-        if (capsLock) epd.fillRect(cx - 5, cy + 7, 11, 2, ink);
-        break;
-      }
-      case Kind::Back:  // an arrow-shaped tag pointing left with a cross in it
-        keyFrame(k, false);
-        epd.drawLine(cx - 9, cy, cx - 4, cy - 5, kBlack);
-        epd.drawLine(cx - 9, cy, cx - 4, cy + 5, kBlack);
-        epd.drawFastHLine(cx - 4, cy - 5, 13, kBlack);
-        epd.drawFastHLine(cx - 4, cy + 5, 13, kBlack);
-        epd.drawFastVLine(cx + 9, cy - 5, 11, kBlack);
-        epd.drawLine(cx - 1, cy - 2, cx + 4, cy + 3, kBlack);
-        epd.drawLine(cx - 1, cy + 2, cx + 4, cy - 3, kBlack);
-        break;
-      case Kind::Space:  // a bracket lying down
-        keyFrame(k, false);
-        epd.drawFastHLine(cx - 16, cy + 4, 33, kBlack);
-        epd.drawFastVLine(cx - 16, cy + 1, 3, kBlack);
-        epd.drawFastVLine(cx + 16, cy + 1, 3, kBlack);
-        break;
-      case Kind::Layer:  // "123" / "ABC" / "#+=": the small built-in font fits 25 px
-        keyFrame(k, true);
-        epd.setFont(nullptr);
-        epd.setTextColor(kWhite);
-        epd.setCursor(cx - 8, cy - 3);
-        epd.print(k.label);
-        epd.setTextColor(kBlack);
-        break;
-    }
-  }
-}
-
 // An eye at the field's right end (tap the field to show or hide the password).
 void drawEye(int16_t cx, int16_t cy, bool open) {
   for (int dx = -8; dx <= 8; dx++) {
@@ -275,7 +158,7 @@ void drawKeyboard() {
   }
   // The "Password" placeholder shows the cursor at the start.
   if (password.isEmpty()) epd.fillRect(10, baseline - 13, 2, 16, kBlack);
-  drawKeys();
+  keyboard::draw();
 }
 
 void drawMessage(const String &title, const String &line, const String &hint) {
@@ -292,11 +175,6 @@ void drawMessage(const String &title, const String &line, const String &hint) {
 
 // ---------- actions ----------
 
-void typeKey(char c) {
-  if (password.length() >= kMaxPassword) return;
-  password += c;
-  lastVisible = true;
-}
 
 void join() {
   if (chosen.secure && password.length() < 8) {
@@ -311,8 +189,7 @@ void join() {
 void choose(const net::Network &n) {
   chosen = n;
   password = "";
-  layer = kLetters;
-  shift = capsLock = false;
+  keyboard::reset();
   reveal = false;
   lastVisible = false;
   if (n.secure) go(Step::Keyboard);
@@ -345,60 +222,27 @@ void loopList(const shell::Input &input) {
 
 void loopKeyboard(const shell::Input &input) {
   if (input.boot) return go(Step::List);
-  // Developer aid: letters from the serial monitor type, ^ = shift, # = next page, = joins (the shell keeps
-  // 1-9 etc.).
+  // Developer aid: letters from the serial monitor type, ^ = shift, # = next page, = joins (the
+  // shell keeps 1-9 etc.).
   if (input.key == '=') return join();
-  if (input.key == '^') shift = !shift, dirty = true;
-  if (input.key == '#') layer = static_cast<Layer>((layer + 1) % 3), dirty = true;
-  else if (isalpha(input.key)) typeKey(input.key), dirty = true;
-  if (input.gesture != Touch::Gesture::Tap) return;
-  const uint16_t x = shell::touch.x(), y = shell::touch.y();
-  dirty = true;
-  if (y < nav::kHeight) {
-    const int corner = nav::hit(x, y);
-    if (corner < 0) go(Step::List);
-    else if (corner > 0) join();
-    else dirty = false;
-    return;
-  }
-  if (y < kKeysTop) {  // the field: show / hide the password
-    reveal = !reveal;
-    lastVisible = false;
-    return;
-  }
-  const int row = min(kKeyRows - 1, (y - kKeysTop) / kKeyH), col = min(kCols - 1, x / kKeyW);
-  for (const Key &k : layout(layer)) {
-    if (k.row != row || col < k.col || col >= k.col + k.span) continue;
-    if (k.kind != Kind::Char) lastVisible = false;
-    switch (k.kind) {
-      case Kind::Char:
-        typeKey(shift && isalpha(k.ch) ? toupper(k.ch) : k.ch);
-        if (shift && !capsLock) shift = false;
-        break;
-      case Kind::Shift:
-        if (!shift) {
-          shift = true;
-          shiftAt = millis();
-        } else if (!capsLock && millis() - shiftAt < kCapsLockMs) {
-          capsLock = true;
-        } else {
-          shift = capsLock = false;
-        }
-        break;
-      case Kind::Back:
-        if (password.length()) password.remove(password.length() - 1);
-        break;
-      case Kind::Space:
-        typeKey(' ');
-        break;
-      case Kind::Layer:
-        layer = k.to;
-        shift = capsLock = false;
-        break;
+  keyboard::Result result = keyboard::key(input.key, password, kMaxPassword);
+  if (input.gesture == Touch::Gesture::Tap) {
+    const uint16_t x = shell::touch.x(), y = shell::touch.y();
+    if (y < nav::kHeight) {
+      const int corner = nav::hit(x, y);
+      if (corner < 0) return go(Step::List);
+      if (corner > 0) return join();
+    } else if (y < keyboard::kTop) {  // the field: show / hide the password
+      reveal = !reveal;
+      lastVisible = false;
+      dirty = true;
+    } else {
+      result = keyboard::tap(x, y, password, kMaxPassword);
     }
-    return;
   }
-  dirty = false;  // between keys
+  if (result == keyboard::Result::None) return;
+  lastVisible = result == keyboard::Result::Typed;  // the character just typed shows until the next key
+  dirty = true;
 }
 
 }  // namespace

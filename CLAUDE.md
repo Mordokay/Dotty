@@ -26,7 +26,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `qlmanage -t -s 4000` and crop with `sips`). Charger STAT only drives the orange LED,
   so firmware cannot detect charging. No 32 kHz crystal: the ESP32 sleep clock drifts,
   so re-read the PCF85063 after every wake instead of trusting system time.
-- Touch coordinates map 1:1 onto the display (no rotation/mirroring).
+- Touch coordinates need a **calibration** (no rotation/mirroring, but not 1:1): x reads ~1.42x
+  stretched out from the middle (and ~3 px right), y ~10 px low at the top, both slightly bent;
+  the FT6336 clamps its readings to 0..199, so the outer ~25 px on the left and ~33 px on the
+  right are **blind strips** (every touch there reads the same; mapped to the strip's middle).
+  Waveshare's driver doesn't correct anything. See "Touch calibration" below.
 - Audio pins (from Waveshare's codec_board config): I2S MCLK 14, BCLK 15, WS 38,
   DOUT 45, DIN 16; amplifier enable GPIO46 (HIGH). ES8311 at I2C 0x18.
 - Microphone: analog, into the ES8311 ADC → I2S DIN, left slot of the stereo frames.
@@ -779,6 +783,28 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   closes); a row installs from the card and restarts into it, the installed one just starts.
   The list is read from the card once when it opens (`pickerEntries`), not every loop pass.
   Get to the launcher with BOOT + PWR. Dev key `c` opens it.
+- **Touch calibration** (launcher 0.9.21, `touch_calibration.*`; correction in dotty_core
+  `touch.*`, every firmware): `Touch::Calibration` = screen x and y each a quadratic in both raw
+  coordinates (u, v = (raw − 100) / 100; terms 1, u, v, uv, u², v²); a straight line per axis
+  stayed ~3 px off. Saved in NVS `touch` (`magic` + `cal` blob; erased by a factory reset); the
+  defaults are the prototype's own (2026-10-14). Screen: rounds of 15 crosses (x 36-160 — the
+  user tried them further out: at 166, next to the right strip, taps that fell right read as
+  clamped and were dropped, which bent the fit; y 66-186), any order, each tap matched to the
+  nearest cross (≤ 35 px). After each round: least squares over every tap so far (a tilted plane
+  for rounds 1-2, then the quadratic), used at once (next round's dots land closer), and a
+  "Calibration" bar (user: no px, no jargon): RMS of the per-cross average errors, × m/(m−k)
+  for the fitted terms; 100 % at ≤ 2.5 px, 0 % at 7 — fills as rounds average the fingertip's
+  ~4 px scatter out (3-5 rounds). Again / Done (dark = suggested). Done saves, then a **typing
+  test** on the real keyboard: "dotty", "quiz", "pumpkin" (both edge columns), wrong letters
+  underlined, slips counted, summary "3 words, 1 slip" with Again / Done. Opened by: the welcome
+  flow's first step (`Setup::Touch` while `!touch.calibrated()`; "Skip" top right or BOOT keeps
+  the defaults), the crosshair under the Wi-Fi fan on the launcher home, a long press there, or
+  the app's Dashboard › Settings › Calibrate touch (`touch.calibrate`, after ensureLauncher).
+  Every calibration tap is appended to the card's `/logs/touch.tsv` (epoch, round, cross, raw,
+  landed) — the log ring only keeps a few rounds. Dev keys: `t` opens it, `T` jumps to the
+  typing test. The **keyboard** (`keyboard.*`, shared with Wi-Fi) takes its first/last column
+  edges from the blind strips (`Touch::bands`): on the prototype the right column starts at
+  166 (a tap on the right of a 25 px "u" read as "i"), the others share the rest.
 - **Wi-Fi on Dotty** (launcher 0.9.19, `wifi_setup.*`, no phone needed): the Wi-Fi fan in the
   home screen's top-left corner (0.9.20; taps within 60 px of the corner; on the welcome screens
   too; 0.9.19 had it as the picker's last row), or any tap on the "pick a Wi-Fi" welcome screen,
@@ -796,7 +822,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `#+=` = brackets, maths, the rare ones (every printable ASCII has a key). Shift one-shot, twice
   within 0.8 s = caps lock (bar under the arrow). Taps during a partial refresh are kept and drawn
   together. Dev keys on the keyboard: letters type, `^` shift, `#` next page, `=` join; `n` on
-  the list picks the first network.
+  the list picks the first network. The keyboard itself lives in `keyboard.*` (see Touch
+  calibration).
 
 ## Power management (`lib/dotty_core/src/power.*`)
 
