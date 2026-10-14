@@ -32,7 +32,7 @@
 #include "touch_calibration.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.21");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.22");
 
 namespace {
 
@@ -122,14 +122,18 @@ String joiningSsid;           // wifi.add is joining this network right now
 String joinFailedSsid;        // …and couldn't: said for a moment
 uint32_t joinFailedUntil = 0;
 
-// The home screen's left edge, beside the firefly: the Wi-Fi button in the top corner (the
-// battery is in the other one), a fan of three arcs over a dot, opening wifi_setup; under it
-// the touch calibration's, a crosshair. Each takes taps a little beyond its icon.
-constexpr int16_t kWifiTouchH = 54, kButtonsTouchW = 50, kCalibrateTouchBottom = 100;
+// The home screen's left edge, beside the firefly: two bordered buttons (user's design: 5 px
+// apart, corner radius 5). The Wi-Fi one in the top corner (the battery is in the other), a fan
+// of three arcs over a dot, opens wifi_setup; under it the touch calibration's crosshair. Each
+// takes taps a little beyond its border.
+constexpr int16_t kButtonX = 2, kButtonSize = 36, kButtonGap = 5, kRadius = 5;
+constexpr int16_t kWifiTop = 4, kCalibrateTop = kWifiTop + kButtonSize + kButtonGap;  // 45
+constexpr int16_t kButtonsTouchW = 50;
 
 void drawWifiButton() {
-  const int16_t cx = 22, cy = 28;
-  for (int r : {7, 13, 19}) {
+  epd.drawRoundRect(kButtonX, kWifiTop, kButtonSize, kButtonSize, kRadius, kBlack);
+  const int16_t cx = kButtonX + kButtonSize / 2, cy = kWifiTop + 28;
+  for (int r : {6, 11, 16}) {
     for (float a = -135; a <= -45; a += 1.5f) {
       for (float t = 0; t < 2.5f; t += 0.5f) {
         epd.drawPixel(cx + lroundf((r - t) * cosf(a * PI / 180)), cy + lroundf((r - t) * sinf(a * PI / 180)), kBlack);
@@ -140,22 +144,23 @@ void drawWifiButton() {
 }
 
 bool wifiButtonHit(uint16_t x, uint16_t y) {
-  return x < kButtonsTouchW + 10 && y < kWifiTouchH;
+  return x < kButtonsTouchW && y < kCalibrateTop - kButtonGap / 2;
 }
 
 void drawCalibrateButton() {
-  const int16_t cx = 22, cy = 74;
-  epd.drawCircle(cx, cy, 9, kBlack);
+  epd.drawRoundRect(kButtonX, kCalibrateTop, kButtonSize, kButtonSize, kRadius, kBlack);
+  const int16_t cx = kButtonX + kButtonSize / 2, cy = kCalibrateTop + kButtonSize / 2;
   epd.drawCircle(cx, cy, 8, kBlack);
-  epd.drawFastHLine(cx - 14, cy, 10, kBlack);
-  epd.drawFastHLine(cx + 5, cy, 10, kBlack);
-  epd.drawFastVLine(cx, cy - 14, 10, kBlack);
-  epd.drawFastVLine(cx, cy + 5, 10, kBlack);
+  epd.drawCircle(cx, cy, 7, kBlack);
+  epd.drawFastHLine(cx - 12, cy, 8, kBlack);
+  epd.drawFastHLine(cx + 5, cy, 8, kBlack);
+  epd.drawFastVLine(cx, cy - 12, 8, kBlack);
+  epd.drawFastVLine(cx, cy + 5, 8, kBlack);
   epd.fillCircle(cx, cy, 1, kBlack);
 }
 
 bool calibrateButtonHit(uint16_t x, uint16_t y) {
-  return x < kButtonsTouchW && y >= kWifiTouchH && y < kCalibrateTouchBottom;
+  return x < kButtonsTouchW && y >= kCalibrateTop - kButtonGap / 2 && y < kCalibrateTop + kButtonSize + 12;
 }
 
 // The firefly, a friendly title and two short lines: no jargon.

@@ -798,7 +798,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   test** on the real keyboard: "dotty", "quiz", "pumpkin" (both edge columns), wrong letters
   underlined, slips counted, summary "3 words, 1 slip" with Again / Done. Opened by: the welcome
   flow's first step (`Setup::Touch` while `!touch.calibrated()`; "Skip" top right or BOOT keeps
-  the defaults), the crosshair under the Wi-Fi fan on the launcher home, a long press there, or
+  the defaults), the crosshair button under the Wi-Fi one on the launcher home (0.9.22: both in
+  36 px boxes with a 5 px corner radius, 5 px apart, at the left edge), a long press there, or
   the app's Dashboard › Settings › Calibrate touch (`touch.calibrate`, after ensureLauncher).
   Every calibration tap is appended to the card's `/logs/touch.tsv` (epoch, round, cross, raw,
   landed) — the log ring only keeps a few rounds. Dev keys: `t` opens it, `T` jumps to the
