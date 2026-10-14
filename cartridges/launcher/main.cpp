@@ -34,7 +34,7 @@
 #include "updates.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.25");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.26");
 
 namespace {
 
@@ -1284,6 +1284,9 @@ void loop() {
   transfer::poll();
   // Cartridge updates (updates.h): once a day while the launcher is idle, also while locked.
   power::setWakeLock(power::kWakeLockNetwork, updates::status().running);
+  // No auto-lock while a check runs (the user watched it lock mid-download); a check that
+  // started while locked carries on locked.
+  if (updates::status().running && unlocked) shell::wake();
   if (transfer::active()) updates::stop(true);  // a backup / restore has the Wi-Fi
   static uint32_t lastDueCheck = 0;
   if (millis() > 15000 && (!lastDueCheck || millis() - lastDueCheck > 60000) && job.stage == Stage::None && !transfer::active() &&

@@ -803,7 +803,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   mbedTLS too little. 0.9.25 reads and parses the catalog in PSRAM (`PsramAllocator` for
   ArduinoJson, a 64 KB PSRAM buffer) and frees it before the first download; the log says the
   heap before downloading. Keep big buffers out of internal RAM in anything that opens HTTPS
-  with BLE up. Dev key `u`. The loop's order matters:
+  with BLE up. 0.9.26: no auto-lock while a check runs (`shell::wake()` each pass while
+  unlocked; one that started locked stays locked). Dev key `u`. The loop's order matters:
   open screens (Updates, calibration, Wi-Fi setup, picker) take their taps before the home
   buttons' hit tests (0.9.22 opened calibration from a tap on the Wi-Fi password field).
 - **Cartridge picker on Dotty** (no phone, no internet): tap the launcher's home screen ("BOOT:
