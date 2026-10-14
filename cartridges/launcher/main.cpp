@@ -924,7 +924,7 @@ void drawCardTransfer() {
 // What the daily check (updates.h) found or is doing, Check now, and a system update when the
 // card has a newer launcher (installed through Rescue).
 bool updatesOpen = false;
-constexpr int16_t kSystemButtonTop = 112, kCheckButtonTop = 156;
+constexpr int16_t kSystemButtonTop = 106, kSystemButtonH = 44, kCheckButtonTop = 158;
 
 String agoText(uint32_t then) {
   const uint32_t now = time(nullptr);
@@ -984,15 +984,22 @@ void drawUpdates() {
                                         : String("All up to date"), 74);
     epd.setFont(&FreeSans9pt7b);
     if (st.downloaded) {
-      ui::drawCentered(epd, "Each one installs when", 98);
-      ui::drawCentered(epd, "you start it", 118);
+      ui::drawCentered(epd, "They install on start", 98);  // one line: the system button is below
     } else {
       ui::drawCentered(epd, "Checked " + agoText(st.checkedAt), 98);
     }
   } else {
     ui::drawCentered(epd, net::saved().empty() ? "Needs Wi-Fi" : "Not checked yet", 74);
   }
-  if (launcher.length()) drawWideButton(kSystemButtonTop, "Update Dotty to " + launcher, true);
+  if (launcher.length()) {  // two lines: "Update Dotty to 0.9.26" doesn't fit one
+    epd.fillRoundRect(16, kSystemButtonTop, kW - 32, kSystemButtonH, 8, kBlack);
+    epd.setTextColor(kWhite);
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, "Update Dotty", kSystemButtonTop + 19);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, "to " + launcher, kSystemButtonTop + 37);
+    epd.setTextColor(kBlack);
+  }
   drawWideButton(kCheckButtonTop, "Check now", !launcher.length());
 }
 
@@ -1023,10 +1030,10 @@ void loopUpdates(const shell::Input &input) {
       shell::showApp();
       return;
     }
-    if (!st.running && y >= kCheckButtonTop - 6 && y < kCheckButtonTop + 40) {
+    if (!st.running && y >= kCheckButtonTop - 4 && y < kCheckButtonTop + 40) {
       updates::start();
       lastDraw = 0;
-    } else if (!st.running && y >= kSystemButtonTop - 6 && y < kSystemButtonTop + 40) {
+    } else if (!st.running && y >= kSystemButtonTop - 4 && y < kSystemButtonTop + kSystemButtonH + 4) {
       library::Entry entry;
       String error;
       if (library::find("launcher", updates::newerLauncher(), entry)) {

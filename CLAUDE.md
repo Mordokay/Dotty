@@ -787,9 +787,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   installs a newer card copy first (`installFromCard`, ~2.5 s, then restarts; a failed one is
   skipped next time), home says "News: update ready", the picker's installed row "new 0.2.7".
   Third bordered button (arrow into a tray, a dot while busy) → Updates screen: progress
-  ("Downloading", the cartridge, a bar, "2 of 7"), then "7 updates ready / Each one installs when
-  you start it" or "All up to date / Checked 5 min ago" or "Couldn't check"; "Update Dotty to
-  0.9.24" (dark) when the card has a newer launcher → `installFromCard` → Rescue; "Check now"
+  ("Downloading", the cartridge, a bar, "2 of 7"), then "7 updates ready / They install on start"
+  or "All up to date / Checked 5 min ago" or "Couldn't check"; "Update Dotty / to
+  0.9.26" (dark, two lines: one line was cut off) when the card has a newer launcher → `installFromCard` → Rescue; "Check now"
   (opening the screen checks too, unless one ran < 5 min ago). Anything else that needs Wi-Fi or
   restarts stops it first (`updates::stop(keepWifi)`: library.fetch keeps the connection,
   installs / Wi-Fi setup / factory reset don't; a transfer session stops it from loop()). First
