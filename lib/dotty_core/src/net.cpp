@@ -6,6 +6,7 @@
 #include <esp_crt_bundle.h>
 #include <esp_sntp.h>
 #include <esp_http_client.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 
@@ -110,7 +111,12 @@ esp_http_client_handle_t open(const String &url, int64_t &length, String &error)
     return nullptr;
   }
   for (int i = 0; i <= kMaxRedirects; i++) {
-    if (esp_http_client_open(client, 0) != ESP_OK) {
+    const esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+      // Usually DNS / no route, but a TLS handshake also fails like this when internal RAM is
+      // short (BLE + Wi-Fi + mbedTLS): say which, with the heap.
+      LOGW("net", "open %s: %s (internal heap %u free, largest block %u)", url.c_str(), esp_err_to_name(err),
+           heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
       error = "cannot reach the server";
       break;
     }

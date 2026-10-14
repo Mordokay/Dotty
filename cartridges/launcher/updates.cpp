@@ -23,6 +23,7 @@ constexpr const char *kCatalogUrl = "https://github.com/Mordokay/Dotty/releases/
 constexpr uint32_t kEvery = 24 * 3600;      // seconds between checks
 constexpr uint32_t kRetryMs = 3600 * 1000;  // after a check that failed
 constexpr int kKeep = 2;                    // versions of each cartridge kept on the card
+constexpr int kTries = 3;                   // per download (a weak signal broke one at -89 dBm)
 
 std::mutex lock;  // guards `state` (the task writes, the main loop reads)
 Status state;
@@ -123,6 +124,7 @@ void task(void *) {
       error = "the catalog is unreadable";
     }
   }
+  const bool catalogRead = ok && !cancel;
   if (ok && !cancel) {
     // What to fetch: a newer version of every cartridge on the card, and of the launcher.
     std::vector<String> onCard;
@@ -162,9 +164,18 @@ void task(void *) {
     LOGI("updates", "%u newer versions in the catalog", static_cast<unsigned>(plans.size()));
     for (const Plan &plan : plans) {
       if (cancel) break;
-      setStep("Downloading " + plan.entry.name + " " + plan.entry.version, plan.entry.size);
       String why;
-      if (download(plan, why)) {
+      bool got = false;
+      for (int attempt = 1; attempt <= kTries && !got && !cancel; attempt++) {
+        if (attempt > 1) {
+          LOGW("updates", "%s: %s, trying again", plan.entry.name.c_str(), why.c_str());
+          delay(5000);
+          why = "";
+        }
+        setStep("Downloading " + plan.entry.name + " " + plan.entry.version, plan.entry.size);
+        got = download(plan, why);
+      }
+      if (got) {
         downloaded++;
         LOGI("updates", "%s %s is on the card", plan.entry.id.c_str(), plan.entry.version.c_str());
       } else {
@@ -197,6 +208,7 @@ void task(void *) {
     state.running = false;
     state.step = "";
     state.error = ok ? String() : error;
+    state.catalogRead = catalogRead;
     if (ok) state.checkedAt = now;
     state.downloaded = downloaded;
   }

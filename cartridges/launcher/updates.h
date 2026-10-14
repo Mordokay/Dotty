@@ -16,6 +16,7 @@ struct Status {
   int done = 0, total = 0;   // downloads in this check
   size_t bytes = 0, size = 0;  // the current download
   String error;              // the last check's problem ("" if it worked)
+  bool catalogRead = false;  // it got as far as the catalog (so a failure was a download's)
   uint32_t checkedAt = 0;    // local time of the last check that worked (0 = never)
   int downloaded = 0;        // versions the last check put on the card
 };

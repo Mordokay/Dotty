@@ -793,7 +793,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (opening the screen checks too, unless one ran < 5 min ago). Anything else that needs Wi-Fi or
   restarts stops it first (`updates::stop(keepWifi)`: library.fetch keeps the connection,
   installs / Wi-Fi setup / factory reset don't; a transfer session stops it from loop()). First
-  run: 7 cartridges, ~1.5 MB each, in 100 s at −48 dBm. Dev key `u`. The loop's order matters:
+  run: 7 cartridges, ~1.5 MB each, in 100 s at −48 dBm. Each download is tried 3 times (5 s
+  apart; at −89 dBm the launcher's broke off after 80 s). The screen says "Download failed" when
+  the catalog was read, and network errors in words ("The Wi-Fi let it down…"). Once (2026-10-14,
+  after that failure, BLE connected) every HTTPS open failed at once for minutes, even at −42 dBm,
+  until a restart: `net` now logs the esp_err and the internal heap when an open fails — read it
+  if it recurs. Dev key `u`. The loop's order matters:
   open screens (Updates, calibration, Wi-Fi setup, picker) take their taps before the home
   buttons' hit tests (0.9.22 opened calibration from a tap on the Wi-Fi password field).
 - **Cartridge picker on Dotty** (no phone, no internet): tap the launcher's home screen ("BOOT:

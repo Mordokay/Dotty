@@ -34,7 +34,7 @@
 #include "updates.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.23");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.24");
 
 namespace {
 
@@ -969,9 +969,16 @@ void drawUpdates() {
   epd.setFont(&FreeSansBold9pt7b);
   const String launcher = updates::newerLauncher();
   if (st.error.length()) {
-    ui::drawCentered(epd, "Couldn't check", 74);
+    ui::drawCentered(epd, st.catalogRead ? "Download failed" : "Couldn't check", 74);
     epd.setFont(&FreeSans9pt7b);
-    ui::drawCentered(epd, ui::fitText(epd, net::saved().empty() ? String("Dotty has no Wi-Fi yet") : st.error, kW - 12), 98);
+    // In words: the network's errors all mean the Wi-Fi let it down.
+    String why = st.error;
+    if (net::saved().empty()) why = "Dotty has no Wi-Fi yet";
+    else if (why.indexOf("reach") >= 0 || why.indexOf("interrupted") >= 0 || why.indexOf("join") >= 0 ||
+             why.indexOf("incomplete") >= 0) {
+      why = "The Wi-Fi let it down. Try again closer to the router.";
+    }
+    ui::drawWrapped(epd, why, 98, kW - 24, 2, 20);
   } else if (st.checkedAt) {
     ui::drawCentered(epd, st.downloaded ? String(st.downloaded) + (st.downloaded == 1 ? " update ready" : " updates ready")
                                         : String("All up to date"), 74);
