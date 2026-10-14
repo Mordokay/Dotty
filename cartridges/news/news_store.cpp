@@ -14,8 +14,8 @@
 namespace news {
 namespace {
 
-constexpr int kScanItems = 20;          // read this many from each feed (then stop the download)
-constexpr int kPerTopic = 10;           // keep this many stories per topic
+constexpr int kScanItems = 50;          // read this many from each feed (then stop the download)
+constexpr int kPerTopic = 30;           // keep this many stories per topic (~12 KB on the card)
 constexpr uint32_t kMaxAge = 48 * 3600; // older stories are dropped (also from the screen)
 constexpr uint32_t kFreshAge = 24 * 3600;  // preferred: a topic with enough of these drops the rest
 constexpr int kEnoughFresh = 3;

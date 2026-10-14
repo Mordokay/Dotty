@@ -29,8 +29,9 @@
 #include "transfer.h"
 #include "shell.h"
 #include "ui.h"
+#include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.18");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.19");
 
 namespace {
 
@@ -143,8 +144,8 @@ bool drawWelcome() {
     case Setup::Welcome:
       drawGreeting("Hi, I'm Dotty!", "Open the Dotty app", "and pick " + ble::name());
       return true;
-    case Setup::WiFi:
-      drawGreeting("We're friends!", "Next, pick a Wi-Fi", "network in the app");
+    case Setup::WiFi:  // a tap opens the Wi-Fi list (wifi_setup)
+      drawGreeting("We're friends!", "Next, pick a Wi-Fi network", "in the app, or tap here");
       return true;
     case Setup::Cartridge:
       drawGreeting("All set!", "Choose a cartridge", "in the Dotty app");
@@ -198,6 +199,8 @@ void drawHome(const char *hint = nullptr) {
     ui::drawCentered(epd, others ? "BOOT: start   Tap: switch" : "Press BOOT to start", 192);
   } else if (others) {
     ui::drawCentered(epd, "Tap to pick one", 192);
+  } else {
+    ui::drawCentered(epd, "Tap for Wi-Fi", 192);
   }
 }
 
@@ -829,23 +832,36 @@ void drawCardTransfer() {
 
 // ---------- cartridge picker ----------
 
+// The cartridges on the card, then a "Wi-Fi" row (joining a network on Dotty: wifi_setup).
+int pickerPages(const std::vector<library::Entry> &entries) {
+  return max(1, (static_cast<int>(entries.size()) + 1 + kPickerRows - 1) / kPickerRows);
+}
+
 void drawPicker() {
   const std::vector<library::Entry> entries = cardCartridges();
-  const int pages = max(1, (static_cast<int>(entries.size()) + kPickerRows - 1) / kPickerRows);
+  const int pages = pickerPages(entries);
   pickerPage = constrain(pickerPage, 0, pages - 1);
   epd.fillScreen(kWhite);
   nav::draw(epd, "Cartridges", nav::Icon::Back, nav::Icon::None, nav::pageLabel(pickerPage, pages));
   epd.setFont(&FreeSans9pt7b);
-  if (entries.empty()) {
-    epd.setTextColor(kBlack);
-    ui::drawWrapped(epd, "No cartridges on the card yet. Add one from the Dotty app.", 90, kW - 24, 4, 20);
-    return;
-  }
   for (int row = 0; row < kPickerRows; row++) {
     const int i = pickerPage * kPickerRows + row;
-    if (i >= static_cast<int>(entries.size())) break;
-    const library::Entry &e = entries[i];
+    if (i > static_cast<int>(entries.size())) break;
     const int16_t top = nav::kHeight + 2 + row * kRowH;
+    if (i == static_cast<int>(entries.size())) {
+      epd.setTextColor(kBlack);
+      const size_t saved = net::saved().size();
+      const String count = saved ? String(saved) + " saved" : String("none yet");
+      epd.setFont(&FreeSansBold9pt7b);
+      epd.setCursor(10, top + kRowH / 2 + 6);
+      epd.print("Wi-Fi");
+      epd.setFont(&FreeSans9pt7b);
+      epd.setCursor(kW - 10 - ui::textWidth(epd, count), top + kRowH / 2 + 6);
+      epd.print(count);
+      if (entries.empty()) ui::drawWrapped(epd, "No cartridges on the card yet. Add one from the Dotty app.", top + kRowH + 30, kW - 24, 3, 20);
+      break;
+    }
+    const library::Entry &e = entries[i];
     const bool current = hasCartridge && e.id == installed.id;  // the one in the slot
     if (current) epd.fillRect(0, top, kW, kRowH - 1, kBlack);
     epd.setTextColor(current ? kWhite : kBlack);
@@ -876,7 +892,7 @@ void loopPicker(const shell::Input &input) {
   }
   if (input.boot) return closePicker();
   const std::vector<library::Entry> entries = cardCartridges();
-  const int pages = max(1, (static_cast<int>(entries.size()) + kPickerRows - 1) / kPickerRows);
+  const int pages = pickerPages(entries);
   int page = pickerPage;
   if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) page = (page + 1) % pages;
   if (input.gesture == G::SwipeRight || input.gesture == G::SwipeDown) page = (page + pages - 1) % pages;
@@ -889,6 +905,11 @@ void loopPicker(const shell::Input &input) {
     } else if (y >= nav::kHeight + 2) {
       const int row = (y - nav::kHeight - 2) / kRowH;
       const int i = pickerPage * kPickerRows + row;
+      if (row < kPickerRows && i == static_cast<int>(entries.size())) {
+        wifisetup::open();  // the picker stays open underneath: closing Wi-Fi comes back here
+        shell::showApp();
+        return;
+      }
       if (row < kPickerRows && i < static_cast<int>(entries.size())) {
         pickerOpen = false;
         if (hasCartridge && entries[i].id == installed.id) {
@@ -912,6 +933,8 @@ void drawApp() {
     drawCardTransfer();
   } else if (askResetUntil) {
     drawResetQuestion();
+  } else if (job.stage == Stage::None && wifisetup::active()) {
+    wifisetup::draw();
   } else if (job.stage == Stage::None && pickerOpen) {
     drawPicker();
   } else if (job.stage == Stage::None) {
@@ -1126,9 +1149,19 @@ void loop() {
       askResetUntil = 0;
       shell::showApp();
     }
+  } else if (wifisetup::active()) {
+    // Partial refreshes while typing; taps during one are kept and drawn together next.
+    if (wifisetup::loop(input)) {
+      drawApp();
+      shell::refresh(false);
+    }
+    if (!wifisetup::active()) shell::showApp();
   } else if (pickerOpen) {
     loopPicker(input);
-  } else if (input.key == 'c' || (input.gesture == Touch::Gesture::Tap && !cardCartridges().empty())) {
+  } else if (input.key == 'i' || (input.gesture == Touch::Gesture::Tap && setupStage() == Setup::WiFi)) {
+    wifisetup::open();  // serial i: developer aid
+    shell::showApp();
+  } else if (input.key == 'c' || input.gesture == Touch::Gesture::Tap) {
     pickerOpen = true;  // serial c: developer aid
     pickerPage = 0;
     shell::showApp();

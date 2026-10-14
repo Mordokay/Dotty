@@ -17,7 +17,7 @@
 //     new edition (key "c:<file>");
 //   - a keyword searched on Google News over the last 2 days: headlines only (key "k:<query>").
 // Summaries are cut to their first sentence(s), about 250 characters at most. Each topic keeps
-// its 10 best stories of the last 48 hours. Files in the cartridge's data folder:
+// its 30 best stories of the last 48 hours (the last 24 when it has enough). Files in the cartridge's data folder:
 //   topics.json   [{section | kagi | query, name, star}] in the user's order
 //   stories.tsv   topic key \t published (UTC epoch) \t feed position \t source \t title \t summary
 // "Best" = a score from the feed's own order (outlets list by editorial importance, Kagi by

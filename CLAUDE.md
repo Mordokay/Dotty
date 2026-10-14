@@ -618,7 +618,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
 - Fetch task (`news_store.*`, core 0, 12 KB) every 30 min (also locked: the loop runs at every
   minute wake, Network wake lock while fetching), 5 s after a topic add/remove, retry 10 min.
   RSS is parsed while streaming (`<item>` by `<item>`; CDATA, entities, tags stripped), stopping
-  after 20 items (Google's feeds are 130 KB); a topic keeps its 10 best stories ≤ 48 h old, only
+  after 50 items (Google's feeds are 130 KB); a topic keeps its 30 best stories ≤ 48 h old (was 10
+  until 0.2.5; the pool lives in `stories.tsv` on the card, read into PSRAM), only
   ≤ 24 h when it has ≥ 3 of those (Google ranks by relevance: 40 h old stories topped topics); a
   topic whose feed fails keeps its old stories, but nothing past 48 h is ever shown or carried
   over (a dead feed used to keep its stories for days). Measured: 4 topics, 36 stories in 11 s.
@@ -775,6 +776,22 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   installed one inverted, 4 rows a page, swipes / the page corner turn pages, back or BOOT
   closes); a row installs from the card and restarts into it, the installed one just starts.
   Get to the launcher with BOOT + PWR. Dev key `c` opens it.
+- **Wi-Fi on Dotty** (launcher 0.9.19, `wifi_setup.*`, no phone needed): the picker's last row
+  "Wi-Fi  2 saved" (also a tap on the "pick a Wi-Fi" welcome screen, dev key `i` from home) →
+  "Looking for networks" (`net::scan`, blocking, once the screen is up) → list (38 px rows: ✓
+  saved, padlock, 4 signal bars; last row "Look again") → keyboard for secured networks → "Joining..."
+  (`net::connectTo`, then `remember` only if it worked, like `wifi.add`) → "Connected! / Naru is
+  saved" 3 s, back to the picker; or "Couldn't join" 6 s / tap, back to the keyboard with the
+  password kept (< 8 characters is refused before trying). **Keyboard** (user's design rounds:
+  10x6 of 20 px → iPhone-style pages → 8 columns → 4 rows): 8 x 4 keys of 25 x 31 px under the
+  nav bar (back · network · "Join" in the right corner, like iOS) and the password field (tap
+  it = show/hide; masked with `*`, the last typed character visible until the next key; the end
+  of a long one shown). Letters page = QWERTY with each row's overflow moved down to the right:
+  `qwertyui / asdfghop / zxcvbjkl / ⇧ n m 123 space ⌫`; `123` = digits + common punctuation,
+  `#+=` = brackets, maths, the rare ones (every printable ASCII has a key). Shift one-shot, twice
+  within 0.8 s = caps lock (bar under the arrow). Taps during a partial refresh are kept and drawn
+  together. Dev keys on the keyboard: letters type, `^` shift, `#` next page, `=` join; `n` on
+  the list picks the first network.
 
 ## Power management (`lib/dotty_core/src/power.*`)
 
