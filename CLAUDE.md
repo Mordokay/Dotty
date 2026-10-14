@@ -777,6 +777,25 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `installFromCard()` (also `install.fromCard` and the picker). The app skips its "no Wi-Fi
   yet" stop when the card has the cartridge and says when Dotty installed an older card copy.
   A failed install screen goes back home after 15 s or a tap (it used to wait for BOOT).
+- **Cartridge updates without the phone** (launcher 0.9.23, `updates.*`): a background task
+  (core 0, 12 KB, Network wake lock, also while locked) reads the catalog once a day (NVS
+  `updates/checked`, local epoch; 1 h after a failed check; the first one 15 s after the launcher
+  starts) and downloads a newer version of every cartridge already on the card, and of the
+  launcher, into `firmware/` (`.part`, size + SHA-256, `library::commit`), then keeps the newest
+  2 versions per cartridge (never prunes the launcher: Rescue may need its `good` one). Nothing is
+  flashed in the background: `startCartridge()` (BOOT, the picker's installed row, `launcher.start`)
+  installs a newer card copy first (`installFromCard`, ~2.5 s, then restarts; a failed one is
+  skipped next time), home says "News: update ready", the picker's installed row "new 0.2.7".
+  Third bordered button (arrow into a tray, a dot while busy) → Updates screen: progress
+  ("Downloading", the cartridge, a bar, "2 of 7"), then "7 updates ready / Each one installs when
+  you start it" or "All up to date / Checked 5 min ago" or "Couldn't check"; "Update Dotty to
+  0.9.24" (dark) when the card has a newer launcher → `installFromCard` → Rescue; "Check now"
+  (opening the screen checks too, unless one ran < 5 min ago). Anything else that needs Wi-Fi or
+  restarts stops it first (`updates::stop(keepWifi)`: library.fetch keeps the connection,
+  installs / Wi-Fi setup / factory reset don't; a transfer session stops it from loop()). First
+  run: 7 cartridges, ~1.5 MB each, in 100 s at −48 dBm. Dev key `u`. The loop's order matters:
+  open screens (Updates, calibration, Wi-Fi setup, picker) take their taps before the home
+  buttons' hit tests (0.9.22 opened calibration from a tap on the Wi-Fi password field).
 - **Cartridge picker on Dotty** (no phone, no internet): tap the launcher's home screen ("BOOT:
   start Tap: switch") → "Cartridges" list (newest version per cartridge on the card, the
   installed one inverted, 4 rows a page, swipes / the page corner turn pages, back or BOOT

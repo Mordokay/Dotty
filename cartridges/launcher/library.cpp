@@ -216,6 +216,16 @@ bool commit(const Entry &entry, const uint8_t *icon, String &error) {
   return true;
 }
 
+void remove(const Entry &entry) {
+  const String base = basePath(entry.id, entry.version);
+  for (const char *ext : {".bin", ".json", ".icon"}) SD_MMC.remove(base + ext);
+  LOGI("library", "removed %s %s from the card", entry.id.c_str(), entry.version.c_str());
+}
+
+bool isNewer(const String &a, const String &b) {
+  return newer(a, b);
+}
+
 bool install(const Entry &entry, Progress progress, String &error) {
   const esp_partition_t *part = slot();
   File in = SD_MMC.open(basePath(entry.id, entry.version) + ".bin");

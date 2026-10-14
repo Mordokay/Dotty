@@ -41,6 +41,12 @@ bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error);
 // Rescue has a known-good copy to put back.
 bool saveRunning(const String &id, const String &name, const String &version, String &error);
 
+// Deletes one version from the card (.bin, .json, .icon).
+void remove(const Entry &entry);
+
+// True if version a is newer than b ("0.10.0" > "0.9.3").
+bool isNewer(const String &a, const String &b);
+
 // Flashes an entry from the card into ota_0 and selects it for the next boot.
 bool install(const Entry &entry, Progress progress, String &error);
 

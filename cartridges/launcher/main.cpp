@@ -29,10 +29,12 @@
 #include "transfer.h"
 #include "shell.h"
 #include "ui.h"
+#include "power.h"
 #include "touch_calibration.h"
+#include "updates.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.22");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.23");
 
 namespace {
 
@@ -128,6 +130,7 @@ uint32_t joinFailedUntil = 0;
 // takes taps a little beyond its border.
 constexpr int16_t kButtonX = 2, kButtonSize = 36, kButtonGap = 5, kRadius = 5;
 constexpr int16_t kWifiTop = 4, kCalibrateTop = kWifiTop + kButtonSize + kButtonGap;  // 45
+constexpr int16_t kUpdatesTop = kCalibrateTop + kButtonSize + kButtonGap;              // 86
 constexpr int16_t kButtonsTouchW = 50;
 
 void drawWifiButton() {
@@ -160,7 +163,23 @@ void drawCalibrateButton() {
 }
 
 bool calibrateButtonHit(uint16_t x, uint16_t y) {
-  return x < kButtonsTouchW && y >= kCalibrateTop - kButtonGap / 2 && y < kCalibrateTop + kButtonSize + 12;
+  return x < kButtonsTouchW && y >= kCalibrateTop - kButtonGap / 2 && y < kUpdatesTop - kButtonGap / 2;
+}
+
+// The third: updates (an arrow down into a tray), opening the Updates screen.
+void drawUpdatesButton() {
+  epd.drawRoundRect(kButtonX, kUpdatesTop, kButtonSize, kButtonSize, kRadius, kBlack);
+  const int16_t cx = kButtonX + kButtonSize / 2, top = kUpdatesTop + 8;
+  epd.fillRect(cx - 1, top, 3, 12, kBlack);
+  epd.fillTriangle(cx - 6, top + 10, cx + 6, top + 10, cx, top + 17, kBlack);
+  epd.fillRect(cx - 10, top + 15, 2, 6, kBlack);
+  epd.fillRect(cx + 9, top + 15, 2, 6, kBlack);
+  epd.fillRect(cx - 10, top + 19, 21, 2, kBlack);
+  if (updates::status().running) epd.fillCircle(kButtonX + kButtonSize - 5, kUpdatesTop + 5, 3, kBlack);  // busy
+}
+
+bool updatesButtonHit(uint16_t x, uint16_t y) {
+  return x < kButtonsTouchW && y >= kUpdatesTop - kButtonGap / 2 && y < kUpdatesTop + kButtonSize + 12;
 }
 
 // The firefly, a friendly title and two short lines: no jargon.
@@ -171,6 +190,7 @@ void drawGreeting(const String &title, const String &line1, const String &line2)
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
   drawWifiButton();
   drawCalibrateButton();
+  drawUpdatesButton();
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, title, 146);
   epd.setFont(&FreeSans9pt7b);
@@ -226,12 +246,16 @@ void drawHome(const char *hint = nullptr) {
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
   drawWifiButton();
   drawCalibrateButton();
+  drawUpdatesButton();
 
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, "Dotty", 144);
 
   epd.setFont(&FreeSans9pt7b);
-  if (hasCartridge) {
+  library::Entry newest;
+  if (hasCartridge && library::find(installed.id, "", newest) && library::isNewer(newest.version, installed.version)) {
+    ui::drawCentered(epd, ui::fitText(epd, String(installed.name) + ": update ready", kW - 16), 168);  // installs on start
+  } else if (hasCartridge) {
     ui::drawCentered(epd, ui::fitText(epd, String(installed.name) + " is ready", kW - 16), 168);
   } else {
     ui::drawCentered(epd, "No cartridge yet", 168);
@@ -252,8 +276,22 @@ void drawHome(const char *hint = nullptr) {
   }
 }
 
+bool installFromCard(const library::Entry &entry, String &error);
+String skippedUpdate;  // an update on the card that failed to install: start the old one instead
+
 void startCartridge() {
   startRequested = false;
+  updates::stop(false);
+  // A newer version waiting on the card (updates.h) installs first, then restarts into it.
+  library::Entry newest;
+  if (hasCartridge && library::find(installed.id, "", newest) && library::isNewer(newest.version, installed.version) &&
+      newest.version != skippedUpdate) {
+    LOGI("update", "%s %s -> %s from the card", installed.id, installed.version, newest.version.c_str());
+    String error;
+    if (installFromCard(newest, error)) return;  // loop() restarts into it
+    skippedUpdate = newest.version;
+    return;
+  }
   const String hint = String("Starting ") + installed.name + "...";
   drawHome(hint.c_str());
   shell::refresh(false);
@@ -544,6 +582,7 @@ void notifyFetch(const char *stage, size_t done, size_t size);
 // its icon, then loop() restarts into it. A launcher is staged for Rescue instead. False (the
 // job failed, error set) if it can't.
 bool installFromCard(const library::Entry &entry, String &error) {
+  updates::stop(false);
   uint8_t icon[installer::kIconBytes];
   const bool haveIcon = library::readIcon(entry, icon);
   job.fromBle = false;
@@ -680,6 +719,7 @@ void registerFetchCommand() {
     };
     if (id.isEmpty()) return fail("id is required");
     if (!library::available()) return fail("no SD card");
+    updates::stop(true);  // it's about to use the same Wi-Fi
 
     library::Entry exact;
     if (install && wantVersion.length() && library::find(id, wantVersion, exact) &&
@@ -813,6 +853,7 @@ void drawResetQuestion() {
 
 // Rescue does the erasing; this only leaves it the note (and the newer launcher to keep).
 void startFactoryReset(const String &newerLauncher) {
+  updates::stop(false);
   Preferences p;
   p.begin("rescue", false);
   p.putBool("reset", true);
@@ -878,6 +919,127 @@ void drawCardTransfer() {
   epd.print("Cancel");
 }
 
+// ---------- updates screen ----------
+
+// What the daily check (updates.h) found or is doing, Check now, and a system update when the
+// card has a newer launcher (installed through Rescue).
+bool updatesOpen = false;
+constexpr int16_t kSystemButtonTop = 112, kCheckButtonTop = 156;
+
+String agoText(uint32_t then) {
+  const uint32_t now = time(nullptr);
+  if (!then || now < then) return "";
+  const uint32_t minutes = (now - then) / 60;
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return String(minutes) + " min ago";
+  if (minutes < 48 * 60) return String(minutes / 60) + " h ago";
+  return String(minutes / 1440) + " days ago";
+}
+
+void drawWideButton(int16_t top, const String &label, bool dark) {
+  if (dark) epd.fillRoundRect(16, top, kW - 32, 34, 8, kBlack);
+  else epd.drawRoundRect(16, top, kW - 32, 34, 8, kBlack);
+  epd.setFont(&FreeSansBold9pt7b);
+  epd.setTextColor(dark ? kWhite : kBlack);
+  ui::drawCentered(epd, ui::fitText(epd, label, kW - 44), top + 23);
+  epd.setTextColor(kBlack);
+}
+
+void drawUpdates() {
+  epd.fillScreen(kWhite);
+  epd.setFont(&FreeSans9pt7b);
+  nav::draw(epd, "Updates", nav::Icon::Back, nav::Icon::None);
+  epd.setTextColor(kBlack);
+  const updates::Status st = updates::status();
+  if (st.running) {
+    epd.setFont(&FreeSansBold9pt7b);
+    ui::drawCentered(epd, st.total ? "Downloading" : "Checking", 78);
+    epd.setFont(&FreeSans9pt7b);
+    String line = st.step;
+    if (line.startsWith("Downloading ")) line = line.substring(12);
+    ui::drawCentered(epd, ui::fitText(epd, line, kW - 16), 104);
+    if (st.total) {
+      // A bar for the download in progress, and which one of how many.
+      epd.drawRoundRect(20, 118, kW - 40, 12, 3, kBlack);
+      if (st.size) epd.fillRect(22, 120, (kW - 44) * min(st.bytes, st.size) / st.size, 8, kBlack);
+      ui::drawCentered(epd, String(min(st.done + 1, st.total)) + " of " + String(st.total), 154);
+    }
+    return;
+  }
+  epd.setFont(&FreeSansBold9pt7b);
+  const String launcher = updates::newerLauncher();
+  if (st.error.length()) {
+    ui::drawCentered(epd, "Couldn't check", 74);
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, ui::fitText(epd, net::saved().empty() ? String("Dotty has no Wi-Fi yet") : st.error, kW - 12), 98);
+  } else if (st.checkedAt) {
+    ui::drawCentered(epd, st.downloaded ? String(st.downloaded) + (st.downloaded == 1 ? " update ready" : " updates ready")
+                                        : String("All up to date"), 74);
+    epd.setFont(&FreeSans9pt7b);
+    if (st.downloaded) {
+      ui::drawCentered(epd, "Each one installs when", 98);
+      ui::drawCentered(epd, "you start it", 118);
+    } else {
+      ui::drawCentered(epd, "Checked " + agoText(st.checkedAt), 98);
+    }
+  } else {
+    ui::drawCentered(epd, net::saved().empty() ? "Needs Wi-Fi" : "Not checked yet", 74);
+  }
+  if (launcher.length()) drawWideButton(kSystemButtonTop, "Update Dotty to " + launcher, true);
+  drawWideButton(kCheckButtonTop, "Check now", !launcher.length());
+}
+
+void openUpdates() {
+  updatesOpen = true;
+  // The button checks right away, unless a check just ran.
+  const updates::Status st = updates::status();
+  if (!st.running && !net::saved().empty() && (!st.checkedAt || time(nullptr) - st.checkedAt > 300 || st.error.length())) {
+    updates::start();
+  }
+  shell::showApp();
+}
+
+void loopUpdates(const shell::Input &input) {
+  static int shownDone = -1;
+  static size_t shownBytes = 0;
+  static uint32_t lastDraw = 0;
+  if (input.boot) {
+    updatesOpen = false;
+    shell::showApp();
+    return;
+  }
+  const updates::Status st = updates::status();
+  if (input.gesture == Touch::Gesture::Tap) {
+    const uint16_t x = shell::touch.x(), y = shell::touch.y();
+    if (nav::hit(x, y) < 0) {
+      updatesOpen = false;
+      shell::showApp();
+      return;
+    }
+    if (!st.running && y >= kCheckButtonTop - 6 && y < kCheckButtonTop + 40) {
+      updates::start();
+      lastDraw = 0;
+    } else if (!st.running && y >= kSystemButtonTop - 6 && y < kSystemButtonTop + 40) {
+      library::Entry entry;
+      String error;
+      if (library::find("launcher", updates::newerLauncher(), entry)) {
+        updatesOpen = false;
+        installFromCard(entry, error);  // Rescue installs it; loop() restarts into Rescue
+        return;
+      }
+    }
+  }
+  // Follow the progress (a partial refresh every 2 s while something moves).
+  const bool moved = st.done != shownDone || (st.size && st.bytes != shownBytes);
+  if ((lastDraw == 0 || (moved && millis() - lastDraw > 2000)) && !epd.isBusy()) {
+    lastDraw = millis();
+    shownDone = st.done;
+    shownBytes = st.bytes;
+    drawUpdates();
+    shell::refresh(false);
+  }
+}
+
 // ---------- cartridge picker ----------
 
 int pickerPages(const std::vector<library::Entry> &entries) {
@@ -904,7 +1066,10 @@ void drawPicker() {
     const bool current = hasCartridge && e.id == installed.id;  // the one in the slot
     if (current) epd.fillRect(0, top, kW, kRowH - 1, kBlack);
     epd.setTextColor(current ? kWhite : kBlack);
-    const String version = current ? String(installed.version) : e.version;
+    // The one in the slot shows its own version, or "new 0.2.7" when the card has a newer one.
+    const String version = !current ? e.version
+                           : library::isNewer(e.version, installed.version) ? "new " + e.version
+                                                                             : String(installed.version);
     const int16_t versionW = ui::textWidth(epd, version);
     epd.setCursor(10, top + kRowH / 2 + 6);
     epd.print(ui::fitText(epd, e.name, kW - 30 - versionW));
@@ -969,6 +1134,8 @@ void drawApp() {
     drawResetQuestion();
   } else if (job.stage == Stage::None && calibrate::active()) {
     calibrate::draw();
+  } else if (job.stage == Stage::None && updatesOpen) {
+    drawUpdates();
   } else if (job.stage == Stage::None && wifisetup::active()) {
     wifisetup::draw();
   } else if (job.stage == Stage::None && pickerOpen) {
@@ -1095,6 +1262,7 @@ void setup() {
   });
   registerLibraryCommands();
   registerFetchCommand();
+  updates::begin();
   shell::showApp();
 }
 
@@ -1107,6 +1275,19 @@ void loop() {
     rememberGoodLauncher();
   }
   transfer::poll();
+  // Cartridge updates (updates.h): once a day while the launcher is idle, also while locked.
+  power::setWakeLock(power::kWakeLockNetwork, updates::status().running);
+  if (transfer::active()) updates::stop(true);  // a backup / restore has the Wi-Fi
+  static uint32_t lastDueCheck = 0;
+  if (millis() > 15000 && (!lastDueCheck || millis() - lastDueCheck > 60000) && job.stage == Stage::None && !transfer::active() &&
+      !installer::active() && !wifisetup::active() && !resetRequested) {
+    lastDueCheck = millis();
+    if (updates::due()) updates::start();
+  }
+  if (updates::takeFinished() && job.stage == Stage::None && !transfer::active() && !wifisetup::active() &&
+      !calibrate::active() && !shell::locked()) {
+    shell::showApp();  // the home screen's "update ready", the picker, the Updates screen
+  }
   if (joiningSsid.length()) {  // wifi.add has returned (it ran inside shell::update)
     const std::vector<String> known = net::saved();
     if (std::find(known.begin(), known.end(), joiningSsid) == known.end()) {
@@ -1200,17 +1381,14 @@ void loop() {
       askResetUntil = 0;
       shell::showApp();
     }
+  } else if (updatesOpen) {
+    loopUpdates(input);
   } else if (calibrate::active()) {
     if (calibrate::loop(input)) {
       drawApp();
       shell::refresh(false);
     }
     if (!calibrate::active()) shell::showApp();
-  } else if (input.key == 't' || setupStage() == Setup::Touch ||
-             (input.gesture == Touch::Gesture::LongPress && !pickerOpen) ||
-             (input.gesture == Touch::Gesture::Tap && !pickerOpen && calibrateButtonHit(shell::touch.x(), shell::touch.y()))) {
-    calibrate::open(setupStage() == Setup::Touch);  // serial t: developer aid
-    shell::showApp();
   } else if (wifisetup::active()) {
     // Partial refreshes while typing; taps during one are kept and drawn together next.
     if (wifisetup::loop(input)) {
@@ -1220,9 +1398,18 @@ void loop() {
     if (!wifisetup::active()) shell::showApp();
   } else if (pickerOpen) {
     loopPicker(input);
+  } else if (input.key == 't' || setupStage() == Setup::Touch ||
+             (input.gesture == Touch::Gesture::LongPress && !pickerOpen) ||
+             (input.gesture == Touch::Gesture::Tap && !pickerOpen && calibrateButtonHit(shell::touch.x(), shell::touch.y()))) {
+    calibrate::open(setupStage() == Setup::Touch);  // serial t: developer aid
+    shell::showApp();
+  } else if (input.key == 'u' ||
+             (input.gesture == Touch::Gesture::Tap && !pickerOpen && updatesButtonHit(shell::touch.x(), shell::touch.y()))) {
+    openUpdates();  // serial u: developer aid
   } else if (input.key == 'i' ||
              (input.gesture == Touch::Gesture::Tap &&
               (setupStage() == Setup::WiFi || wifiButtonHit(shell::touch.x(), shell::touch.y())))) {
+    updates::stop(false);  // the scan needs Wi-Fi to itself
     wifisetup::open();  // serial i: developer aid
     shell::showApp();
   } else if (input.key == 'c' || (input.gesture == Touch::Gesture::Tap && !cardCartridges().empty())) {
