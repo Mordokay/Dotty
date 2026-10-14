@@ -31,7 +31,7 @@
 #include "ui.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.19");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.20");
 
 namespace {
 
@@ -78,6 +78,9 @@ constexpr int16_t kRowH = 38;  // like the cartridges' lists: 4 rows a page
 constexpr int kPickerRows = (EpdDisplay::kSize - nav::kHeight - 2) / kRowH;
 bool pickerOpen = false;
 int pickerPage = 0;
+// What it lists, read from the card when it opens: reading every cartridge's .json each loop
+// pass took long enough for a whole swipe to slip between two touch polls.
+std::vector<library::Entry> pickerEntries;
 
 // The last launcher update's outcome, from Rescue's notes (rescue/result…): "updated",
 // "failed" or "rolledBack", until the app has shown it (launcher.updateSeen).
@@ -117,12 +120,33 @@ String joiningSsid;           // wifi.add is joining this network right now
 String joinFailedSsid;        // …and couldn't: said for a moment
 uint32_t joinFailedUntil = 0;
 
+// The Wi-Fi button in the home screen's top-left corner (the battery is in the other one):
+// a fan of three arcs over a dot. A tap within kWifiTouch of the corner opens wifi_setup.
+constexpr int16_t kWifiTouch = 60;
+
+void drawWifiButton() {
+  const int16_t cx = 22, cy = 28;
+  for (int r : {7, 13, 19}) {
+    for (float a = -135; a <= -45; a += 1.5f) {
+      for (float t = 0; t < 2.5f; t += 0.5f) {
+        epd.drawPixel(cx + lroundf((r - t) * cosf(a * PI / 180)), cy + lroundf((r - t) * sinf(a * PI / 180)), kBlack);
+      }
+    }
+  }
+  epd.fillCircle(cx, cy - 1, 2, kBlack);
+}
+
+bool wifiButtonHit(uint16_t x, uint16_t y) {
+  return x < kWifiTouch && y < kWifiTouch;
+}
+
 // The firefly, a friendly title and two short lines: no jargon.
 void drawGreeting(const String &title, const String &line1, const String &line2) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
+  drawWifiButton();
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, title, 146);
   epd.setFont(&FreeSans9pt7b);
@@ -145,7 +169,7 @@ bool drawWelcome() {
       drawGreeting("Hi, I'm Dotty!", "Open the Dotty app", "and pick " + ble::name());
       return true;
     case Setup::WiFi:  // a tap opens the Wi-Fi list (wifi_setup)
-      drawGreeting("We're friends!", "Next, pick a Wi-Fi network", "in the app, or tap here");
+      drawGreeting("We're friends!", "Next, pick a Wi-Fi network", "in the app, or tap here");  // any tap
       return true;
     case Setup::Cartridge:
       drawGreeting("All set!", "Choose a cartridge", "in the Dotty app");
@@ -176,6 +200,7 @@ void drawHome(const char *hint = nullptr) {
   epd.setTextColor(kBlack);
   epd.drawBitmap((kW - kFireflyWidth) / 2, 2, kFirefly, kFireflyWidth, kFireflyHeight, kBlack);
   ui::drawBattery(epd, kW - 8 - 29, 8, battery::percent(), battery::charging());
+  drawWifiButton();
 
   epd.setFont(&FreeSansBold12pt7b);
   ui::drawCentered(epd, "Dotty", 144);
@@ -199,8 +224,6 @@ void drawHome(const char *hint = nullptr) {
     ui::drawCentered(epd, others ? "BOOT: start   Tap: switch" : "Press BOOT to start", 192);
   } else if (others) {
     ui::drawCentered(epd, "Tap to pick one", 192);
-  } else {
-    ui::drawCentered(epd, "Tap for Wi-Fi", 192);
   }
 }
 
@@ -832,35 +855,26 @@ void drawCardTransfer() {
 
 // ---------- cartridge picker ----------
 
-// The cartridges on the card, then a "Wi-Fi" row (joining a network on Dotty: wifi_setup).
 int pickerPages(const std::vector<library::Entry> &entries) {
-  return max(1, (static_cast<int>(entries.size()) + 1 + kPickerRows - 1) / kPickerRows);
+  return max(1, (static_cast<int>(entries.size()) + kPickerRows - 1) / kPickerRows);
 }
 
 void drawPicker() {
-  const std::vector<library::Entry> entries = cardCartridges();
+  const std::vector<library::Entry> &entries = pickerEntries;
   const int pages = pickerPages(entries);
   pickerPage = constrain(pickerPage, 0, pages - 1);
   epd.fillScreen(kWhite);
   nav::draw(epd, "Cartridges", nav::Icon::Back, nav::Icon::None, nav::pageLabel(pickerPage, pages));
   epd.setFont(&FreeSans9pt7b);
+  if (entries.empty()) {
+    epd.setTextColor(kBlack);
+    ui::drawWrapped(epd, "No cartridges on the card yet. Add one from the Dotty app.", 90, kW - 24, 4, 20);
+    return;
+  }
   for (int row = 0; row < kPickerRows; row++) {
     const int i = pickerPage * kPickerRows + row;
-    if (i > static_cast<int>(entries.size())) break;
+    if (i >= static_cast<int>(entries.size())) break;
     const int16_t top = nav::kHeight + 2 + row * kRowH;
-    if (i == static_cast<int>(entries.size())) {
-      epd.setTextColor(kBlack);
-      const size_t saved = net::saved().size();
-      const String count = saved ? String(saved) + " saved" : String("none yet");
-      epd.setFont(&FreeSansBold9pt7b);
-      epd.setCursor(10, top + kRowH / 2 + 6);
-      epd.print("Wi-Fi");
-      epd.setFont(&FreeSans9pt7b);
-      epd.setCursor(kW - 10 - ui::textWidth(epd, count), top + kRowH / 2 + 6);
-      epd.print(count);
-      if (entries.empty()) ui::drawWrapped(epd, "No cartridges on the card yet. Add one from the Dotty app.", top + kRowH + 30, kW - 24, 3, 20);
-      break;
-    }
     const library::Entry &e = entries[i];
     const bool current = hasCartridge && e.id == installed.id;  // the one in the slot
     if (current) epd.fillRect(0, top, kW, kRowH - 1, kBlack);
@@ -891,7 +905,7 @@ void loopPicker(const shell::Input &input) {
     return;
   }
   if (input.boot) return closePicker();
-  const std::vector<library::Entry> entries = cardCartridges();
+  const std::vector<library::Entry> entries = pickerEntries;  // a copy: installing changes the card
   const int pages = pickerPages(entries);
   int page = pickerPage;
   if (input.gesture == G::SwipeLeft || input.gesture == G::SwipeUp) page = (page + 1) % pages;
@@ -905,11 +919,6 @@ void loopPicker(const shell::Input &input) {
     } else if (y >= nav::kHeight + 2) {
       const int row = (y - nav::kHeight - 2) / kRowH;
       const int i = pickerPage * kPickerRows + row;
-      if (row < kPickerRows && i == static_cast<int>(entries.size())) {
-        wifisetup::open();  // the picker stays open underneath: closing Wi-Fi comes back here
-        shell::showApp();
-        return;
-      }
       if (row < kPickerRows && i < static_cast<int>(entries.size())) {
         pickerOpen = false;
         if (hasCartridge && entries[i].id == installed.id) {
@@ -972,6 +981,10 @@ void setup() {
   }
   // Removing the installed cartridge (storage.remove) empties the slot as well.
   storage::onRemove([](const String &id) {
+    if (pickerOpen) {
+      pickerEntries = cardCartridges();
+      shell::showApp();
+    }
     if (!hasCartridge || id != installed.id) return;
     cartridge::eraseInstalled();
     hasCartridge = false;
@@ -1158,12 +1171,15 @@ void loop() {
     if (!wifisetup::active()) shell::showApp();
   } else if (pickerOpen) {
     loopPicker(input);
-  } else if (input.key == 'i' || (input.gesture == Touch::Gesture::Tap && setupStage() == Setup::WiFi)) {
+  } else if (input.key == 'i' ||
+             (input.gesture == Touch::Gesture::Tap &&
+              (setupStage() == Setup::WiFi || wifiButtonHit(shell::touch.x(), shell::touch.y())))) {
     wifisetup::open();  // serial i: developer aid
     shell::showApp();
-  } else if (input.key == 'c' || input.gesture == Touch::Gesture::Tap) {
+  } else if (input.key == 'c' || (input.gesture == Touch::Gesture::Tap && !cardCartridges().empty())) {
     pickerOpen = true;  // serial c: developer aid
     pickerPage = 0;
+    pickerEntries = cardCartridges();
     shell::showApp();
   } else if ((input.boot || startRequested) && hasCartridge) {
     startCartridge();

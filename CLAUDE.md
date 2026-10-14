@@ -147,7 +147,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   since the user kept missing the 30 px bar's arrows; corner icons incl. stars; `nav::hit`
   and `nav::kTouch` = a third of the width per corner, the title isn't a button), the off pictures (`images/sleep_*.h`), touch
   swipes (`Touch::Gesture::Swipe*`, fired on release past 35 px; the e-paper can't follow a
-  finger, so scroll by pages), and the lock-screen widget (`shell::Config::drawLockWidget`
+  finger, so scroll by pages; a touch that began and ended between two polls is dropped — it used
+  to count as a tap at the previous touch's place, so a swipe down the launcher's cartridge list,
+  whose loop re-read the card every pass, opened a cartridge; keep loop passes short), and the lock-screen widget (`shell::Config::drawLockWidget`
   draws into its own 200x80 canvas and returns its height; the clock row — clock + a
   padlock as tall as the digits — and the widget are centred together). A widget must not
   touch the display's font (it shares `epd`): measure on the canvas it's given.
@@ -775,13 +777,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   start Tap: switch") → "Cartridges" list (newest version per cartridge on the card, the
   installed one inverted, 4 rows a page, swipes / the page corner turn pages, back or BOOT
   closes); a row installs from the card and restarts into it, the installed one just starts.
+  The list is read from the card once when it opens (`pickerEntries`), not every loop pass.
   Get to the launcher with BOOT + PWR. Dev key `c` opens it.
-- **Wi-Fi on Dotty** (launcher 0.9.19, `wifi_setup.*`, no phone needed): the picker's last row
-  "Wi-Fi  2 saved" (also a tap on the "pick a Wi-Fi" welcome screen, dev key `i` from home) →
+- **Wi-Fi on Dotty** (launcher 0.9.19, `wifi_setup.*`, no phone needed): the Wi-Fi fan in the
+  home screen's top-left corner (0.9.20; taps within 60 px of the corner; on the welcome screens
+  too; 0.9.19 had it as the picker's last row), or any tap on the "pick a Wi-Fi" welcome screen,
+  dev key `i` from home →
   "Looking for networks" (`net::scan`, blocking, once the screen is up) → list (38 px rows: ✓
   saved, padlock, 4 signal bars; last row "Look again") → keyboard for secured networks → "Joining..."
   (`net::connectTo`, then `remember` only if it worked, like `wifi.add`) → "Connected! / Naru is
-  saved" 3 s, back to the picker; or "Couldn't join" 6 s / tap, back to the keyboard with the
+  saved" 3 s, back home; or "Couldn't join" 6 s / tap, back to the keyboard with the
   password kept (< 8 characters is refused before trying). **Keyboard** (user's design rounds:
   10x6 of 20 px → iPhone-style pages → 8 columns → 4 rows): 8 x 4 keys of 25 x 31 px under the
   nav bar (back · network · "Join" in the right corner, like iOS) and the password field (tap

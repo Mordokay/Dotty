@@ -59,7 +59,6 @@ bool Touch::wake() {
 }
 
 Touch::Gesture Touch::poll() {
-  const bool sawInterrupt = interruptSeen;
   interruptSeen = false;
   const uint8_t count = touchCount();
 
@@ -91,8 +90,10 @@ Touch::Gesture Touch::poll() {
     if (abs(dy) >= abs(dx)) return dy < 0 ? Gesture::SwipeUp : Gesture::SwipeDown;
     return dx < 0 ? Gesture::SwipeLeft : Gesture::SwipeRight;
   }
-  // A whole tap that started and ended while we were busy refreshing.
-  return sawInterrupt ? Gesture::Tap : Gesture::None;
+  // A whole touch began and ended between two polls (the loop was busy): we don't know where
+  // it was or whether it was a swipe, so it's dropped. It used to count as a tap at the last
+  // touch's place: a swipe down the launcher's slow cartridge list opened a cartridge.
+  return Gesture::None;
 }
 
 uint8_t Touch::touchCount() {
