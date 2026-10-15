@@ -1,0 +1,4 @@
+{
+  "description": "Ten thousand mind-blowing facts to say at dinner: space, animals, the human body, history, art, words and more, in 20 categories. Built in, so they work offline and never need updating. Star the best ones; the lock screen shows a new one every 5 minutes.",
+  "requires": ["sd"]
+}

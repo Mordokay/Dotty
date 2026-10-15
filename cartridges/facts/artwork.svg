@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Facts artwork for the iOS app (the e-paper icon is icon.png): a glowing light bulb (the
+     "whoa" moment) under the app icon's night sky, its filament a firefly, sparks around it. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.65"/><stop offset="0.35" stop-color="#B8E04E" stop-opacity="0.22"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="glass" cx="0.42" cy="0.38" r="0.62">
+    <stop offset="0" stop-color="#FFFDE6"/><stop offset="0.55" stop-color="#F1F27C"/><stop offset="1" stop-color="#C9D44A"/>
+  </radialGradient>
+  <radialGradient id="fly" r="0.5">
+    <stop offset="0" stop-color="#FFFBD0"/><stop offset="0.25" stop-color="#F3F27A" stop-opacity="0.8"/>
+    <stop offset="1" stop-color="#B8E04E" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="150" cy="170" r="5" opacity="0.9"/><circle cx="290" cy="100" r="3" opacity="0.6"/>
+  <circle cx="860" cy="130" r="4" opacity="0.8"/><circle cx="930" cy="360" r="3" opacity="0.5"/>
+  <circle cx="90" cy="460" r="3" opacity="0.5"/><circle cx="600" cy="80" r="2.5" opacity="0.5"/>
+  <circle cx="940" cy="640" r="4" opacity="0.7"/><circle cx="110" cy="760" r="2.5" opacity="0.4"/>
+  <circle cx="230" cy="930" r="3" opacity="0.5"/><circle cx="860" cy="900" r="3.5" opacity="0.6"/>
+</g>
+<circle cx="512" cy="440" r="440" fill="url(#halo)"/>
+<!-- sparks -->
+<g stroke="#F3F27A" stroke-width="26" stroke-linecap="round" opacity="0.9">
+  <line x1="512" y1="70" x2="512" y2="140"/><line x1="250" y1="170" x2="298" y2="220"/>
+  <line x1="774" y1="170" x2="726" y2="220"/><line x1="150" y1="420" x2="220" y2="420"/>
+  <line x1="874" y1="420" x2="804" y2="420"/>
+</g>
+<!-- the bulb -->
+<path d="M512 200 C 360 200 270 310 270 430 C 270 520 318 580 362 630 C 392 664 402 700 402 740 L 622 740
+         C 622 700 632 664 662 630 C 706 580 754 520 754 430 C 754 310 664 200 512 200 Z" fill="url(#glass)"/>
+<g fill="#C9D44A">
+  <rect x="396" y="764" width="232" height="44" rx="22"/>
+  <rect x="410" y="824" width="204" height="44" rx="22"/>
+  <rect x="452" y="884" width="120" height="40" rx="20"/>
+</g>
+<!-- filament: a firefly -->
+<g stroke="#1C2A12" stroke-width="14" fill="none" stroke-linecap="round" opacity="0.8">
+  <path d="M452 740 L 472 560"/><path d="M572 740 L 552 560"/>
+</g>
+<circle cx="512" cy="500" r="120" fill="url(#fly)"/>
+<ellipse cx="512" cy="520" rx="34" ry="46" fill="#1C2A12"/>
+<ellipse cx="478" cy="488" rx="30" ry="18" fill="#FFFDE6" opacity="0.9" transform="rotate(-30 478 488)"/>
+<ellipse cx="546" cy="488" rx="30" ry="18" fill="#FFFDE6" opacity="0.9" transform="rotate(30 546 488)"/>
+<circle cx="512" cy="556" r="18" fill="#FFFBD0"/>
+<circle cx="200" cy="640" r="52" fill="url(#fly)"/><circle cx="200" cy="640" r="8" fill="#FFFBD0"/>
+<circle cx="840" cy="700" r="46" fill="url(#fly)"/><circle cx="840" cy="700" r="7" fill="#FFFBD0"/>
+</svg>

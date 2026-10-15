@@ -747,6 +747,40 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   replay key), `C` = a clap while listening (`p` is the shell's pairing preview, `k` lock).
   Rounds are logged ("Memory round 1: lost").
 
+## Facts cartridge (`cartridges/facts/`)
+
+- 10,136 dinner-table facts (user: "cool things people normally don't know", not nerdy; each fits
+  one screen, two at most: <= 200 characters, mostly 80-180) in 20 categories, **built into the
+  firmware**: `facts.txt` ("@key|Name" before each category, then a fact per line, ASCII) is
+  embedded with `board_build.embed_txtfiles` (symbols `_binary_cartridges_facts_facts_txt_start/
+  _end`; ~1.1 MB, the image ~2.7 MB of the 4 MB slot), so it never downloads or updates. Made on
+  2026-10-15 by 20 writer subagents (one per category, ~540 each, rules: true, no myths, dated
+  records, plain words) + 10 reviewer subagents (fix or replace false/dubious/dull lines; they
+  found many myths and stale records) + a duplicate pass (word-overlap pairs across categories,
+  down to 0.30 similarity: 736 repeats removed, each kept once where it fits best: 10,872 →
+  10,136, 465-537 a category);
+  `tools/build_facts.py SOURCE_DIR` merges one file per category into facts.txt (checks ASCII,
+  40-200 chars, sentence ending; drops duplicates and near-duplicates across categories; the
+  category order and names live there). Edit facts.txt directly for small fixes.
+- `facts_store.*`: indexes the text at boot into PSRAM (pointers into flash), FNV-1a of a fact's
+  text = its id. Card `data/seen.bin` (magic + hash of facts.txt + a bit per fact; reset when
+  facts.txt changes), `data/favourites.txt` (ids). `next(scope)` = a random unseen fact of a
+  category / all (`kAny`); a scope seen in full starts over; favourites go in starring order.
+- Dotty: menu = nav "Facts" + page; page 1 starts with a row of three buttons (56 px: icon over
+  a 9pt label - Random (shuffle icon) = browse every category, Play (▶) = the same as a shuffled
+  playlist that moves on by itself, Saved (★) = favourites), then categories with how many are
+  still new (38 px rows, 2 on page 1, 4 after). Fact screen: category in the nav, ☆/★ right
+  corner, the text centred (scrolls with a scrollbar when long); tap / swipe left / BOOT = next,
+  swipe right = back (history of 50), long press = play / stop playing the current scope.
+  Playing: ▶ before the title (‖ paused), tap = pause/resume, a fact stays 8 s + 70 ms a
+  character, `shell::wake()` meanwhile, stops after 30 min untouched. Lock widget: a fact that
+  fits 4 lines (tried from a mixed per-5-minute-slot start). Dev keys: `P` play, `R` random, `n`.
+- BLE: `facts.status` {count, seen, favourites, categories[{key, name, count, seen}], showing?},
+  `facts.favourites` {facts[{id, text, category, favourite}]} (newest first), `facts.favourite
+  {id, on}`, `facts.next {category?}` (shows one on Dotty); event `facts.changed`. App:
+  `Features/Facts/FactsView.swift` (on Dotty now, "Show a new fact", categories → a fact from
+  one, favourites with share / remove).
+
 ## SD library + Wi-Fi fetch (launcher)
 
 - `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/firmware/<version>`
