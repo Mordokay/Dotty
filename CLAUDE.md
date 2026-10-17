@@ -818,6 +818,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   firmware, cleared by installFromCard / library.fetch / a BLE install). A USB-flashed cartridge
   gets a copy on the card 8 s after the launcher starts (`library::saveSlot`, size and SHA-256
   worked out from the image), and the next check gives it the catalog's icon (`saveIcon`).
+- **New cartridges arrive by themselves** (launcher 0.9.28): the daily check also downloads every
+  catalog cartridge that isn't on the card (Facts never appeared in the picker: it had been
+  USB-flashed, and the check only refreshed what was already there), except ones the user removed:
+  `storage::removedByUser` (NVS `storage/removed`, ",id,id,", set by `storage.remove` in every
+  firmware, cleared by installFromCard / library.fetch / a BLE install). A USB-flashed cartridge
+  gets a copy on the card 8 s after the launcher starts (`library::saveSlot`, size and SHA-256
+  worked out from the image), and the next check gives it the catalog's icon (`saveIcon`).
+  Tested 2026-10-17: Facts 0.1.0 came down on a hotel guest Wi-Fi and showed in the picker.
 - **Cartridge updates without the phone** (launcher 0.9.23, `updates.*`): a background task
   (core 0, 12 KB, Network wake lock, also while locked) reads the catalog once a day (NVS
   `updates/checked`, local epoch; 1 h after a failed check; the first one 15 s after the launcher
