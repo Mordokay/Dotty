@@ -37,6 +37,10 @@ std::vector<CartridgeFiles> cartridges();
 // settings (namespace = its id), otherwise those stay for a later reinstall. The running
 // firmware can't remove itself.
 bool removeCartridge(const String &id, bool withData, String &error);
+// Cartridges the user removed (storage.remove): the launcher's daily update check, which also
+// brings new catalog cartridges to the card, leaves them out until they're installed again.
+bool removedByUser(const String &id);
+void setRemovedByUser(const String &id, bool removed);
 // Runs before a removal (the launcher empties the slot if that cartridge is installed).
 void onRemove(std::function<void(const String &id)> hook);
 

@@ -4,8 +4,9 @@
 
 // Cartridge updates over Wi-Fi, without the phone: the launcher reads the GitHub catalog once
 // a day (and from its Updates button), downloads a newer version of every cartridge that is on
-// the card (and of the launcher itself) onto the card, and keeps the newest two versions of
-// each. Nothing is flashed in the background: a cartridge's update installs from the card when
+// the card (and of the launcher itself) onto the card, and every catalog cartridge that isn't
+// there yet unless the user removed it (storage::removedByUser), and keeps the newest two
+// versions of each. Nothing is flashed in the background: a cartridge's update installs from the card when
 // it's started (BOOT, the picker or the app), the launcher's through Rescue from the Updates
 // screen. Runs in its own task; anything else that needs Wi-Fi stops it first (stop()).
 namespace updates {

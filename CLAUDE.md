@@ -811,6 +811,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `installFromCard()` (also `install.fromCard` and the picker). The app skips its "no Wi-Fi
   yet" stop when the card has the cartridge and says when Dotty installed an older card copy.
   A failed install screen goes back home after 15 s or a tap (it used to wait for BOOT).
+- **New cartridges arrive by themselves** (launcher 0.9.28): the daily check also downloads every
+  catalog cartridge that isn't on the card (Facts never appeared in the picker: it had been
+  USB-flashed, and the check only refreshed what was already there), except ones the user removed:
+  `storage::removedByUser` (NVS `storage/removed`, ",id,id,", set by `storage.remove` in every
+  firmware, cleared by installFromCard / library.fetch / a BLE install). A USB-flashed cartridge
+  gets a copy on the card 8 s after the launcher starts (`library::saveSlot`, size and SHA-256
+  worked out from the image), and the next check gives it the catalog's icon (`saveIcon`).
 - **Cartridge updates without the phone** (launcher 0.9.23, `updates.*`): a background task
   (core 0, 12 KB, Network wake lock, also while locked) reads the catalog once a day (NVS
   `updates/checked`, local epoch; 1 h after a failed check; the first one 15 s after the launcher

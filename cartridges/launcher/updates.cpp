@@ -16,6 +16,7 @@
 #include "library.h"
 #include "log.h"
 #include "net.h"
+#include "storage.h"
 
 namespace updates {
 namespace {
@@ -170,9 +171,21 @@ void task(void *) {
         if (entry.id == "launcher") {
           if (!library::isNewer(entry.version, cartridge::self().version)) continue;
           if (library::find("launcher", entry.version, newest)) continue;  // already downloaded
-        } else {
-          if (std::find(onCard.begin(), onCard.end(), entry.id) == onCard.end()) continue;
-          if (library::find(entry.id, "", newest) && !library::isNewer(entry.version, newest.version)) continue;
+        } else if (std::find(onCard.begin(), onCard.end(), entry.id) == onCard.end()) {
+          // New in the catalog (e.g. Facts): onto the card too, unless the user removed it.
+          if (storage::removedByUser(entry.id)) continue;
+        } else if (library::find(entry.id, "", newest) && !library::isNewer(entry.version, newest.version)) {
+          // Already the newest: give a copy without an icon (a USB-flashed one) the catalog's.
+          size_t iconLen = 0;
+          const char *icon64 = item["icon"] | "";
+          uint8_t icon[installer::kIconBytes];
+          if (!newest.hasIcon && newest.version == entry.version &&
+              mbedtls_base64_decode(icon, sizeof(icon), &iconLen, reinterpret_cast<const uint8_t *>(icon64),
+                                    strlen(icon64)) == 0 &&
+              iconLen == sizeof(icon)) {
+            library::saveIcon(newest, icon);
+          }
+          continue;
         }
         size_t iconLen = 0;
         const char *icon64 = item["icon"] | "";

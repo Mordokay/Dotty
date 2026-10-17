@@ -41,6 +41,13 @@ bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error);
 // Rescue has a known-good copy to put back.
 bool saveRunning(const String &id, const String &name, const String &version, String &error);
 
+// Copies the cartridge in the slot (ota_0) onto the card as id/version, working out its size
+// and SHA-256 itself (a USB-flashed one has no copy and no metadata yet).
+bool saveSlot(const String &id, const String &name, const String &version, String &error);
+
+// Writes a version's 64x64 icon (e.g. from the catalog for a copy that has none).
+void saveIcon(const Entry &entry, const uint8_t *icon);
+
 // Deletes one version from the card (.bin, .json, .icon).
 void remove(const Entry &entry);
 

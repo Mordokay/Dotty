@@ -27,7 +27,7 @@
 #include "transfer.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("music", "Music", "0.11.13");
+DOTTY_CARTRIDGE("music", "Music", "0.11.14");
 
 namespace {
 

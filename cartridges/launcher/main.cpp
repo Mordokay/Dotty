@@ -34,7 +34,7 @@
 #include "updates.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.27");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.28");
 
 namespace {
 
@@ -512,6 +512,7 @@ void saveBleInstallToCard() {
   entry.version = m.version;
   entry.size = m.size;
   entry.sha256 = sha256Hex(m.sha256);
+  storage::setRemovedByUser(entry.id, false);  // installed over BLE: wanted again
   String error;
   if (!library::saveInstalled(entry, job.hasIcon ? job.icon : nullptr, error)) {
     LOGW("library", "not saved: %s", error.c_str());
@@ -567,6 +568,15 @@ void rememberGoodLauncher() {
   p.end();
   loadUpdateResult();
   library::Entry onCard;
+  // A cartridge flashed over USB has no copy on the card: keep one, so the picker lists it.
+  if (library::available() && hasCartridge && !library::find(installed.id, installed.version, onCard)) {
+    String error;
+    if (library::saveSlot(installed.id, installed.name, installed.version, error)) {
+      LOGI("library", "kept a copy of the installed %s %s", installed.id, installed.version);
+    } else {
+      LOGW("library", "no copy of %s on the card: %s", installed.id, error.c_str());
+    }
+  }
   if (!library::available() || library::find("launcher", cartridge::self().version, onCard)) return;
   String error;
   if (!library::saveRunning("launcher", "Launcher", cartridge::self().version, error)) {
@@ -583,6 +593,7 @@ void notifyFetch(const char *stage, size_t done, size_t size);
 // job failed, error set) if it can't.
 bool installFromCard(const library::Entry &entry, String &error) {
   updates::stop(false);
+  storage::setRemovedByUser(entry.id, false);  // wanted again: the daily check keeps it fresh
   uint8_t icon[installer::kIconBytes];
   const bool haveIcon = library::readIcon(entry, icon);
   job.fromBle = false;
@@ -720,6 +731,7 @@ void registerFetchCommand() {
     if (id.isEmpty()) return fail("id is required");
     if (!library::available()) return fail("no SD card");
     updates::stop(true);  // it's about to use the same Wi-Fi
+    storage::setRemovedByUser(id, false);
 
     library::Entry exact;
     if (install && wantVersion.length() && library::find(id, wantVersion, exact) &&

@@ -127,12 +127,32 @@ bool saveInstalled(const Entry &entry, const uint8_t *icon, String &error) {
   return saveFrom(slot(), entry, icon, error);
 }
 
+bool saveImage(const esp_partition_t *part, const String &id, const String &name, const String &version,
+               String &error);
+
 bool saveRunning(const String &id, const String &name, const String &version, String &error) {
-  const esp_partition_t *part = esp_ota_get_running_partition();
+  return saveImage(esp_ota_get_running_partition(), id, name, version, error);
+}
+
+bool saveSlot(const String &id, const String &name, const String &version, String &error) {
+  return saveImage(slot(), id, name, version, error);
+}
+
+void saveIcon(const Entry &entry, const uint8_t *icon) {
+  File f = SD_MMC.open(basePath(entry.id, entry.version) + ".icon", FILE_WRITE);
+  if (f) f.write(icon, installer::kIconBytes);
+}
+
+bool saveImage(const esp_partition_t *part, const String &id, const String &name, const String &version,
+               String &error) {
+  if (!part) {
+    error = "no such partition";
+    return false;
+  }
   esp_image_metadata_t image;
   const esp_partition_pos_t pos = {part->address, part->size};
   if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &image) != ESP_OK) {
-    error = "the running image doesn't verify";
+    error = "the image doesn't verify";
     return false;
   }
   // The image's SHA-256, as the catalog has it for the same build.

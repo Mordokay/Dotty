@@ -100,6 +100,7 @@ bool removeCartridge(const String &id, bool withData, String &error) {
     return false;
   }
   if (removeHook) removeHook(id);
+  setRemovedByUser(id, true);
   if (mounted) {
     removeTree(firmwareDir(id));
     if (withData) removeTree(cartridgeDir(id));
@@ -113,6 +114,30 @@ bool removeCartridge(const String &id, bool withData, String &error) {
   }
   LOGI("storage", "removed %s (%s)", id.c_str(), withData ? "with its data" : "kept its data");
   return true;
+}
+
+// NVS storage/removed: ",music,tape," (commas around every id, so a search can't match part of one).
+bool removedByUser(const String &id) {
+  Preferences prefs;
+  prefs.begin("storage", true);
+  const String list = prefs.getString("removed", "");
+  prefs.end();
+  return list.indexOf("," + id + ",") >= 0;
+}
+
+void setRemovedByUser(const String &id, bool removed) {
+  if (removedByUser(id) == removed) return;
+  Preferences prefs;
+  prefs.begin("storage", false);
+  String list = prefs.getString("removed", "");
+  if (removed) {
+    list += (list.isEmpty() ? "," : "") + id + ",";
+  } else {
+    list.replace("," + id + ",", ",");
+    if (list == ",") list = "";
+  }
+  prefs.putString("removed", list);
+  prefs.end();
 }
 
 void onRemove(std::function<void(const String &id)> hook) {
