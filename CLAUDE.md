@@ -923,7 +923,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   locked, cartridge, event: boot / off / empty) by every firmware, to fit the % curve to this
   battery from a real discharge (2026-10-12: the generic curve showed 4-5 % at 3.57-3.61 V and Dotty
   still ran over a day; ~6 mV/h locked). Serial `B` prints the file between `#BATTERY <size>` and
-  `#END`.
+  `#END`. **Fitted** (2026-10-20, `battery.cpp` `curve`): the 400 mAh battery ran 4.09 -> 3.48 V in
+  57 h nearly always locked (~6 mA average); the share of time left at each voltage gave 3.59 V =
+  19 %, 3.72 V = 36 %, 3.81 V = 45 % (the generic curve said 4 %, 18 %, 44 %). The same day the
+  user fitted a **1000 mAh** battery (expect ~2.5x the runtime, ~6 days locked): check its first
+  discharge in the log against the curve.
 - `battery.*` (no fuel gauge, no charge-status pin: STAT only lights the orange LED, and no
   GPIO sees VBUS — checked in the schematic): voltage EMA sampled every 5 s (every wake
   while locked); on battery the shown % only drops when a lower level lasts 1 min (load

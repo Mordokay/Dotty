@@ -26,7 +26,7 @@
 #include "storage.h"
 #include "ui.h"
 
-DOTTY_CARTRIDGE("news", "News", "0.2.9");
+DOTTY_CARTRIDGE("news", "News", "0.2.10");
 
 namespace {
 

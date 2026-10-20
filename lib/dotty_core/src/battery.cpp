@@ -60,14 +60,18 @@ uint32_t lastLoadCheck = 0;
 float lowSinceBattery = 0;  // lowest smoothed voltage since running on battery
 volatile bool spinning = false;
 
+// Percent left for a resting (smoothed) voltage. Fitted to a real discharge of the prototype's
+// LiPo (2026-10-15/17, 4.09 -> 3.48 V in 57 h, nearly always locked, /logs/battery.tsv): the
+// share of the run's time left at each voltage, scaled so 4.09 V = 88 %. The generic curve it
+// replaced was close above 3.8 V but showed 4-8 % for the last third of the run (a day at 4 %).
 uint8_t curve(int32_t mv) {
   struct Point {
     int16_t mv;
     uint8_t percent;
   };
   static const Point kCurve[] = {
-      {3300, 0},  {3600, 5},  {3700, 15}, {3750, 25}, {3800, 40},
-      {3850, 55}, {3900, 65}, {4000, 80}, {4100, 92}, {4180, 100},
+      {3400, 0},  {3480, 2},  {3540, 10}, {3590, 19}, {3640, 28}, {3715, 36},
+      {3810, 45}, {3875, 54}, {3930, 62}, {4010, 75}, {4090, 88}, {4180, 100},
   };
   if (mv <= kCurve[0].mv) return 0;
   for (size_t i = 1; i < sizeof(kCurve) / sizeof(kCurve[0]); i++) {
