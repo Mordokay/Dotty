@@ -65,7 +65,10 @@ void GeminiLive::sendText(const std::string &text) {
 void GeminiLive::poll() {
   if (!ws_.connected()) return;
   const bool alive = ws_.poll([this](const std::string &m) { onMessage(m); });
-  if (!ws_.connected()) return;  // a message handler closed it (runaway guard)
+  // poll() returns true when a message handler closed the socket (runaway guard): nothing to
+  // report. false = the server closed it: its reason (quota, bad key) must reach `failed` (an
+  // early return here once skipped it, and a quota refusal showed as a plain failed connect).
+  if (alive && !ws_.connected()) return;
   if (alive) {
     // The server is ending this connection: close after the reply; the next press opens a new
     // one with the resumption handle (reconnecting here froze the screen for seconds).

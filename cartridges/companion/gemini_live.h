@@ -36,7 +36,8 @@ class GeminiLive {
   void startTurn();
   void sendAudio(const int16_t *pcm, size_t frames);
   void endTurn();
-  void sendText(const std::string &text);  // a typed turn (developer aid)
+  void sendText(const std::string &text);  // a typed turn (the end-of-chat memory review)
+  void sendRaw(const std::string &frame) { ws_.sendText(frame); }  // dev: anything, even invalid
   void poll();
   void close();
   bool ready() const { return ready_ && ws_.connected(); }

@@ -76,6 +76,11 @@ const Saved *findSaved(const String &ssid) {
 
 bool join(const String &ssid, const String &password, String &error) {
   WiFi.mode(WIFI_STA);
+  // A mesh has several access points with one name: by default the ESP32 joins the first one its
+  // scan meets, which was often a far node (-86 dBm where the near one gave -40). Scan every
+  // channel and take the strongest.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid.c_str(), password.c_str());
   const uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs) delay(100);

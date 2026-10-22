@@ -99,6 +99,11 @@ uint32_t lastTextAt = 0;
 std::string turnMemory;        // what this exchange changed in the memories (history)
 std::string memorySection;     // the memories for the next session (built on the loop, read by the task)
 uint32_t noteUntil = 0;        // "Remembered"… shows until then
+// Bluetooth comes back a moment after a session's Wi-Fi is off: once, with it started in the same
+// instant, the iPhone's reconnect hung the Bluetooth controller (interrupt watchdog in
+// ll_connection_update_ind_handler, 2026-10-22).
+uint32_t bleBackAt = 0;
+uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
 int peakDb = -60;
@@ -167,6 +172,7 @@ String placeName() {
 }
 
 void disconnect(const char *why) {
+  reviewStart = 0;
   early.clear();
   earlyAt = 0;
   turnSent = awaitingSend = awaitingConnect = false;
@@ -180,7 +186,7 @@ void disconnect(const char *why) {
   live.close();
   net::disconnect();
   power::setWakeLock(power::kWakeLockNetwork, false);
-  if (!shell::locked()) ble::start();
+  bleBackAt = millis() + 1000;  // Bluetooth back a second after Wi-Fi is off (see bleBackAt)
   LOGI("companion", "disconnected (%s)", why);
 }
 
@@ -298,6 +304,14 @@ GeminiLive::Callbacks callbacks() {
   cb.memory = [](const ToolCall &c) { return applyMemory(c); };
   cb.turnDone = [](int tokens) {
     quotaStrikes = 0;
+    if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
+      usage::addTokens(tokens);
+      LOGI("companion", "memory review done (%d tokens)", tokens);
+      disconnect("idle");
+      reviewStart = 0;
+      setState(Talk::Offline, "Hold BOOT to talk");
+      return;
+    }
     voice::playEnd();
     std::string full = said;  // history gets the whole reply, even before it's all been heard
     for (const TextPiece &p : textQueue) full += p.text;
@@ -434,6 +448,7 @@ void startTalking() {
   info.heard = info.said = "";
   turnMood = info.mood = "neutral";
   firstAudioAt = 0;
+  reviewStart = 0;  // talking again: the end-of-chat review is dropped (its reply drains away)
   turnMemory.clear();
   textQueue.clear();
   replyFrames = 0;
@@ -839,8 +854,12 @@ void loop() {
   if (cancelConnect && !connecting) {  // a cancelled connect has finished: Bluetooth back
     cancelConnect = false;
     power::setWakeLock(power::kWakeLockNetwork, false);
-    if (!shell::locked()) ble::start();
+    bleBackAt = millis() + 1000;
     LOGI("companion", "cancelled connect cleaned up");
+  }
+  if (bleBackAt && millis() > bleBackAt && !connecting && !live.connected()) {
+    bleBackAt = 0;
+    if (!shell::locked()) ble::start();
   }
   if (!unlocked) {
     if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
@@ -948,9 +967,20 @@ void loop() {
     }
   }
   // Idle: disconnect (Bluetooth back on), and let Dotty lock as usual.
+  // Before closing, a silent review: Gemini goes over the chat and saves what it missed (it once
+  // kept "likes popcorn" but not "my name is Peter"). Closed when it's done, or after 20 s.
   if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > kIdleMs) {
-    disconnect("idle");
-    setState(Talk::Offline, "Hold BOOT to talk");
+    if (!reviewStart && live.ready()) {
+      reviewStart = millis();
+      LOGI("companion", "chat over: memory review");
+      live.sendText(
+          "(Dotty, not the user: the chat is over.) Go over it: call remember or update_memory for anything worth "
+          "keeping that you haven't saved yet. Then reply with just: Bye.");
+    } else if (!reviewStart || millis() - reviewStart > 20000) {
+      reviewStart = 0;
+      disconnect("idle");
+      setState(Talk::Offline, "Hold BOOT to talk");
+    }
   }
   if (live.connected() || connecting) shell::wake();
 
@@ -988,6 +1018,7 @@ void loop() {
     f.close();
     LOGI("companion", "memories.json broken on purpose: restart to see it set aside");
   }
+  if (input.key == 'J' && live.connected()) live.sendRaw("not json");  // dev: the server closes the session
   if (input.key == 'N') {  // dev: show the memory note
     info.note = "Remembered";
     noteUntil = millis() + 3000;

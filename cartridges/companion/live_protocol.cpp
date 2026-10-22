@@ -207,7 +207,7 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "You have a memory that lasts between chats. When the user tells you something lasting about themselves (their name above all), "
       "the people in their life, what they like or dislike, their plans and dates, their goals, or asks you to "
       "remember something, call remember with one short sentence written to them (\"Your sister is called "
-      "Ana\"). Don't remember small talk or one-off questions. If it's already in your memory, call update_memory "
+      "Ana\"). Don't remember small talk or one-off questions, but when in doubt, remember: a fact the user shares about their life is worth keeping. When they add detail to something you remember, update it. If it's already in your memory, call update_memory "
       "with its number instead of repeating it; when they ask you to forget something, call forget_memory. Never "
       "remember passwords, codes or other secrets. Don't announce that you saved something. "
       "The local time is " + localTime;
