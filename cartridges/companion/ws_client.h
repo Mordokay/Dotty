@@ -30,7 +30,8 @@ class WsClient {
 
  private:
   bool sendFrame(uint8_t opcode, const uint8_t *data, size_t len);
-  bool writeAll(const std::vector<uint8_t> &frame);
+  bool writeAll(const std::vector<uint8_t> &frame, uint32_t timeoutMs);
+  void drop();  // closes without a goodbye (the connection is already broken)
   esp_tls *tls_ = nullptr;
   int fd_ = -1;
   WsDecoder decoder_;

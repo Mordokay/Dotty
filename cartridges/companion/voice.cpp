@@ -37,7 +37,13 @@ void captureLoop(void *) {
       int peak = 1;
       for (size_t i = 0; i < got; i++) peak = max(peak, abs(block[i]));
       level = max(-60, static_cast<int>(20 * log10f(peak / 32768.0f)));
-      if (xStreamBufferSend(captured, block, got * 2, 0) != got * 2) LOGW("voice", "capture buffer full");
+      if (xStreamBufferSend(captured, block, got * 2, 0) != got * 2) {
+        static uint32_t lastWarned = 0;  // once a second: a stalled reader flooded the log ring
+        if (millis() - lastWarned > 1000) {
+          lastWarned = millis();
+          LOGW("voice", "capture buffer full (the loop isn't reading)");
+        }
+      }
     }
     captureRunning = false;
   }

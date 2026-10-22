@@ -47,6 +47,8 @@ class GeminiLive {
   Callbacks cb_;
   bool ready_ = false;
   bool turn_ = false;       // from startTurn (or sendText) until the reply has ended
+  bool moodAnswered_ = false;  // set_mood answered for this question
+  int unasked_ = 0;            // turns completed with no question open
   bool speech_ = false;     // the current reply has brought audio or text
   bool goAway_ = false;     // reconnect once the turn is over
   int tokens_ = 0;          // this turn's tokens (the tool-only turn and the speech turn)

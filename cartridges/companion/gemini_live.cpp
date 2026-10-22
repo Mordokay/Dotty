@@ -37,6 +37,8 @@ bool GeminiLive::open() {
 void GeminiLive::startTurn() {
   turn_ = true;
   speech_ = false;
+  moodAnswered_ = false;
+  unasked_ = 0;
   tokens_ = 0;
   ws_.sendText(liveActivityStart());
 }
@@ -103,9 +105,16 @@ void GeminiLive::onMessage(const std::string &message) {
   if (!e.resumeHandle.empty()) config_.resumeHandle = e.resumeHandle;
   if (e.goAway) goAway_ = true;
   if (!e.toolCallId.empty()) {
-    LOGI("live", "%s(%s)", e.toolName.c_str(), e.mood.c_str());
-    ws_.sendText(liveToolOk(e.toolCallId, e.toolName));
-    if (!e.mood.empty() && cb_.mood) cb_.mood(e.mood);
+    // One answer per question asked: Gemini took every answer as a cue to speak again, which
+    // called set_mood again… a loop that ran on by itself for minutes (2026-10-22). Later calls
+    // stay unanswered (the call is non-blocking: the reply goes on without it).
+    const bool answer = turn_ && !moodAnswered_;
+    LOGI("live", "%s(%s)%s", e.toolName.c_str(), e.mood.c_str(), answer ? "" : " - not answered");
+    if (answer) {
+      moodAnswered_ = true;
+      ws_.sendText(liveToolOk(e.toolCallId, e.toolName));
+    }
+    if (turn_ && !e.mood.empty() && cb_.mood) cb_.mood(e.mood);
   }
   if (!e.inputText.empty() && cb_.heard) cb_.heard(e.inputText);
   if (!e.outputText.empty() && cb_.said) cb_.said(e.outputText);
@@ -119,6 +128,13 @@ void GeminiLive::onMessage(const std::string &message) {
   }
   if (e.totalTokens > 0) tokens_ += e.totalTokens;
   if (e.turnComplete) LOGI("live", "turn complete%s (%d tokens)", speech_ ? "" : " without speech", e.totalTokens);
+  // Turns nobody asked for (a loop on Google's side) cost tokens and go nowhere: a few in a row
+  // close the session.
+  if (e.turnComplete && !turn_ && ++unasked_ >= 3) {
+    LOGW("live", "%d turns nobody asked for: closing the session", unasked_);
+    close();
+    return;
+  }
   if (e.interrupted) LOGI("live", "interrupted");
   if (e.errorCode) LOGW("live", "error %d", e.errorCode);
   // A turn with only a set_mood call isn't the reply: the speech follows in the next turn.

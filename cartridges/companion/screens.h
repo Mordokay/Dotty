@@ -12,6 +12,7 @@ struct ScreenInfo {
   String status;         // one line under the avatar
   String heard, said;    // this turn's words
   String mood = "neutral";
+  String avatar = "robot";  // the avatar id (settings)
   int levelDb = -60;     // the microphone meter while listening
   bool textOnly = false;
   int frame = 0;         // the animation clock (blink, bob, talking mouth)

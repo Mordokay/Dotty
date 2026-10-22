@@ -35,6 +35,7 @@
 #include "usage_rules.h"
 #include "voice.h"
 #include "voice_pack.h"
+#include <Fonts/FreeSans9pt7b.h>
 #include "voices.h"
 #include <SD_MMC.h>
 #if __has_include("dev_key.h")
@@ -78,6 +79,7 @@ uint32_t lastTurnAt = 0, stateSince = 0, releasedAt = 0, firstAudioAt = 0, lastF
 // sent the moment it is, so you never wait to speak, only for the reply.
 std::string early;            // PCM bytes recorded before the turn could open (PSRAM: > 16 KB)
 constexpr size_t kEarlyMaxBytes = 60 * 16000 * 2;  // a minute
+size_t earlyAt = 0;           // how much of `early` has gone out (a few chunks per loop pass)
 bool turnSent = false;        // activityStart went out for this recording
 bool awaitingSend = false;    // released before the session was ready: send it all then
 bool awaitingConnect = false; // a connect is under way (the screen may be listening meanwhile)
@@ -114,6 +116,7 @@ void loadSettings() {
   settings.key = p.getString("key", "");
   settings.voice = p.getString("voice", "Zephyr");
   settings.avatar = p.getString("avatar", "robot");
+  if (!avatar::known(settings.avatar)) settings.avatar = "robot";
   settings.textOnly = p.getBool("textOnly", false);
   settings.volume = p.getInt("volume", 70);
   settings.favourites = p.getString("favourites", kDefaultFavourites);
@@ -124,6 +127,7 @@ void loadSettings() {
   if (settings.key.isEmpty()) settings.key = COMPANION_DEV_KEY;
 #endif
   info.textOnly = settings.textOnly;
+  info.avatar = settings.avatar;
 }
 
 int64_t nowUtc() {
@@ -158,6 +162,7 @@ String placeName() {
 
 void disconnect(const char *why) {
   early.clear();
+  earlyAt = 0;
   turnSent = awaitingSend = awaitingConnect = false;
   live.close();
   voice::stopListening();
@@ -200,6 +205,8 @@ void beginReply() {
 GeminiLive::Callbacks callbacks() {
   GeminiLive::Callbacks cb;
   cb.ready = [] {
+    LOGI("companion", "ready; heap %u KB internal (largest %u)", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
     lastTurnAt = millis();
     awaitingConnect = false;
     if (info.state == Talk::Connecting) setState(Talk::Ready, "Hold BOOT to talk");  // else talking already
@@ -303,7 +310,9 @@ void connect() {
   if (connecting || live.connected()) return;
   if (settings.key.isEmpty()) return setState(Talk::Error, "Key missing. Add it in the app.");
   if (const int64_t out = usage::outUntilUtc()) return setState(Talk::Error, outOfWords(out));
-  ble::stop();  // TLS needs the internal RAM Bluetooth holds
+  // Bluetooth is off for the session: with it on (and the iPhone connected) TLS left 36 KB of
+  // internal RAM, largest block 12 KB, and a session hung in its sends until the watchdog reset.
+  ble::stop();
   power::setWakeLock(power::kWakeLockNetwork, true);
   connecting = true;
   awaitingConnect = true;
@@ -317,25 +326,39 @@ void connect() {
 
 // ---------- a turn ----------
 
-// One recorded chunk: to Gemini once the turn is open, else kept for later.
+bool earlyPending() {
+  return earlyAt < early.size();
+}
+
+// One recorded chunk: straight to Gemini once the turn is open and the backlog is out, else queued.
 void sendVoice(const int16_t *pcm, size_t frames) {
   sentFrames += frames;
-  if (turnSent) return live.sendAudio(pcm, frames);
+  if (turnSent && !earlyPending()) return live.sendAudio(pcm, frames);
   if (early.size() + frames * 2 > kEarlyMaxBytes) return;  // a minute is plenty
   early.append(reinterpret_cast<const char *>(pcm), frames * 2);
 }
 
-// Opens the turn and sends what was recorded while connecting.
 void openTurn() {
   live.startTurn();
   turnSent = true;
+  earlyAt = 0;
+  if (early.size()) LOGI("companion", "sending %.1f s recorded while connecting", early.size() / 2.0f / voice::kInRate);
+}
+
+// The backlog goes out a few chunks per loop pass: sending 7 s at once held the loop ~2 s and the
+// microphone's buffer overflowed.
+void flushEarly() {
   const size_t chunkBytes = voice::kChunkFrames * 2;
-  for (size_t at = 0; at < early.size(); at += chunkBytes) {
-    live.sendAudio(reinterpret_cast<const int16_t *>(early.data() + at), min(chunkBytes, early.size() - at) / 2);
+  for (int i = 0; i < 3 && earlyPending(); i++) {
+    const size_t n = min(chunkBytes, early.size() - earlyAt);
+    live.sendAudio(reinterpret_cast<const int16_t *>(early.data() + earlyAt), n / 2);
+    earlyAt += n;
   }
-  if (early.size()) LOGI("companion", "sent %.1f s recorded while connecting", early.size() / 2.0f / voice::kInRate);
-  early.clear();
-  early.shrink_to_fit();
+  if (!earlyPending()) {
+    early.clear();
+    early.shrink_to_fit();
+    earlyAt = 0;
+  }
 }
 
 void startTalking() {
@@ -349,6 +372,7 @@ void startTalking() {
   sentFrames = 0;
   peakDb = -60;
   early.clear();
+  earlyAt = 0;
   turnSent = awaitingSend = false;
   if (!voice::startListening()) return;
   if (live.ready()) openTurn();
@@ -358,7 +382,9 @@ void startTalking() {
 
 void finishTurn() {
   live.endTurn();
-  LOGI("companion", "sent %.1f s of voice, peak %d dBFS", sentFrames / float(voice::kInRate), peakDb);
+  LOGI("companion", "sent %.1f s of voice, peak %d dBFS; heap %u KB internal (largest %u), %u KB PSRAM",
+       sentFrames / float(voice::kInRate), peakDb, heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
   releasedAt = millis();
 }
 
@@ -367,13 +393,13 @@ void stopTalking() {
   static int16_t chunk[voice::kChunkFrames];
   size_t frames = 0;
   while (voice::nextChunk(chunk, frames)) sendVoice(chunk, frames);
-  if (turnSent) {
+  if (turnSent && !earlyPending()) {
     finishTurn();
     setState(Talk::Thinking);
-  } else {  // still connecting: it goes out the moment the session is ready
+  } else {  // still connecting, or the backlog is going out: ends once it's all sent
     awaitingSend = true;
     info.heard = "";
-    setState(Talk::Thinking, "Connecting...");
+    setState(Talk::Thinking, turnSent ? "" : "Connecting...");
   }
 }
 
@@ -391,6 +417,8 @@ void saveSettings() {
   p.putString("voice", settings.voice);
   p.putBool("textOnly", settings.textOnly);
   p.putInt("volume", settings.volume);
+  p.putString("favourites", settings.favourites);
+  p.putString("avatar", settings.avatar);
   p.end();
 }
 
@@ -411,8 +439,7 @@ void closeSettings() {
   settingsChanged = false;
   saveSettings();
   if (live.connected() && (info.state == Talk::Ready || info.state == Talk::After)) {
-    disconnect("settings changed");  // the voice and reply kind are fixed per session
-    connect();
+    disconnect("settings changed");  // fixed per session: the next press opens one with them
   }
 }
 
@@ -524,6 +551,135 @@ void onLock() {
   if (info.state != Talk::Error) setState(Talk::Offline, "Hold BOOT to talk");
 }
 
+// ---------- BLE commands (the app; Bluetooth is on while no session is open) ----------
+
+const char *stateName(Talk t) {
+  switch (t) {
+    case Talk::Offline: return "offline";
+    case Talk::Connecting: return "connecting";
+    case Talk::Ready: return "ready";
+    case Talk::Listening: return "listening";
+    case Talk::Thinking: return "thinking";
+    case Talk::Speaking: return "speaking";
+    case Talk::After: return "after";
+    case Talk::Error: return "error";
+  }
+  return "?";
+}
+
+void notifyChanged() {
+  JsonDocument event;
+  event["event"] = "companion.changed";
+  ble::notify(event);
+}
+
+void registerCommands() {
+  ble::on("companion.status", [](JsonObjectConst, JsonObject reply) {
+    reply["connected"] = live.connected();
+    reply["state"] = stateName(info.state);
+    reply["mood"] = info.mood;
+    reply["avatar"] = settings.avatar;
+    reply["voice"] = settings.voice;
+    JsonArray favs = reply["favourites"].to<JsonArray>();
+    for (int i : favouriteIndexes(settings.favourites.c_str())) favs.add(kVoices[i].name);
+    reply["volume"] = settings.volume;
+    reply["textOnly"] = settings.textOnly;
+    reply["keySet"] = !settings.key.isEmpty();
+    if (settings.key.length() >= 4) reply["keyHint"] = settings.key.substring(settings.key.length() - 4);
+    JsonObject today = reply["today"].to<JsonObject>();
+    today["turns"] = usage::turnsToday();
+    today["tokens"] = usage::tokensToday();
+    if (const int64_t out = usage::outUntilUtc()) reply["outUntil"] = out;
+  });
+  // Every field optional; the key is trimmed, "" clears it, and it's never logged or sent back.
+  ble::on("companion.settings", [](JsonObjectConst args, JsonObject reply) {
+    bool reconnect = false;
+    if (args["voice"].is<const char *>()) {
+      if (voiceIndex(args["voice"]) < 0) {
+        reply["ok"] = false;
+        reply["error"] = "unknown voice";
+        return;
+      }
+      reconnect |= settings.voice != args["voice"].as<const char *>();
+      settings.voice = args["voice"].as<const char *>();
+    }
+    if (args["favourites"].is<JsonArrayConst>()) {
+      String list;
+      for (JsonVariantConst v : args["favourites"].as<JsonArrayConst>()) {
+        if (voiceIndex(v | "") < 0) continue;
+        if (list.length()) list += ",";
+        list += v.as<const char *>();
+      }
+      settings.favourites = list.length() ? list : String(kDefaultFavourites);
+    }
+    if (args["textOnly"].is<bool>()) {
+      reconnect |= settings.textOnly != args["textOnly"].as<bool>();
+      settings.textOnly = info.textOnly = args["textOnly"];
+    }
+    if (args["volume"].is<int>()) {
+      settings.volume = constrain(args["volume"].as<int>(), 0, 100);
+      player.setVolume(settings.volume);
+    }
+    if (args["avatar"].is<const char *>()) {
+      if (!avatar::known(args["avatar"].as<const char *>())) {
+        reply["ok"] = false;
+        reply["error"] = "unknown avatar";
+        return;
+      }
+      settings.avatar = info.avatar = args["avatar"].as<const char *>();
+    }
+    if (args["key"].is<const char *>()) {
+      settings.key = trimKey(args["key"].as<const char *>()).c_str();
+      Preferences p;
+      p.begin("companion", false);
+      p.putString("key", settings.key);
+      p.end();
+      reconnect = true;
+      usage::markOut(0);  // a new key = a new allowance
+      LOGI("companion", "key %s", settings.key.isEmpty() ? "cleared" : ("set (..." + settings.key.substring(max(0, (int)settings.key.length() - 4)) + ")").c_str());
+    }
+    saveSettings();
+    if (reconnect && live.connected() && (info.state == Talk::Ready || info.state == Talk::After)) {
+      disconnect("settings changed");  // the next press opens a session with them
+    }
+    redraw = true;
+    notifyChanged();
+  });
+  ble::on("companion.history", [](JsonObjectConst args, JsonObject reply) {
+    const String day = args["day"] | "";
+    if (day.isEmpty()) {
+      JsonArray days = reply["days"].to<JsonArray>();
+      for (const String &d : history::days()) days.add(d);
+      return;
+    }
+    reply["day"] = day;
+    reply["turns"] = serialized(history::day(day));
+  });
+  ble::on("companion.forget", [](JsonObjectConst args, JsonObject reply) {
+    reply["ok"] = history::forget(args["day"] | "");
+    notifyChanged();
+  });
+}
+
+// Locked: the avatar asleep under the clock, with today's chats beside it once there are some.
+int16_t drawLockAvatar(Adafruit_GFX &gfx, const tm &, int16_t maxHeight) {
+  if (maxHeight < avatar::kSmall) return 0;
+  const int turns = usage::turnsToday();
+  const String line = turns ? String(turns) + (turns == 1 ? " chat today" : " chats today") : String();
+  gfx.setFont(&FreeSans9pt7b);
+  int16_t bx, by;
+  uint16_t tw = 0, th = 0;
+  if (line.length()) gfx.getTextBounds(line, 0, 0, &bx, &by, &tw, &th);
+  const int16_t total = avatar::kSmall + (tw ? 8 + tw : 0);
+  const int16_t x = (EpdDisplay::kSize - total) / 2;
+  avatar::draw(gfx, x, 0, settings.avatar, avatar::Face::Sleeping, 0, avatar::kSmall);
+  if (tw) {
+    gfx.setCursor(x + avatar::kSmall + 8, avatar::kSmall / 2 + 6);
+    gfx.print(line);
+  }
+  return avatar::kSmall;
+}
+
 const shell::Picture kOffPictures[] = {{kSleepPanda, kSleepPandaWidth, kSleepPandaHeight}};
 
 }  // namespace
@@ -531,21 +687,19 @@ const shell::Picture kOffPictures[] = {{kSleepPanda, kSleepPandaWidth, kSleepPan
 void setup() {
   shell::Config config;
   config.drawApp = drawApp;
+  config.drawLockWidget = drawLockAvatar;
   config.offPictures = kOffPictures;
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
-  config.wakeApp = [] {
-    player.powerUp();
-    connect();  // unlocking connects in the background
-  };
+  config.wakeApp = [] { player.powerUp(); };
   shell::begin(config);
   storage::begin();
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
   voice::begin(player);
   loadSettings();
+  registerCommands();
   setState(Talk::Offline, "Hold BOOT to talk");
   shell::showApp();
-  connect();
 }
 
 void loop() {
@@ -566,12 +720,11 @@ void loop() {
     disconnect("connect failed");
     setState(Talk::Error, connectError.length() ? connectError : String("Can't connect"));
   }
-  if (!turnSent && live.ready() && (info.state == Talk::Listening || awaitingSend)) {
-    openTurn();
-    if (awaitingSend) {
-      awaitingSend = false;
-      finishTurn();
-    }
+  if (!turnSent && live.ready() && (info.state == Talk::Listening || awaitingSend)) openTurn();
+  if (turnSent && earlyPending()) flushEarly();
+  if (awaitingSend && turnSent && !earlyPending()) {
+    awaitingSend = false;
+    finishTurn();
   }
 
   // The session ended without a word (closed here, or the socket died quietly).
@@ -640,7 +793,7 @@ void loop() {
     lastOutCheck = millis();
     if (!usage::outUntilUtc()) {
       setState(Talk::Offline, "Hold BOOT to talk");
-      if (quotaStrikes) connect();  // the minute's wait is over
+      // (the next press connects: sessions open on the first BOOT press)
     }
   }
   // Idle: disconnect (Bluetooth back on), and let Dotty lock as usual.

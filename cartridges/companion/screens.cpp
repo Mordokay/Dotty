@@ -119,8 +119,8 @@ void draw(const ScreenInfo &info) {
   const bool small = info.textOnly && (info.state == Talk::Speaking || info.state == Talk::After);
   // The avatar: centred and large, or small in the corner when text takes the screen.
   const avatar::Face face = avatar::faceFor(info.state, info.mood, info.frame);
-  if (small) avatar::draw(epd, kW - 52, 30, face, info.frame, 48);
-  else avatar::draw(epd, (kW - kAvatarSize) / 2, 8, face, info.frame, kAvatarSize);
+  if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
+  else avatar::draw(epd, (kW - kAvatarSize) / 2, 8, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
   drawHistoryIcon();
 

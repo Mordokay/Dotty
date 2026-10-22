@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- Companion artwork for the iOS app (the e-paper icon is icon.png): a glowing speech bubble
+     under the app icon's night sky, a firefly's light as its middle dot (Dotty answering), a
+     small green bubble for you, and sound waves. -->
+<defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#0B1426"/><stop offset="0.6" stop-color="#0E1F22"/><stop offset="1" stop-color="#12291B"/>
+  </linearGradient>
+  <radialGradient id="halo" r="0.5">
+    <stop offset="0" stop-color="#F3F27A" stop-opacity="0.55"/><stop offset="0.4" stop-color="#B8E04E" stop-opacity="0.18"/>
+    <stop offset="1" stop-color="#7BC043" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="glass" cx="0.4" cy="0.35" r="0.7">
+    <stop offset="0" stop-color="#FFFDE6"/><stop offset="0.6" stop-color="#F1F27C"/><stop offset="1" stop-color="#C9D44A"/>
+  </radialGradient>
+  <radialGradient id="fly" r="0.5">
+    <stop offset="0" stop-color="#FFFBD0"/><stop offset="0.25" stop-color="#F3F27A" stop-opacity="0.8"/>
+    <stop offset="1" stop-color="#B8E04E" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#sky)"/>
+<g fill="#F4EBD0">
+  <circle cx="150" cy="150" r="5" opacity="0.9"/><circle cx="300" cy="90" r="3" opacity="0.6"/>
+  <circle cx="880" cy="120" r="4" opacity="0.8"/><circle cx="950" cy="330" r="3" opacity="0.5"/>
+  <circle cx="80" cy="420" r="3" opacity="0.5"/><circle cx="620" cy="70" r="2.5" opacity="0.5"/>
+  <circle cx="950" cy="620" r="4" opacity="0.7"/><circle cx="90" cy="900" r="2.5" opacity="0.4"/>
+  <circle cx="520" cy="960" r="3" opacity="0.5"/><circle cx="900" cy="930" r="3.5" opacity="0.6"/>
+</g>
+<circle cx="560" cy="420" r="430" fill="url(#halo)"/>
+<!-- Dotty's bubble -->
+<path d="M300 220 H 820 A 110 110 0 0 1 930 330 V 520 A 110 110 0 0 1 820 630 H 470 L 340 730 L 370 630 H 300
+         A 110 110 0 0 1 190 520 V 330 A 110 110 0 0 1 300 220 Z" fill="url(#glass)"/>
+<circle cx="400" cy="425" r="38" fill="#1C2A12" opacity="0.75"/>
+<circle cx="720" cy="425" r="38" fill="#1C2A12" opacity="0.75"/>
+<circle cx="560" cy="425" r="130" fill="url(#fly)"/>
+<ellipse cx="560" cy="440" rx="30" ry="40" fill="#1C2A12"/>
+<ellipse cx="530" cy="410" rx="27" ry="16" fill="#FFFDE6" opacity="0.9" transform="rotate(-30 530 410)"/>
+<ellipse cx="590" cy="410" rx="27" ry="16" fill="#FFFDE6" opacity="0.9" transform="rotate(30 590 410)"/>
+<circle cx="560" cy="472" r="16" fill="#FFFBD0"/>
+<!-- your bubble -->
+<path d="M130 770 H 330 A 60 60 0 0 1 390 830 V 870 A 60 60 0 0 1 330 930 H 160 L 100 975 L 112 925
+         A 60 60 0 0 1 70 870 V 830 A 60 60 0 0 1 130 770 Z" fill="#7BC043" opacity="0.9"/>
+<g fill="#12291B" opacity="0.7">
+  <circle cx="170" cy="850" r="16"/><circle cx="230" cy="850" r="16"/><circle cx="290" cy="850" r="16"/>
+</g>
+<!-- sound waves -->
+<g stroke="#F3F27A" stroke-width="24" fill="none" stroke-linecap="round" opacity="0.85">
+  <path d="M760 720 Q 800 780 760 840"/><path d="M830 690 Q 890 780 830 870"/><path d="M900 660 Q 980 780 900 900"/>
+</g>
+</svg>

@@ -79,20 +79,37 @@ bool WsClient::connect(const char *host, const char *path, String &error) {
 bool WsClient::sendFrame(uint8_t opcode, const uint8_t *data, size_t len) {
   uint8_t mask[4];
   esp_fill_random(mask, sizeof(mask));
-  return writeAll(wsEncode(opcode, data, len, mask));
+  return writeAll(wsEncode(opcode, data, len, mask), kTimeoutMs);
 }
 
-bool WsClient::writeAll(const std::vector<uint8_t> &frame) {
+bool WsClient::writeAll(const std::vector<uint8_t> &frame, uint32_t timeoutMs) {
   if (!tls_) return false;
   size_t done = 0;
   const uint32_t start = millis();
   while (done < frame.size()) {
     const ssize_t n = esp_tls_conn_write(tls_, frame.data() + done, frame.size() - done);
-    if (n > 0) done += n;
-    else if (n != ESP_TLS_ERR_SSL_WANT_READ && n != ESP_TLS_ERR_SSL_WANT_WRITE) return false;
-    if (millis() - start > kTimeoutMs) return false;
+    if (n > 0) {
+      done += n;
+      continue;
+    }
+    if ((n != ESP_TLS_ERR_SSL_WANT_READ && n != ESP_TLS_ERR_SSL_WANT_WRITE) || millis() - start > timeoutMs) {
+      // A send that can't finish means the connection is gone (or memory ran out): drop it, so
+      // the caller sees it closed instead of every later send waiting out its own timeout (that
+      // stalled the loop until the watchdog reset Dotty).
+      LOGW("ws", "send failed after %lu ms (%d): dropping the connection", millis() - start, static_cast<int>(n));
+      drop();
+      return false;
+    }
+    delay(1);
   }
   return true;
+}
+
+void WsClient::drop() {
+  if (!tls_) return;
+  esp_tls_conn_destroy(tls_);
+  tls_ = nullptr;
+  fd_ = -1;
 }
 
 bool WsClient::sendText(const char *data, size_t len) {
@@ -148,8 +165,6 @@ void WsClient::close() {
   // reconnecting seconds later was refused as over quota (too many open sessions).
   uint8_t mask[4];
   esp_fill_random(mask, sizeof(mask));
-  writeAll(wsCloseFrame(1000, mask));
-  esp_tls_conn_destroy(tls_);
-  tls_ = nullptr;
-  fd_ = -1;
+  writeAll(wsCloseFrame(1000, mask), 1000);
+  drop();
 }
