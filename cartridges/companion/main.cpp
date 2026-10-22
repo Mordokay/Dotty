@@ -1,27 +1,43 @@
 // Companion: talk to an AI (Gemini Live) by holding BOOT; it answers out loud in about a second,
-// with the text on screen and an animated avatar. See
+// with the text on screen and an animated avatar. Spec:
 // docs/superpowers/specs/2026-10-22-companion-talking-design.md.
+//
+// Opening the cartridge or unlocking connects in the background (Wi-Fi, TLS, setup: ~10 s, in a
+// task of its own so the screen stays alive; Bluetooth is off meanwhile: TLS needs its RAM).
+// Hold BOOT (≥ 120 ms) = listen, your voice streams up in 100 ms chunks; release = the reply
+// streams back and plays as it arrives. BOOT while it speaks interrupts it. 3 minutes without a
+// turn, or locking, disconnects (Bluetooth back on). Top-left corner = text-only replies,
+// top-right = today's chats.
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <esp_heap_caps.h>
-#include <Fonts/FreeSansBold9pt7b.h>
+#include <time.h>
+
+#include <string>
+#include <vector>
 
 #include "audio_player.h"
+#include "avatar.h"
+#include "board_pins.h"
 #include "cartridge.h"
-#include "images/sleep_panda.h"
 #include "core_ble.h"
-#include "log.h"
-#include "net.h"
 #include "gemini_live.h"
 #include "history.h"
-#include "ws_client.h"
-#if __has_include("dev_key.h")
-#include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY
-#endif
-#include <Preferences.h>
+#include "images/sleep_panda.h"
+#include "log.h"
+#include "nav_bar.h"
+#include "net.h"
+#include "power.h"
+#include "screens.h"
 #include "shell.h"
 #include "storage.h"
-#include "ui.h"
+#include "usage_rules.h"
+#include "voice.h"
+#include "voices.h"
+#if __has_include("dev_key.h")
+#include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
+#endif
 
 DOTTY_CARTRIDGE("companion", "Companion", "0.1.0");
 
@@ -29,113 +45,395 @@ namespace {
 
 using shell::epd;
 
+constexpr uint32_t kHoldMs = 120;                   // BOOT held this long = listen (as in Tape)
+constexpr uint32_t kIdleMs = 3 * 60 * 1000;         // no turn for this long: disconnect
+constexpr uint32_t kAfterMs = 4000;                 // the mood face after a reply
+constexpr uint32_t kFrameMs = 1500;                 // the avatar's animation clock
+constexpr uint32_t kErrorMs = 6000;                 // a connection error shows this long
+constexpr uint32_t kFullRefreshMs = 2 * 60 * 1000;  // clear ghosting (as the Pet does)
+
 AudioPlayer player;
-
-void drawApp() {
-  epd.fillScreen(EpdDisplay::kWhite);
-  epd.setTextColor(EpdDisplay::kBlack);
-  epd.setFont(&FreeSansBold9pt7b);
-  ui::drawCentered(epd, "Companion", 100);
-}
-
-// Developer aid (serial S): 2 s of a 440 Hz tone at 24 kHz through the streaming API, written
-// in 480-frame pieces like network audio would arrive.
-void streamTestTone() {
-  constexpr uint32_t kRate = 24000;
-  if (!player.startStream(kRate)) {
-    LOGW("companion", "stream test: startStream failed");
-    return;
-  }
-  static int16_t piece[480];
-  uint32_t phase = 0;
-  const uint32_t step = static_cast<uint32_t>(440.0 / kRate * 4294967296.0);
-  for (int sent = 0; sent < 2 * kRate;) {
-    for (int i = 0; i < 480; i++, phase += step) piece[i] = static_cast<int16_t>(6000 * sinf(phase / 4294967296.0f * 2 * PI));
-    size_t done = 0;
-    while (done < 480) {
-      done += player.writeStream(piece + done, 480 - done);
-      if (done < 480) delay(5);
-    }
-    sent += 480;
-  }
-  player.endStream();
-  LOGI("companion", "stream test: sent 2 s");
-}
-
-// Developer aid (serial W): the WebSocket client against a public echo server.
-void echoTest() {
-  ble::stop();
-  String error;
-  if (!net::connect(error)) {
-    LOGW("ws", "echo test: Wi-Fi: %s", error.c_str());
-    return;
-  }
-  LOGI("ws", "heap before TLS: internal %u free, largest %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-  WsClient ws;
-  const uint32_t start = millis();
-  if (!ws.connect("echo.websocket.org", "/", error)) {
-    LOGW("ws", "echo test: %s", error.c_str());
-    return;
-  }
-  LOGI("ws", "connected in %lu ms; heap internal %u free, largest %u", millis() - start,
-       heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-  ws.sendText(std::string("hello"));
-  const uint32_t sent = millis();
-  bool echoed = false;
-  while (!echoed && millis() - sent < 5000) {
-    ws.poll([&](const std::string &m) {
-      LOGI("ws", "message: \"%s\"", m.substr(0, 60).c_str());
-      if (m == "hello") echoed = true;
-    });
-    delay(10);
-  }
-  LOGI("ws", "echo %s", echoed ? "\"hello\"" : "missing");
-  ws.close();
-  net::disconnect();
-  ble::start();
-}
-
 GeminiLive live;
 
-String apiKey() {
-  Preferences p;
-  p.begin("companion", true);
-  String key = p.getString("key", "");
-  p.end();
-#ifdef COMPANION_DEV_KEY
-  if (key.isEmpty()) key = COMPANION_DEV_KEY;
-#endif
-  return key;
+// Settings (NVS companion; set from the app with companion.settings).
+struct Settings {
+  String key, voice = "Zephyr", avatar = "robot";
+  bool textOnly = false;
+  int volume = 70;
+  String favourites = kDefaultFavourites;  // the voices Dotty steps through (picked in the app)
+} settings;
+bool settingsOpen = false;
+bool settingsChanged = false;  // voice or speech changed: the session restarts with them
+int quotaStrikes = 0;          // quota errors since the last good turn
+
+ScreenInfo info;
+bool redraw = true;
+bool historyOpen = false;
+int historyScroll = 0;
+
+uint32_t lastTurnAt = 0, stateSince = 0, releasedAt = 0, firstAudioAt = 0, lastFrameAt = 0, lastFullAt = 0;
+bool pendingTalk = false;   // BOOT was held while connecting: listen once ready
+bool simulatedHold = false;  // dev key r
+std::string heard, said;    // this turn (std::string: they also go to history)
+String turnMood = "neutral";
+// The reply's text arrives faster than its voice plays: each piece waits until the speaker has
+// played the audio that had arrived with it, so the words appear as they're spoken.
+struct TextPiece {
+  size_t atFrame;
+  std::string text;
+};
+std::vector<TextPiece> textQueue;
+size_t replyFrames = 0;  // reply audio received so far
+uint32_t lastTextAt = 0;
+size_t sentFrames = 0;  // this turn's voice, for the log
+int peakDb = -60;
+
+// The background connect (a task: TLS takes seconds and must not freeze the screen).
+TaskHandle_t connectTask = nullptr;
+volatile bool connecting = false;
+String connectError;
+
+void setState(Talk s, const String &status = String()) {
+  info.state = s;
+  info.status = status;
+  stateSince = millis();
+  redraw = true;
 }
 
-// Developer aid (serial c, then T): connect to Gemini Live and send a typed turn.
-void liveTest(bool typed) {
-  if (!live.connected()) {
-    ble::stop();
-    String error;
-    if (!net::connect(error)) {
-      LOGW("live", "Wi-Fi: %s", error.c_str());
+void loadSettings() {
+  Preferences p;
+  p.begin("companion", true);
+  settings.key = p.getString("key", "");
+  settings.voice = p.getString("voice", "Zephyr");
+  settings.avatar = p.getString("avatar", "robot");
+  settings.textOnly = p.getBool("textOnly", false);
+  settings.volume = p.getInt("volume", 70);
+  settings.favourites = p.getString("favourites", kDefaultFavourites);
+  p.end();
+  if (voiceIndex(settings.voice.c_str()) < 0) settings.voice = kVoices[0].name;
+  player.setVolume(settings.volume);
+#ifdef COMPANION_DEV_KEY
+  if (settings.key.isEmpty()) settings.key = COMPANION_DEV_KEY;
+#endif
+  info.textOnly = settings.textOnly;
+}
+
+int64_t nowUtc() {
+  int32_t offset = 0;
+  shell::utcOffset(offset);
+  return static_cast<int64_t>(time(nullptr)) - offset;
+}
+
+// "08:00" for a UTC instant, in local time.
+String localClock(int64_t utc) {
+  int32_t offset = 0;
+  shell::utcOffset(offset);
+  const time_t local = utc + offset;
+  tm t;
+  gmtime_r(&local, &t);
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
+  return buf;
+}
+
+String outOfWords(int64_t untilUtc) {
+  return "I'm out of words for today. Back at " + localClock(untilUtc) + ".";
+}
+
+String placeName() {
+  Preferences p;
+  p.begin("weather", true);
+  const String name = p.getString("name", "");
+  p.end();
+  return name;
+}
+
+void disconnect(const char *why) {
+  live.close();
+  voice::stopListening();
+  voice::playStop();
+  net::disconnect();
+  power::setWakeLock(power::kWakeLockNetwork, false);
+  if (!shell::locked()) ble::start();
+  LOGI("companion", "disconnected (%s)", why);
+}
+
+void showText(const std::string &t) {
+  said += t;
+  info.said = said.c_str();
+  redraw = true;
+}
+
+// Moves the pieces whose audio has now been heard onto the screen (all of them with `all`).
+void releaseText(bool all) {
+  const size_t played = voice::playedFrames();
+  size_t n = 0;
+  while (n < textQueue.size() && (all || textQueue[n].atFrame <= played)) n++;
+  if (!n) return;
+  for (size_t i = 0; i < n; i++) said += textQueue[i].text;
+  textQueue.erase(textQueue.begin(), textQueue.begin() + n);
+  info.said = said.c_str();
+  redraw = true;
+}
+
+// The first piece of a reply: time it, start the speaker (once per reply).
+void beginReply() {
+  if (firstAudioAt) return;
+  firstAudioAt = millis();
+  LOGI("companion", "first %s %lu ms after release", settings.textOnly ? "text" : "audio", firstAudioAt - releasedAt);
+  if (!settings.textOnly) voice::playStart();
+  setState(Talk::Speaking);
+}
+
+// ---------- Gemini callbacks (run inside live.poll(), on the main loop) ----------
+
+GeminiLive::Callbacks callbacks() {
+  GeminiLive::Callbacks cb;
+  cb.ready = [] {
+    lastTurnAt = millis();
+    setState(Talk::Ready, "Hold BOOT to talk");
+  };
+  cb.heard = [](const std::string &t) {
+    heard += t;
+    info.heard = heard.c_str();
+    redraw = true;
+  };
+  cb.said = [](const std::string &t) {
+    if (info.state != Talk::Thinking && info.state != Talk::Speaking) return;  // an interrupted reply
+    if (settings.textOnly) {
+      showText(t);
+      beginReply();
+    } else {
+      textQueue.push_back({replyFrames, t});
+    }
+  };
+  cb.audio = [](const int16_t *pcm, size_t frames) {
+    if (info.state != Talk::Thinking && info.state != Talk::Speaking) return;
+    if (!voice::playing()) beginReply();
+    voice::play(pcm, frames);
+    replyFrames += frames;
+  };
+  cb.mood = [](const std::string &m) {
+    turnMood = m.c_str();
+    info.mood = turnMood;
+  };
+  cb.turnDone = [](int tokens) {
+    quotaStrikes = 0;
+    voice::playEnd();
+    std::string full = said;  // history gets the whole reply, even before it's all been heard
+    for (const TextPiece &p : textQueue) full += p.text;
+    const uint32_t ms = firstAudioAt ? firstAudioAt - releasedAt : millis() - releasedAt;
+    history::append(heard, full, turnMood.c_str(), ms, tokens);
+    usage::addTurn(tokens);
+    LOGI("companion", "turn: %u ms to first audio, %d tokens; heard \"%s\"; said \"%s\"", static_cast<unsigned>(ms),
+         tokens, heard.c_str(), full.c_str());
+    lastTurnAt = millis();
+    info.page = -1;
+    if (info.state == Talk::Thinking) setState(Talk::After);  // text-only replies end here
+  };
+  cb.failed = [](const std::string &error, int retry, bool quota, bool badKey) {
+    if (connecting) {  // inside the connect task: the loop reports it once the task ends
+      connectError = error.c_str();
       return;
     }
-    LiveConfig config;
-    config.systemInstruction = systemInstruction("12:00", "");
-    GeminiLive::Callbacks cb;
-    cb.ready = [] { LOGI("live", "test: ready"); };
-    cb.said = [](const std::string &t) { LOGI("live", "said: %s", t.c_str()); };
-    cb.mood = [](const std::string &m) { LOGI("live", "mood: %s", m.c_str()); };
-    cb.audio = [](const int16_t *, size_t frames) {
-      static size_t total = 0;
-      total += frames;
-      if (total % 24000 < frames) LOGI("live", "audio: %u frames so far", static_cast<unsigned>(total));
-    };
-    cb.turnDone = [](int tokens) { LOGI("live", "turn done, %d tokens", tokens); };
-    cb.failed = [](const std::string &e, int retry, bool quota, bool badKey) {
-      LOGW("live", "failed: %s (retry %d, quota %d, badKey %d)", e.c_str(), retry, quota, badKey);
-    };
-    live.begin(apiKey().c_str(), config, cb);
+    voice::stopListening();
+    voice::playStop();
+    if (quota) {
+      // Google says "quota" for short limits too (a burst of sessions while flashing): the first
+      // one without a retry time waits a minute; a second in a row = the day's allowance.
+      const bool daily = retry <= 0 && quotaStrikes > 0;
+      const int64_t until = retry > 0 ? nowUtc() + retry : daily ? nextPacificMidnightUtc(nowUtc()) : nowUtc() + 60;
+      quotaStrikes++;
+      usage::markOut(until);
+      disconnect("quota");
+      setState(Talk::Error, daily ? outOfWords(until) : String("Gemini is busy. Trying again in a minute."));
+    } else if (badKey) {
+      disconnect("bad key");
+      setState(Talk::Error, "Key not accepted. Check it in the app.");
+    } else {
+      disconnect(error.c_str());
+      setState(Talk::Error, "Connection lost");
+    }
+  };
+  return cb;
+}
+
+// ---------- connecting ----------
+
+void connectLoop(void *) {
+  String error;
+  bool ok = net::connect(error);
+  if (!ok) {  // a join sometimes times out once and works straight after (seen at boot)
+    LOGW("companion", "Wi-Fi: %s, trying again", error.c_str());
+    error = "";
+    ok = net::connect(error);
   }
-  if (typed && live.ready()) live.sendText("Say hello to me in one short sentence.");
+  if (ok) {
+    LiveConfig config;
+    config.voice = settings.voice.c_str();
+    config.textOnly = settings.textOnly;
+    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str());
+    ok = live.begin(settings.key.c_str(), config, callbacks());
+    if (!ok) error = "Can't reach Gemini";
+  } else {
+    LOGW("companion", "Wi-Fi: %s", error.c_str());
+    error = "No Wi-Fi";
+  }
+  if (!ok && connectError.isEmpty()) connectError = error;
+  if (!ok) LOGW("companion", "connect failed: %s", error.c_str());
+  connecting = false;
+  connectTask = nullptr;
+  vTaskDelete(nullptr);
+}
+
+void connect() {
+  if (connecting || live.connected()) return;
+  if (settings.key.isEmpty()) return setState(Talk::Error, "Key missing. Add it in the app.");
+  if (const int64_t out = usage::outUntilUtc()) return setState(Talk::Error, outOfWords(out));
+  ble::stop();  // TLS needs the internal RAM Bluetooth holds
+  power::setWakeLock(power::kWakeLockNetwork, true);
+  connecting = true;
+  connectError = "";
+  setState(Talk::Connecting, "Waking up...");
+  if (xTaskCreatePinnedToCore(connectLoop, "companion-connect", 12288, nullptr, 2, &connectTask, 1) != pdPASS) {
+    connecting = false;
+    setState(Talk::Error, "Out of memory");
+  }
+}
+
+// ---------- a turn ----------
+
+void startTalking() {
+  heard.clear();
+  said.clear();
+  info.heard = info.said = "";
+  turnMood = info.mood = "neutral";
+  firstAudioAt = 0;
+  textQueue.clear();
+  replyFrames = 0;
+  sentFrames = 0;
+  peakDb = -60;
+  if (!voice::startListening()) return;
+  live.startTurn();
+  setState(Talk::Listening);
+}
+
+void stopTalking() {
+  voice::stopListening();
+  static int16_t chunk[voice::kChunkFrames];
+  size_t frames = 0;
+  while (voice::nextChunk(chunk, frames)) {
+    live.sendAudio(chunk, frames);
+    sentFrames += frames;
+  }
+  live.endTurn();
+  LOGI("companion", "sent %.1f s of voice, peak %d dBFS", sentFrames / float(voice::kInRate), peakDb);
+  releasedAt = millis();
+  setState(Talk::Thinking);
+}
+
+void loadHistory(std::vector<std::pair<String, String>> &out) {
+  const std::vector<String> days = history::days();
+  if (days.empty()) return;
+  JsonDocument doc;
+  if (deserializeJson(doc, history::day(days[0])) != DeserializationError::Ok) return;
+  for (JsonObject t : doc.as<JsonArray>()) out.push_back({t["you"] | "", t["dotty"] | ""});
+}
+
+void saveSettings() {
+  Preferences p;
+  p.begin("companion", false);
+  p.putString("voice", settings.voice);
+  p.putBool("textOnly", settings.textOnly);
+  p.putInt("volume", settings.volume);
+  p.end();
+}
+
+SettingsView settingsView() {
+  SettingsView v;
+  v.volume = settings.volume;
+  v.speak = !settings.textOnly;
+  v.voice = settings.voice;
+  v.style = kVoices[max(0, voiceIndex(settings.voice.c_str()))].style;
+  v.choices = favouriteCount(settings.favourites.c_str());
+  return v;
+}
+
+void closeSettings() {
+  settingsOpen = false;
+  redraw = true;
+  if (!settingsChanged) return;
+  settingsChanged = false;
+  saveSettings();
+  if (live.connected() && (info.state == Talk::Ready || info.state == Talk::After)) {
+    disconnect("settings changed");  // the voice and reply kind are fixed per session
+    connect();
+  }
+}
+
+void onSettingsTap(uint16_t x, uint16_t y) {
+  static const AudioPlayer::Note kBeep[] = {{76, 120}};
+  switch (screens::settingsHit(x, y)) {
+    case SettingsHit::Back:
+      return closeSettings();
+    case SettingsHit::VolumeDown:
+    case SettingsHit::VolumeUp:
+      settings.volume = constrain(settings.volume + (screens::settingsHit(x, y) == SettingsHit::VolumeUp ? 10 : -10), 0, 100);
+      player.setVolume(settings.volume);
+      saveSettings();
+      if (!voice::playing() && info.state != Talk::Listening) player.playNotes(kBeep, 1);  // hear the level
+      break;
+    case SettingsHit::Speak:
+      settings.textOnly = info.textOnly = !settings.textOnly;
+      settingsChanged = true;
+      break;
+    case SettingsHit::VoicePrev:
+    case SettingsHit::VoiceNext: {
+      const int step = screens::settingsHit(x, y) == SettingsHit::VoiceNext ? 1 : -1;
+      settings.voice = nextFavourite(settings.favourites.c_str(), settings.voice.c_str(), step);
+      settingsChanged = true;
+      break;
+    }
+    case SettingsHit::None:
+      return;
+  }
+  redraw = true;
+}
+
+void drawApp() {
+  if (settingsOpen) {
+    screens::drawSettings(settingsView());
+  } else if (historyOpen) {
+    std::vector<std::pair<String, String>> exchanges;
+    loadHistory(exchanges);
+    screens::drawHistory(exchanges, historyScroll);
+  } else {
+    screens::draw(info);
+  }
+}
+
+void onTap(uint16_t x, uint16_t y) {
+  if (settingsOpen) return onSettingsTap(x, y);
+  if (historyOpen) {
+    if (nav::hit(x, y) < 0) historyOpen = false;
+    redraw = true;
+    return;
+  }
+  if (y < 40 && x < 50) {  // settings
+    settingsOpen = true;
+    redraw = true;
+  } else if (y < 40 && x > 150) {
+    historyOpen = true;
+    historyScroll = 0;
+    redraw = true;
+  } else if (info.state == Talk::Error || info.state == Talk::Offline) {
+    connect();
+  }
+}
+
+void onLock() {
+  if (live.connected() || connecting) disconnect("locked");
+  if (info.state != Talk::Error) setState(Talk::Offline, "Hold BOOT to talk");
 }
 
 const shell::Picture kOffPictures[] = {{kSleepPanda, kSleepPandaWidth, kSleepPandaHeight}};
@@ -148,27 +446,150 @@ void setup() {
   config.offPictures = kOffPictures;
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
-  config.wakeApp = [] { player.powerUp(); };
+  config.wakeApp = [] {
+    player.powerUp();
+    connect();  // unlocking connects in the background
+  };
   shell::begin(config);
   storage::begin();
-  LOGI("boot", "audio %s", player.begin(16000) ? "ok" : "FAILED");
+  LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
+  voice::begin(player);
+  loadSettings();
+  setState(Talk::Offline, "Hold BOOT to talk");
   shell::showApp();
+  connect();
 }
 
 void loop() {
   shell::Input input;
-  if (!shell::update(input)) return;
-  if (input.key == 'S') streamTestTone();
-  if (input.key == 'W') echoTest();
-  if (input.key == 'H') {  // developer aid: a fake turn into history and usage
-    history::append("Is this a test?", "Yes, \"just\" a test.", "happy", 900, 123);
-    usage::addTurn(123);
-    const std::vector<String> d = history::days();
-    LOGI("history", "%s: %s; today %d turns, %d tokens", d.empty() ? "none" : d[0].c_str(),
-         d.empty() ? "" : history::day(d[0]).c_str(), usage::turnsToday(), usage::tokensToday());
+  const bool unlocked = shell::update(input);
+  if (!unlocked) {
+    if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
+    return;
   }
-  if (input.key == 'c') liveTest(false);
-  if (input.key == 'T') liveTest(true);
-  live.poll();
-  delay(10);
+  if (!connecting) live.poll();  // the connect task owns the socket until it ends
+  voice::poll();
+
+  // The background connect finished.
+  if (!connecting && info.state == Talk::Connecting && !live.connected()) {
+    disconnect("connect failed");
+    setState(Talk::Error, connectError.length() ? connectError : String("Can't connect"));
+  }
+  if (!connecting && info.state == Talk::Connecting && live.ready()) setState(Talk::Ready, "Hold BOOT to talk");
+
+  // Push-to-talk.
+  const bool bootDown = digitalRead(PIN_BTN_BOOT) == LOW || simulatedHold;
+  static uint32_t downAt = 0;
+  if (!bootDown) downAt = 0;
+  else if (!downAt) downAt = millis();
+  const bool held = bootDown && millis() - downAt >= kHoldMs;
+  if (held && !historyOpen && !settingsOpen) {
+    if (info.state == Talk::Offline || info.state == Talk::Error) {
+      connect();
+      pendingTalk = true;
+    } else if (info.state == Talk::Connecting) {
+      pendingTalk = true;
+    } else if (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Speaking) {
+      startTalking();  // also interrupts a reply
+    }
+  }
+  if (pendingTalk && info.state == Talk::Ready) {
+    pendingTalk = false;
+    if (bootDown) startTalking();
+  }
+  if (!bootDown) pendingTalk = false;
+
+  if (info.state == Talk::Listening) {
+    static int16_t chunk[voice::kChunkFrames];
+    size_t frames = 0;
+    while (voice::nextChunk(chunk, frames)) {
+      live.sendAudio(chunk, frames);
+      sentFrames += frames;
+      peakDb = max(peakDb, voice::levelDb());
+    }
+    if (!bootDown) stopTalking();
+    static uint32_t lastMeter = 0;
+    if (millis() - lastMeter > 500) {
+      lastMeter = millis();
+      info.levelDb = voice::levelDb();
+      redraw = true;
+    }
+  }
+  if (info.state == Talk::Thinking && millis() - releasedAt > 20000) setState(Talk::Ready, "No reply. Try again?");
+  if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
+    lastTextAt = millis();  // at most a redraw a second: a partial refresh takes 0.6 s
+    releaseText(!voice::playing());
+  }
+  if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn()) {
+    releaseText(true);
+    setState(Talk::After);
+  }
+  if (info.state == Talk::After && info.mood != "neutral" && millis() - stateSince > kAfterMs) {
+    info.mood = "neutral";  // the reply stays on screen until the next turn
+    redraw = true;
+  }
+  static uint32_t lastOutCheck = 0;  // NVS read: not on every pass
+  if (info.state == Talk::Error && millis() - stateSince > kErrorMs && !live.connected() &&
+      millis() - lastOutCheck > 10000) {
+    lastOutCheck = millis();
+    if (!usage::outUntilUtc()) {
+      setState(Talk::Offline, "Hold BOOT to talk");
+      if (quotaStrikes) connect();  // the minute's wait is over
+    }
+  }
+  // Idle: disconnect (Bluetooth back on), and let Dotty lock as usual.
+  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > kIdleMs) {
+    disconnect("idle");
+    setState(Talk::Offline, "Hold BOOT to talk");
+  }
+  if (live.connected() || connecting) shell::wake();
+
+  // Touch: corners, scrolling a reply or history.
+  if (input.gesture == Touch::Gesture::Tap) onTap(shell::touch.x(), shell::touch.y());
+  if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
+    const int step = input.gesture == Touch::Gesture::SwipeUp ? 3 : -3;
+    if (historyOpen) historyScroll = max(0, historyScroll - step);
+    else if (info.state == Talk::After) {  // up = the next page, down = the one before
+      const int pages = screens::replyPages(info);
+      const int now = info.page < 0 ? pages - 1 : info.page;
+      info.page = constrain(now + (step > 0 ? 1 : -1), 0, pages - 1);
+    }
+    redraw = true;
+  }
+  if (input.boot && settingsOpen) closeSettings();
+  if (input.boot && historyOpen) {
+    historyOpen = false;
+    redraw = true;
+  }
+
+  // Developer aids.
+  if (input.key == 'r') simulatedHold = !simulatedHold;
+  if (input.key == 't') onTap(10, 10);
+  if (input.key == 'X') live.close();
+  if (input.key == 'm') {
+    static const char *moods[] = {"happy", "sad", "surprised", "thinking", "laughing", "love", "neutral"};
+    static int i = 0;
+    info.mood = moods[i++ % 7];
+    setState(Talk::After);
+  }
+  if (input.key == 'Q') {  // undo q
+    usage::markOut(0);
+    setState(Talk::Offline, "Hold BOOT to talk");
+  }
+  if (input.key == 'q') callbacks().failed("Resource has been exhausted (e.g. check quota).", -1, true, false);
+
+  // The avatar's animation clock.
+  if (millis() - lastFrameAt > kFrameMs && info.state != Talk::Listening) {
+    lastFrameAt = millis();
+    info.frame++;
+    redraw = true;
+  }
+  if (redraw && !epd.isBusy()) {
+    redraw = false;
+    drawApp();
+    const bool full = millis() - lastFullAt > kFullRefreshMs;
+    if (full) lastFullAt = millis();
+    shell::refresh(full, false);
+  }
+  delay(info.state == Talk::Listening ? 1 : 10);
 }

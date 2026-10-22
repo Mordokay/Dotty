@@ -103,6 +103,7 @@ void GeminiLive::onMessage(const std::string &message) {
   if (!e.resumeHandle.empty()) config_.resumeHandle = e.resumeHandle;
   if (e.goAway) goAway_ = true;
   if (!e.toolCallId.empty()) {
+    LOGI("live", "%s(%s)", e.toolName.c_str(), e.mood.c_str());
     ws_.sendText(liveToolOk(e.toolCallId, e.toolName));
     if (!e.mood.empty() && cb_.mood) cb_.mood(e.mood);
   }
@@ -117,6 +118,9 @@ void GeminiLive::onMessage(const std::string &message) {
     if (cb_.audio) cb_.audio(reinterpret_cast<const int16_t *>(e.audioPcm.data()), e.audioPcm.size() / 2);
   }
   if (e.totalTokens > 0) tokens_ += e.totalTokens;
+  if (e.turnComplete) LOGI("live", "turn complete%s (%d tokens)", speech_ ? "" : " without speech", e.totalTokens);
+  if (e.interrupted) LOGI("live", "interrupted");
+  if (e.errorCode) LOGW("live", "error %d", e.errorCode);
   // A turn with only a set_mood call isn't the reply: the speech follows in the next turn.
   if (e.turnComplete && turn_ && speech_) {
     turn_ = false;

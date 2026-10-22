@@ -225,6 +225,12 @@ void AudioPlayer::stopStream() {
 // audio has started), the end once endStream() was called and the ring has run dry.
 void AudioPlayer::playStream() {
   constexpr size_t kFrames = 256;
+  // Start with a quarter second in hand: network audio arrives in bursts, and starting on the
+  // first piece ran the ring dry a few times at the start of every reply.
+  if (!streamGotData_ && !streamEnding_ && ring_->available() < sampleRate_ / 4) {
+    writeSilence();
+    return;
+  }
   const size_t got = ring_->read(pcm, kFrames);
   if (got == 0) {
     if (streamEnding_) {

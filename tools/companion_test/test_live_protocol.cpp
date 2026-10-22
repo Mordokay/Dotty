@@ -90,5 +90,6 @@ int main() {
   CHECK("instruction: no place clause", noPlace.find("user is in") == std::string::npos &&
                                             noPlace.compare(noPlace.size() - 24, 24, "The local time is 14:05.") == 0);
   CHECK("instruction: short replies", noPlace.rfind("You are Dotty, a small desk companion. Talk like a person in conversation:", 0) == 0);
+  CHECK("instruction: always English", noPlace.find("Always speak English") != std::string::npos);
   return failures ? 1 : 0;
 }

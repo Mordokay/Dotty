@@ -163,7 +163,8 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
   std::string s =
       "You are Dotty, a small desk companion. Talk like a person in conversation: usually one or two short "
       "sentences; longer only when asked. You are on a tiny screen with a speaker: never use lists, markdown or "
-      "emoji. Call set_mood with each reply. The local time is " + localTime;
+      "emoji. Always speak English, even when the user's words are unclear or sound like another language. "
+      "Call set_mood with each reply. The local time is " + localTime;
   if (!place.empty()) s += ", the user is in " + place;
   return s + ".";
 }
