@@ -50,6 +50,10 @@ class CompanionList {
   int next_ = 1;
 };
 
+// The companion `step` places from `current` in `order` (Dotty's settings row): wraps round;
+// `current` itself when there's one companion or none (no card).
+std::string stepCompanion(const std::vector<std::string> &order, const std::string &current, int step);
+
 // Moving piece 2a's single memory and history folders into Debug's (paths under data/): move a
 // folder only when the old one exists and Debug's doesn't — a second run, or one after a power cut
 // mid-move, finishes the job and never overwrites.

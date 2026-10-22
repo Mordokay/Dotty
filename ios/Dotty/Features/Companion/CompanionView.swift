@@ -142,6 +142,8 @@ struct CompanionPage: View {
     @State private var error: String?
     @State private var photoItem: PhotosPickerItem?
     @State private var pickingPhoto = false
+    @State private var library: [String] = []
+    @State private var uploading: Double?
     @State private var photoToEdit: PickedPhoto?
 
     struct PickedPhoto: Identifiable {
@@ -239,26 +241,54 @@ struct CompanionPage: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Button { pickingPhoto = true } label: {
-                    VStack(spacing: 2) {
-                        CompanionView.avatarImage(profile.avatar == "photo" ? "photo" : "none", companion: summary.id, size: 48)
-                            .overlay { if profile.avatar != "photo" { Image(systemName: "photo.badge.plus").font(.title2) } }
+                ForEach(library, id: \.self) { photo in
+                    Button { Task { await wear(photo) } } label: {
+                        VStack(spacing: 2) {
+                            Group {
+                                if let image = AvatarPhotos.preview(photo) {
+                                    Image(uiImage: image).interpolation(.none).resizable().scaledToFit().clipShape(Circle())
+                                } else {
+                                    Image(systemName: "photo").resizable().scaledToFit()
+                                }
+                            }
+                            .frame(width: 48, height: 48)
                             .padding(4)
                             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
                             .overlay(RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(profile.avatar == "photo" ? DottyLight.firefly.color : Color.glassEdge,
-                                              lineWidth: profile.avatar == "photo" ? 3 : 1))
-                        Text("Your photo").font(.lpCaption).foregroundStyle(Color.inkMuted)
+                                .strokeBorder(wearing(photo) ? DottyLight.firefly.color : Color.glassEdge, lineWidth: wearing(photo) ? 3 : 1))
+                            Text("Photo").font(.lpCaption).foregroundStyle(wearing(photo) ? Color.ink : Color.inkMuted)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Delete photo", systemImage: "trash", role: .destructive) {
+                            AvatarPhotos.delete(photo)
+                            library = AvatarPhotos.all()
+                        }
+                    }
+                }
+                Button { pickingPhoto = true } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "photo.badge.plus").font(.title2).foregroundStyle(Color.ink)
+                            .frame(width: 48, height: 48)
+                            .padding(4)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.glassEdge, lineWidth: 1))
+                        Text("Add photo").font(.lpCaption).foregroundStyle(Color.inkMuted)
                     }
                 }
                 .buttonStyle(.plain)
             }
             .padding(Spacing.m)
-            if profile.avatar == "photo" {
-                LightRow(title: "Remove photo", subtitle: "Back to a drawn avatar", systemImage: "photo.badge.minus",
-                         action: { Task { await clearPhoto() } })
+            if let uploading {
+                ProgressView(value: uploading) { Text("Sending the photo to Dotty…").font(.lpCaption) }
+                    .padding(.horizontal, Spacing.m)
             }
+            Text("Your photos are kept on this iPhone for every companion. Long-press one to delete it.")
+                .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                .padding(.horizontal, Spacing.m).padding(.bottom, Spacing.s)
         }
+        .onAppear { library = AvatarPhotos.all() }
         .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
@@ -272,6 +302,7 @@ struct CompanionPage: View {
         }
         .sheet(item: $photoToEdit) { photo in
             AvatarPhotoEditor(companion: summary.id, image: photo.image) { _ in
+                library = AvatarPhotos.all()
                 Task {
                     await load()
                     onChanged()
@@ -280,10 +311,18 @@ struct CompanionPage: View {
         }
     }
 
-    private func clearPhoto() async {
+    private func wearing(_ photo: String) -> Bool {
+        profile.avatar == "photo" && AvatarPhotos.photo(for: summary.id) == photo
+    }
+
+    /// A photo from the library onto this companion.
+    private func wear(_ photo: String) async {
+        guard !wearing(photo), let bitmaps = AvatarPhotos.bitmaps(photo) else { return }
+        uploading = 0
+        defer { uploading = nil }
         do {
-            try await link.send("companion.photo.clear", ["id": summary.id])
-            AvatarPhotos.remove(summary.id)
+            try await AvatarPhotos.send(link, companion: summary.id, big: bitmaps.big, small: bitmaps.small) { uploading = $0 }
+            AvatarPhotos.setPhoto(photo, for: summary.id)
             await load()
             onChanged()
         } catch {
@@ -409,14 +448,15 @@ struct CompanionPage: View {
     }
 
     static func sendField(_ link: DottyLink, id: String, field: String, value: String) async throws {
-        if value.utf8.count <= 300 {
+        // 240 bytes a piece: JSON escapes (quotes, slashes, newlines) must still fit 512 per command.
+        if value.utf8.count <= 240 {
             try await link.send("companion.update", ["id": id, field: value])
             return
         }
         var pieces: [String] = []
         var current = ""
-        for ch in value {  // whole characters, ≤ 300 bytes a piece
-            if (current + String(ch)).utf8.count > 300 {
+        for ch in value {  // whole characters, ≤ 240 bytes a piece
+            if (current + String(ch)).utf8.count > 240 {
                 pieces.append(current)
                 current = ""
             }
@@ -434,7 +474,6 @@ struct CompanionPage: View {
     private func delete() async {
         do {
             try await link.send("companion.delete", ["id": summary.id])
-            AvatarPhotos.remove(summary.id)
             onChanged()
         } catch {
             if !link.lostConnection(error) { self.error = error.localizedDescription }
@@ -642,20 +681,84 @@ struct NewCompanionPage: View {
     }
 }
 
-/// Photos picked as avatars, kept on this iPhone (Application Support/AvatarPhotos/<id>.png) so the
-/// app can show them; Dotty has its own dithered copy.
+/// The photo library for avatars, kept on this iPhone (Application Support/AvatarPhotos/<photo>/:
+/// preview.png + the two bitmaps Dotty takes), usable by any companion; which photo each companion
+/// wears is remembered too (Dotty only has its own copy, photo.bin). Deleting a photo here doesn't
+/// change what a companion already shows on Dotty.
 enum AvatarPhotos {
-    static var folder: URL {
+    static var root: URL {
         URL.applicationSupportDirectory.appending(path: "AvatarPhotos", directoryHint: .isDirectory)
     }
-    static func load(_ id: String) -> UIImage? {
-        UIImage(contentsOfFile: folder.appending(path: "\(id).png").path)
+
+    /// Newest first.
+    static func all() -> [String] {
+        let items = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        return items.filter(\.hasDirectoryPath)
+            .sorted { a, b in
+                let da = (try? a.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+                return da > db
+            }
+            .map(\.lastPathComponent)
     }
-    static func save(_ image: UIImage, for id: String) {
+
+    @discardableResult
+    static func add(preview: UIImage, big: Data, small: Data) -> String {
+        let id = UUID().uuidString
+        let folder = root.appending(path: id, directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try? image.pngData()?.write(to: folder.appending(path: "\(id).png"))
+        try? preview.pngData()?.write(to: folder.appending(path: "preview.png"))
+        try? big.write(to: folder.appending(path: "128.bin"))
+        try? small.write(to: folder.appending(path: "48.bin"))
+        return id
     }
-    static func remove(_ id: String) {
-        try? FileManager.default.removeItem(at: folder.appending(path: "\(id).png"))
+
+    static func preview(_ photo: String) -> UIImage? {
+        UIImage(contentsOfFile: root.appending(path: "\(photo)/preview.png").path)
+    }
+
+    static func bitmaps(_ photo: String) -> (big: Data, small: Data)? {
+        guard let big = try? Data(contentsOf: root.appending(path: "\(photo)/128.bin")),
+              let small = try? Data(contentsOf: root.appending(path: "\(photo)/48.bin")) else { return nil }
+        return (big, small)
+    }
+
+    static func delete(_ photo: String) {
+        try? FileManager.default.removeItem(at: root.appending(path: photo, directoryHint: .isDirectory))
+    }
+
+    /// The photo a companion wears (if it came from this iPhone).
+    static func photo(for companion: String) -> String? {
+        UserDefaults.standard.string(forKey: "avatarPhoto.\(companion)")
+    }
+    static func setPhoto(_ photo: String?, for companion: String) {
+        UserDefaults.standard.set(photo, forKey: "avatarPhoto.\(companion)")
+    }
+
+    /// What the app shows for a companion wearing a photo.
+    static func load(_ companion: String) -> UIImage? {
+        photo(for: companion).flatMap(preview)
+    }
+    static func remove(_ companion: String) {
+        setPhoto(nil, for: companion)
+    }
+
+    /// Both circles to Dotty in pieces (companion.photo; base64 + JSON stay under 512 bytes).
+    static func send(_ link: DottyLink, companion: String, big: Data, small: Data,
+                     progress: (Double) -> Void) async throws {
+        let piece = 280
+        let total = Double(big.count + small.count)
+        var sent = 0.0
+        for (size, data) in [(128, big), (48, small)] {
+            var offset = 0
+            while offset < data.count {
+                let end = min(offset + piece, data.count)
+                try await link.send("companion.photo", ["id": companion, "size": size, "offset": offset,
+                                                        "data": data.subdata(in: offset..<end).base64EncodedString()])
+                sent += Double(end - offset)
+                progress(sent / total)
+                offset = end
+            }
+        }
     }
 }

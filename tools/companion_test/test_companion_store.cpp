@@ -75,6 +75,13 @@ int main() {
   one.create("debug");
   CHECK("remove: never the last one", !one.remove("debug", active, "debug") && one.has("debug"));
 
+  // Stepping through the companions (Dotty's settings row): never a division by zero.
+  CHECK_EQ("step: next", stepCompanion({"a", "b", "c"}, "b", 1), std::string("c"));
+  CHECK_EQ("step: wraps", stepCompanion({"a", "b", "c"}, "c", 1), std::string("a"));
+  CHECK_EQ("step: back", stepCompanion({"a", "b", "c"}, "a", -1), std::string("c"));
+  CHECK_EQ("step: one companion stays", stepCompanion({"a"}, "a", 1), std::string("a"));
+  CHECK_EQ("step: none (no card)", stepCompanion({}, "debug", 1), std::string("debug"));
+
   // Moving piece 2a's data into Debug's folder (idempotent, resumable).
   const std::vector<Move> fresh = migrationPlan(true, true, false, false);
   CHECK("migration: two moves", fresh.size() == 2 && fresh[0].from == "memory" && fresh[0].to == "companions/debug/memory" &&

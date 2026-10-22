@@ -24,6 +24,11 @@ String root() {
 }
 
 std::string readFile(const String &path) {
+  // A power cut between writeFile's remove and rename leaves only the .part: it's the new copy.
+  if (!SD_MMC.exists(path) && SD_MMC.exists(path + ".part")) {
+    LOGW("companions", "%s missing: using its .part", path.c_str());
+    SD_MMC.rename(path + ".part", path);
+  }
   File f = SD_MMC.open(path);
   std::string out;
   if (!f) return out;
@@ -82,6 +87,7 @@ String folder(const std::string &id) {
 
 void begin() {
   if (!storage::available()) {
+    list_.create("debug");  // the list and the profiles agree (stepping through them divides by the count)
     profiles_ = {presetProfile("debug")};
     active_ = "debug";
     return LOGW("companions", "no card: Debug only, nothing kept");

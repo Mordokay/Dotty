@@ -30,5 +30,15 @@ int main() {
   s.restore(1, {0, 400});
   CHECK_EQ("restored: the saved next and its out time", s.pick(100), 0);
   CHECK_EQ("restored: next", s.next(), 1);
+  // Strikes are per key: a good turn on another key doesn't forgive the one that's out for the day.
+  KeyRing q;
+  q.setCount(3);
+  CHECK_EQ("strikes: key 0's first", q.strike(0), 1);
+  q.forgive(1);  // a good turn on key 1
+  CHECK_EQ("strikes: key 0's second still counts", q.strike(0), 2);
+  q.forgive(0);
+  CHECK_EQ("strikes: a good turn on key 0 starts it over", q.strike(0), 1);
+  q.setCount(2);
+  CHECK_EQ("strikes: kept per key when the count changes", q.strike(0), 2);
   return failures ? 1 : 0;
 }

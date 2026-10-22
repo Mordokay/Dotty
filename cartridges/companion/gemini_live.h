@@ -46,6 +46,11 @@ class GeminiLive {
   uint32_t lastMessageAt() const { return lastMessageAt_; }  // millis(): silence = a dead link
   // The handle to resume this conversation with, once the server asked to move (goAway).
   const std::string &resumeHandle() const { return goAway_ ? config_.resumeHandle : kNone; }
+  // Another companion from now on: never resume this conversation in it.
+  void forgetResume() {
+    goAway_ = false;
+    config_.resumeHandle.clear();
+  }
 
  private:
   bool open();

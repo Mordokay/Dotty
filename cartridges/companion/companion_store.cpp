@@ -215,3 +215,12 @@ std::vector<Move> migrationPlan(bool oldMemory, bool oldHistory, bool debugMemor
   if (oldHistory && !debugHistory) moves.push_back({"history", "companions/debug/history"});
   return moves;
 }
+
+std::string stepCompanion(const std::vector<std::string> &order, const std::string &current, int step) {
+  if (order.size() < 2) return order.empty() ? current : order.front();
+  const int n = order.size();
+  int i = 0;
+  while (i < n && order[i] != current) i++;
+  if (i == n) return order.front();
+  return order[((i + step) % n + n) % n];
+}

@@ -17,5 +17,12 @@ int main() {
   b.add(0, "ab");
   b.clear();
   CHECK("clear drops a half buffer", !b.complete() && b.data().empty());
+  // A finished or abandoned upload gives its memory back (internal RAM is scarce in a session).
+  b.begin(2048);
+  b.add(0, std::string(1000, 'x'));
+  b.clear();
+  CHECK("clear frees the memory", b.data().capacity() < 64);
+  CHECK("an oversize upload is refused", !b.begin(1 << 20, 4096) && !b.complete());
+  CHECK("a normal one is taken", b.begin(2048, 4096));
   return failures ? 1 : 0;
 }

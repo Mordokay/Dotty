@@ -8,10 +8,13 @@
 // aside until the last piece arrives — an interrupted upload leaves the old value as it was.
 class PieceBuffer {
  public:
-  void begin(size_t expected) {
-    data_.clear();
+  // `max`: the most a client may announce (it's reserved up front, in internal RAM).
+  bool begin(size_t expected, size_t max = 4096) {
+    clear();
+    if (expected == 0 || expected > max) return false;
     expected_ = expected;
     data_.reserve(expected);
+    return true;
   }
   // Pieces must come in order; one past the end or out of order is refused.
   bool add(size_t offset, const std::string &bytes) {
@@ -21,8 +24,8 @@ class PieceBuffer {
   }
   bool complete() const { return expected_ > 0 && data_.size() == expected_; }
   const std::string &data() const { return data_; }
-  void clear() {
-    data_.clear();
+  void clear() {  // gives the memory back, not just the contents
+    std::string().swap(data_);
     expected_ = 0;
   }
 

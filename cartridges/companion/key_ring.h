@@ -33,6 +33,13 @@ class KeyRing {
     }
     return -1;
   }
+  // Quota strikes per key (the first without a retry time waits a minute, the next marks the day):
+  // a good turn on one key doesn't forgive another.
+  int strike(int i) { return i >= 0 && i < kMax ? ++strikes_[i] : 0; }
+  void forgive(int i) {
+    if (i >= 0 && i < kMax) strikes_[i] = 0;
+  }
+
   void markOut(int i, int64_t until) {
     if (i >= 0 && i < count()) out_[i] = until;
   }
@@ -48,5 +55,6 @@ class KeyRing {
 
  private:
   std::vector<int64_t> out_;
+  int strikes_[kMax] = {};
   int next_ = 0;
 };

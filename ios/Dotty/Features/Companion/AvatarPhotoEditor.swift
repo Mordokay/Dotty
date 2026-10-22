@@ -123,26 +123,15 @@ struct AvatarPhotoEditor: View {
         }
     }
 
+    /// Kept in the photo library (any companion can wear it later), then sent to this one.
     private func upload() async {
         let big = circle(side: 128), small = circle(side: 48)
-        let pieces = 280  // bytes per command: base64 + JSON stays under 512
-        let total = Double(big.count + small.count)
-        var sent = 0.0
         progress = 0
         error = nil
+        let photo = AvatarPhotos.add(preview: PhotoDither.picture(big, side: 128) ?? UIImage(), big: big, small: small)
         do {
-            for (size, data) in [(128, big), (48, small)] {
-                var offset = 0
-                while offset < data.count {
-                    let end = min(offset + pieces, data.count)
-                    try await link.send("companion.photo", ["id": companion, "size": size, "offset": offset,
-                                                            "data": data.subdata(in: offset..<end).base64EncodedString()])
-                    sent += Double(end - offset)
-                    progress = sent / total
-                    offset = end
-                }
-            }
-            if let picture = PhotoDither.picture(big, side: 128) { AvatarPhotos.save(picture, for: companion) }
+            try await AvatarPhotos.send(link, companion: companion, big: big, small: small) { progress = $0 }
+            AvatarPhotos.setPhoto(photo, for: companion)
             onDone(true)
             dismiss()
         } catch {

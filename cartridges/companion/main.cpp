@@ -75,7 +75,6 @@ struct Settings {
 } settings;
 bool settingsOpen = false;
 bool settingsChanged = false;  // voice or speech changed: the session restarts with them
-int quotaStrikes = 0;          // quota errors since the last good turn
 KeyRing ring;                  // which key the next session uses, and which are out for now
 int sessionKey = -1;           // the key this session opened with (a goAway resume keeps it)
 
@@ -110,6 +109,7 @@ std::string memorySection;     // the memories for the next session (built on th
 std::string personaSection;    // the companion's persona for the next session (same)
 std::string sessionCompanion;  // whose session is open: memory and name calls only land on them
 String sessionKeyText;         // its key (copied for the connect task)
+String sessionVoice;           // its voice (same: the settings screen may change settings.voice meanwhile)
 uint32_t noteUntil = 0;        // "Remembered"… shows until then
 // Bluetooth comes back a moment after a session's Wi-Fi is off: once, with it started in the same
 // instant, the iPhone's reconnect hung the Bluetooth controller (interrupt watchdog in
@@ -268,14 +268,17 @@ void beginReply() {
 
 String idleStatus();
 void applyCompanion();
+void notifyChanged();
 
 // Another companion: its own persona, voice, avatar, memories and history from the next session.
 void switchCompanion(const std::string &id) {
   if (id == companions::active().id || !companions::find(id)) return;
   if (live.connected() || connecting) disconnect("companion changed");
+  live.forgetResume();  // a goAway handle holds the old companion's conversation (and its memory numbers)
   companions::select(id);
   applyCompanion();
   setState(Talk::Offline, idleStatus());
+  notifyChanged();  // the app's pager follows a switch made on Dotty
 }
 
 // The idle line under the avatar: a companion that hasn't been named yet is still asleep.
@@ -424,7 +427,7 @@ GeminiLive::Callbacks callbacks() {
   cb.spent = [](int tokens) { usage::addTokens(tokens, sessionKey); };
   cb.memory = [](const ToolCall &c) { return applyMemory(c); };
   cb.turnDone = [](int tokens) {
-    quotaStrikes = 0;
+    ring.forgive(sessionKey);  // a good turn: this key's quota strikes start over
     if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
       usage::addTokens(tokens, sessionKey);
       LOGI("companion", "memory review done (%d tokens)", tokens);
@@ -457,9 +460,8 @@ GeminiLive::Callbacks callbacks() {
     if (quota) {
       // Google says "quota" for short limits too (a burst of sessions while flashing): the first
       // one without a retry time waits a minute; a second in a row = the day's allowance.
-      const bool daily = retry <= 0 && quotaStrikes > 0;
+      const bool daily = retry <= 0 && ring.strike(sessionKey) > 1;  // per key: others' good turns don't count
       const int64_t until = retry > 0 ? nowUtc() + retry : daily ? nextPacificMidnightUtc(nowUtc()) : nowUtc() + 60;
-      quotaStrikes++;
       ring.markOut(sessionKey, until);  // this key only: the next session takes another
       saveKeys();
       const int64_t allOut = ring.allOutUntil(nowUtc());
@@ -502,7 +504,7 @@ void connectLoop(void *) {
   if (ok) {
     LiveConfig config;
     config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
-    config.voice = settings.voice.c_str();
+    config.voice = sessionVoice.c_str();
     config.textOnly = settings.textOnly;
     config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(),
                                                  tonePersona(), memorySection);  // Task 4: the companion's persona
@@ -532,6 +534,7 @@ void connect() {
   if (key < 0) return setState(Talk::Error, outOfWords(ring.allOutUntil(nowUtc())));
   sessionKey = key;
   sessionKeyText = settings.keys[key];
+  sessionVoice = settings.voice;
   saveKeys();
   LOGI("companion", "session on key %d of %u (..%s)", key + 1, static_cast<unsigned>(settings.keys.size()), keyHint(sessionKeyText).c_str());
   // Bluetooth is off for the session: with it on (and the iPhone connected) TLS left 36 KB of
@@ -726,11 +729,8 @@ void onSettingsTap(uint16_t x, uint16_t y) {
       return closeSettings();
     case SettingsHit::CompanionPrev:
     case SettingsHit::CompanionNext: {  // the next session talks to them (any open one closes)
-      const std::vector<std::string> &order = companions::list().order();
-      size_t i = 0;
-      while (i < order.size() && order[i] != companions::active().id) i++;
-      const int step = screens::settingsHit(x, y) == SettingsHit::CompanionNext ? 1 : order.size() - 1;
-      switchCompanion(order[(i + step) % order.size()]);
+      const int step = screens::settingsHit(x, y) == SettingsHit::CompanionNext ? 1 : -1;
+      switchCompanion(stepCompanion(companions::list().order(), companions::active().id, step));
       break;
     }
     case SettingsHit::VolumeDown:
@@ -910,9 +910,14 @@ void notifyChanged() {
 // active one), back to the active one afterwards. Commands only run while no session is open.
 struct CompanionScope {
   bool switched = false;
+  bool known = true;  // false: `companion` names nobody — the command must refuse, not act on the active one
   explicit CompanionScope(JsonObjectConst args) {
     const std::string id = args["companion"] | companions::active().id;
-    if (id == companions::active().id || !companions::find(id)) return;
+    if (!companions::find(id)) {
+      known = false;
+      return;
+    }
+    if (id == companions::active().id) return;
     memories::begin(companions::folder(id));
     history::setFolder(companions::folder(id));
     switched = true;
@@ -1043,11 +1048,12 @@ void registerCompanionCommands() {
       reply["error"] = "unknown companion";
       return;
     }
-    PieceBuffer &b = pieces[id + "/" + field];
+    const std::string key = id + "/" + field;
+    PieceBuffer &b = pieces[key];
     const size_t offset = args["offset"] | 0;
-    if (offset == 0) b.begin(args["total"] | 0);
-    if (!b.add(offset, args["text"] | "")) {
-      b.clear();
+    // A field is at most 600 characters (≤ 2,400 bytes of UTF-8): 4 KB caps what a client may reserve.
+    if ((offset == 0 && !b.begin(args["total"] | 0, 4096)) || !b.add(offset, args["text"] | "")) {
+      pieces.erase(key);  // the memory goes back
       reply["ok"] = false;
       reply["error"] = "out of order";
       return;
@@ -1055,7 +1061,7 @@ void registerCompanionCommands() {
     if (!b.complete()) return;
     Profile p = *companions::find(id);
     const bool ok = setField(p, field, b.data());
-    b.clear();
+    pieces.erase(key);
     reply["ok"] = ok;
     if (!ok) return;
     companions::save(p);
@@ -1085,21 +1091,23 @@ void registerCompanionCommands() {
       reply["error"] = "bad photo";
       return;
     }
-    PieceBuffer &b = pieces[id + "/photo" + std::to_string(size)];
+    const std::string key = id + "/photo" + std::to_string(size);
+    PieceBuffer &b = pieces[key];
     const size_t offset = args["offset"] | 0;
-    if (offset == 0) b.begin(size == 128 ? avatar::kPhotoBig : avatar::kPhotoSmall);
+    const size_t expected = size == 128 ? avatar::kPhotoBig : avatar::kPhotoSmall;
     const char *data = args["data"] | "";
-    if (!b.add(offset, base64Decode(data, strlen(data)))) {
-      b.clear();
+    if ((offset == 0 && !b.begin(expected, expected)) || !b.add(offset, base64Decode(data, strlen(data)))) {
+      pieces.erase(key);
       reply["ok"] = false;
       reply["error"] = "out of order";
       return;
     }
+    if (!pieces.count(id + "/photo128") || !pieces.count(id + "/photo48")) return;
     PieceBuffer &big = pieces[id + "/photo128"], &small = pieces[id + "/photo48"];
     if (!big.complete() || !small.complete()) return;
     const bool ok = writePhoto(id, big.data(), small.data());
-    big.clear();
-    small.clear();
+    pieces.erase(id + "/photo128");
+    pieces.erase(id + "/photo48");
     reply["ok"] = ok;
     if (!ok) return;
     Profile p = *companions::find(id);
@@ -1168,6 +1176,11 @@ void registerCommands() {
   };
   ble::on("companion.memories", [unavailable](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     if (unavailable(reply)) return;
     const int offset = max(0, args["offset"] | 0), limit = constrain(args["limit"] | 50, 1, 50);
     JsonArray list = reply["memories"].to<JsonArray>();
@@ -1185,6 +1198,11 @@ void registerCommands() {
   });
   ble::on("companion.memory.add", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     if (unavailable(reply)) return;
     const MemoryStore::Added r = memories::store().add(args["text"] | "", args["group"] | "", "app", time(nullptr));
     reply["ok"] = r.ok;
@@ -1197,6 +1215,11 @@ void registerCommands() {
   });
   ble::on("companion.memory.update", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     if (unavailable(reply)) return;
     const std::string text = args["text"] | "", group = args["group"] | "";
     const bool ok = memories::store().update(args["id"] | -1, args["text"].is<const char *>() ? &text : nullptr,
@@ -1206,6 +1229,11 @@ void registerCommands() {
   });
   ble::on("companion.memory.delete", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     if (unavailable(reply)) return;
     const bool ok = memories::store().remove(args["id"] | -1);
     reply["ok"] = ok;
@@ -1213,6 +1241,11 @@ void registerCommands() {
   });
   ble::on("companion.memory.clear", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     if (unavailable(reply)) return;
     memories::store().clear();
     reply["ok"] = true;
@@ -1288,6 +1321,11 @@ void registerCommands() {
   });
   ble::on("companion.history", [](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     const String day = args["day"] | "";
     if (day.isEmpty()) {
       JsonArray days = reply["days"].to<JsonArray>();
@@ -1299,6 +1337,11 @@ void registerCommands() {
   });
   ble::on("companion.forget", [](JsonObjectConst args, JsonObject reply) {
     CompanionScope scope(args);  // the companion named in `companion` (default: the active one)
+    if (!scope.known) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
     reply["ok"] = history::forget(args["day"] | "");
     notifyChanged();
   });
@@ -1564,10 +1607,7 @@ void loop() {
     applyCompanion();
   }
   if (input.key == 'S') {  // dev: the next companion
-    const std::vector<std::string> &order = companions::list().order();
-    size_t i = 0;
-    while (i < order.size() && order[i] != companions::active().id) i++;
-    switchCompanion(order[(i + 1) % order.size()]);
+    switchCompanion(stepCompanion(companions::list().order(), companions::active().id, 1));
     LOGI("companion", "now %s (%s)", companions::active().id.c_str(), companions::active().awake() ? "awake" : "asleep");
   }
   if (input.key == 'W') {  // dev: the active companion forgets its name (asleep again)
