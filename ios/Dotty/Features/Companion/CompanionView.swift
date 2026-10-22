@@ -746,7 +746,7 @@ enum AvatarPhotos {
     /// Both circles to Dotty in pieces (companion.photo; base64 + JSON stay under 512 bytes).
     static func send(_ link: DottyLink, companion: String, big: Data, small: Data,
                      progress: (Double) -> Void) async throws {
-        let piece = 280
+        let piece = 240  // 320 base64 characters + ~80 of JSON: well under 512 even with escapes
         let total = Double(big.count + small.count)
         var sent = 0.0
         for (size, data) in [(128, big), (48, small)] {

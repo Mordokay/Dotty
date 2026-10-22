@@ -166,7 +166,9 @@ final class DottyLink: NSObject {
         guard let peripheral, let commandCharacteristic, connection == .connected else { throw DottyError.notConnected }
         var body = arguments
         body["cmd"] = command
-        let data = try JSONSerialization.data(withJSONObject: body)
+        // No "\/" escapes: a photo's base64 is often runs of "/" (solid black), and escaping each one
+        // doubled a piece past Dotty's 512-byte command limit ("The value's length is invalid").
+        let data = try JSONSerialization.data(withJSONObject: body, options: .withoutEscapingSlashes)
         let reply: DottyMessage = try await withCheckedThrowingContinuation { continuation in
             let waiter = ReplyWaiter(command: command, continuation: continuation)
             replyWaiters.append(waiter)
