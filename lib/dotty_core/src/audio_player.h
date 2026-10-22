@@ -37,6 +37,17 @@ class AudioPlayer {
   uint32_t positionMs() const;
   uint32_t durationMs() const { return durationMs_; }
 
+  // Streaming playback of 16-bit mono PCM arriving piece by piece (e.g. a voice reply over the
+  // network): startStream sets the speaker's rate (stops other playback and the microphone),
+  // writeStream copies what fits into a 2-second PSRAM ring (returns frames taken, never blocks),
+  // endStream plays out what's left and then streaming() turns false, stopStream cuts it off.
+  // Gaps play as silence (counted as underruns, logged when the stream ends).
+  bool startStream(uint32_t sampleRate);
+  size_t writeStream(const int16_t *mono, size_t frames);
+  void endStream();
+  void stopStream();
+  bool streaming() const { return stream_ && playing_; }
+
   // Microphone, at the rate given to begin() (stops playback; the speaker is off while
   // capturing). capture() blocks until `frames` mono samples have arrived.
   bool startCapture(uint8_t gainDb = 30, float digitalDb = 0);
@@ -53,6 +64,7 @@ class AudioPlayer {
   bool openWav();
   void playWav();
   void playSynth();
+  void playStream();
 
   TaskHandle_t task_ = nullptr;
   volatile bool playing_ = false;
@@ -75,4 +87,10 @@ class AudioPlayer {
   size_t noteCount_ = 0, noteIndex_ = 0;
   uint32_t noteSamples_ = 0, noteDone_ = 0, phase_ = 0, phaseStep_ = 0;
   uint8_t noteMidi_ = 0;
+  // Streaming (startStream).
+  volatile bool stream_ = false;
+  volatile bool streamEnding_ = false;
+  class PcmRing *ring_ = nullptr;
+  uint32_t underruns_ = 0;
+  bool streamGotData_ = false;
 };

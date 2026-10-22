@@ -4,15 +4,19 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <Wire.h>
+#include <esp_heap_caps.h>
 #include <mp3dec.h>
 
 #include "board_pins.h"
 #include "es8311.h"
 #include "log.h"
+#include "pcm_ring.h"
+#include "power.h"
 
 namespace {
 
 constexpr size_t kInputBufferLen = 8 * 1024;
+constexpr size_t kStreamFrames = 48000;  // the stream ring: 2 s at 24 kHz
 
 I2SClass i2s;
 Es8311 codec;
@@ -171,6 +175,75 @@ void AudioPlayer::playSynth() {
   i2s.write(reinterpret_cast<uint8_t *>(pcm), kFrames * 2 * sizeof(int16_t));
 }
 
+bool AudioPlayer::startStream(uint32_t rate) {
+  stop();
+  stopCapture();
+  if (suspended_ || rate == 0) return false;
+  if (!ring_) {
+    auto *storage = static_cast<int16_t *>(heap_caps_malloc(kStreamFrames * sizeof(int16_t), MALLOC_CAP_SPIRAM));
+    if (!storage) {
+      LOGE("audio", "no memory for the stream ring");
+      return false;
+    }
+    ring_ = new PcmRing(storage, kStreamFrames);
+  }
+  ring_->clear();
+  if (rate != sampleRate_) {
+    sampleRate_ = rate;
+    i2s.configureTX(rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    codec.setSampleRate(rate);
+  }
+  underruns_ = 0;
+  streamGotData_ = false;
+  streamEnding_ = false;
+  synth_ = wav_ = false;
+  samplesPlayed_ = 0;
+  durationMs_ = 0;
+  codec.setMute(false);
+  paused_ = false;
+  stopRequested_ = false;
+  power::setWakeLock(power::kWakeLockAudio, true);
+  stream_ = true;
+  playing_ = true;
+  return true;
+}
+
+size_t AudioPlayer::writeStream(const int16_t *mono, size_t frames) {
+  if (!stream_ || !playing_ || streamEnding_) return 0;
+  return ring_->write(mono, frames);
+}
+
+void AudioPlayer::endStream() {
+  if (stream_) streamEnding_ = true;
+}
+
+void AudioPlayer::stopStream() {
+  if (stream_) stop();
+}
+
+// One block of the stream to the speaker: silence while the ring is empty (an underrun once
+// audio has started), the end once endStream() was called and the ring has run dry.
+void AudioPlayer::playStream() {
+  constexpr size_t kFrames = 256;
+  const size_t got = ring_->read(pcm, kFrames);
+  if (got == 0) {
+    if (streamEnding_) {
+      LOGI("audio", "stream: %lu underruns", static_cast<unsigned long>(underruns_));
+      stream_ = false;
+      playing_ = false;
+      power::setWakeLock(power::kWakeLockAudio, false);
+      return;
+    }
+    if (streamGotData_) underruns_++;
+    writeSilence();
+    return;
+  }
+  streamGotData_ = true;
+  for (int i = got - 1; i >= 0; i--) pcm[2 * i] = pcm[2 * i + 1] = pcm[i];
+  i2s.write(reinterpret_cast<uint8_t *>(pcm), got * 2 * sizeof(int16_t));
+  samplesPlayed_ += got;
+}
+
 void AudioPlayer::stop() {
   if (!playing_) return;
   stopRequested_ = true;
@@ -311,6 +384,8 @@ void AudioPlayer::taskEntry(void *arg) {
 void AudioPlayer::run() {
   for (;;) {
     if (playing_ && stopRequested_) {
+      if (stream_) power::setWakeLock(power::kWakeLockAudio, false);
+      stream_ = false;
       synth_ = false;
       file.close();
       paused_ = false;
@@ -327,6 +402,10 @@ void AudioPlayer::run() {
     }
     if (synth_) {
       playSynth();
+      continue;
+    }
+    if (stream_) {
+      playStream();
       continue;
     }
     if (wav_) {
