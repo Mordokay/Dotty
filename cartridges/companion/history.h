@@ -24,8 +24,10 @@ bool forget(const String &yyyymmdd);  // "" = every day
 // tokens since the last Pacific midnight, and "out of words until …" once Google refused.
 namespace usage {
 
-void addTurn(int tokens);
-void addTokens(int tokens);  // spent outside a question (interrupted or unasked replies)
+void addTurn(int tokens, int key = -1);  // key: which of the rotating keys (counted per key too)
+void addTokens(int tokens, int key = -1);
+int keyTurns(int key);   // today, per key
+int keyTokens(int key);  // spent outside a question (interrupted or unasked replies)
 int turnsToday();
 int tokensToday();
 void markOut(int64_t untilUtc);

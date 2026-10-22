@@ -87,27 +87,58 @@ void rollOver(Preferences &p) {
     p.putLong64("usageReset", nextPacificMidnightUtc(now));
     p.putInt("turns", 0);
     p.putInt("tokens", 0);
+    for (int k = 0; k < 3; k++) {  // per key (keys rotate per session)
+      p.putInt(("kTurns" + String(k)).c_str(), 0);
+      p.putInt(("kTokens" + String(k)).c_str(), 0);
+    }
   }
 }
 
 }  // namespace
 
-void addTurn(int tokens) {
+void addTurn(int tokens, int key) {
   Preferences p;
   p.begin("companion", false);
   rollOver(p);
   p.putInt("turns", p.getInt("turns", 0) + 1);
   p.putInt("tokens", p.getInt("tokens", 0) + max(0, tokens));
+  if (key >= 0 && key < 3) {
+    const String t = "kTurns" + String(key), k = "kTokens" + String(key);
+    p.putInt(t.c_str(), p.getInt(t.c_str(), 0) + 1);
+    p.putInt(k.c_str(), p.getInt(k.c_str(), 0) + max(0, tokens));
+  }
   p.end();
 }
 
-void addTokens(int tokens) {
+void addTokens(int tokens, int key) {
   if (tokens <= 0) return;
   Preferences p;
   p.begin("companion", false);
   rollOver(p);
   p.putInt("tokens", p.getInt("tokens", 0) + tokens);
+  if (key >= 0 && key < 3) {
+    const String k = "kTokens" + String(key);
+    p.putInt(k.c_str(), p.getInt(k.c_str(), 0) + tokens);
+  }
   p.end();
+}
+
+int keyTurns(int key) {
+  Preferences p;
+  p.begin("companion", false);
+  rollOver(p);
+  const int n = p.getInt(("kTurns" + String(key)).c_str(), 0);
+  p.end();
+  return n;
+}
+
+int keyTokens(int key) {
+  Preferences p;
+  p.begin("companion", false);
+  rollOver(p);
+  const int n = p.getInt(("kTokens" + String(key)).c_str(), 0);
+  p.end();
+  return n;
 }
 
 int turnsToday() {
