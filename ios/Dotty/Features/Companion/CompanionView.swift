@@ -21,6 +21,7 @@ struct CompanionView: View {
         var keyHint: String?
         var turnsToday = 0, tokensToday = 0
         var outUntil: Date?
+        var memories = 0
     }
 
     /// The avatars in the firmware's order (tools/avatar_art.py), pictures in Resources/Avatars.
@@ -42,6 +43,7 @@ struct CompanionView: View {
                         avatarCard(status).needsDotty(link)
                         voiceCard(status).needsDotty(link)
                         keyCard(status).needsDotty(link)
+                        memoriesCard(status).needsDotty(link)
                         historyCard.needsDotty(link)
                     }
                 }
@@ -181,6 +183,21 @@ struct CompanionView: View {
         }
     }
 
+    private func memoriesCard(_ s: Status) -> some View {
+        GlassCard(title: "Memories") {
+            NavigationLink {
+                MemoriesView()
+            } label: {
+                LightRow(title: s.memories == 1 ? "1 memory" : "\(s.memories) memories",
+                         subtitle: "What your companion remembers about you: see, edit, add",
+                         systemImage: "bookmark") {
+                    Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold, design: .rounded))
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private var historyCard: some View {
         GlassCard(title: "Chats") {
             NavigationLink {
@@ -214,6 +231,7 @@ struct CompanionView: View {
             s.turnsToday = today["turns"] as? Int ?? 0
             s.tokensToday = today["tokens"] as? Int ?? 0
             if let out = r["outUntil"] as? Int { s.outUntil = Date(timeIntervalSince1970: TimeInterval(out)) }
+            s.memories = r["memories"] as? Int ?? 0
             status = s
             if volumeTask == nil { volume = Double(s.volume) }
             error = nil

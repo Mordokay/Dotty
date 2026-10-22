@@ -655,6 +655,65 @@ void registerCommands() {
     today["turns"] = usage::turnsToday();
     today["tokens"] = usage::tokensToday();
     if (const int64_t out = usage::outUntilUtc()) reply["outUntil"] = out;
+    reply["memories"] = static_cast<int>(memories::store().all().size());
+  });
+  // Memories (the app's Memories screen). Every change saves and tells the app.
+  auto unavailable = [](JsonObject reply) {
+    if (memories::available()) return false;
+    reply["ok"] = false;
+    reply["error"] = "unavailable";
+    return true;
+  };
+  auto changed = [] {
+    memories::save();
+    notifyChanged();
+  };
+  ble::on("companion.memories", [unavailable](JsonObjectConst args, JsonObject reply) {
+    if (unavailable(reply)) return;
+    const int offset = max(0, args["offset"] | 0), limit = constrain(args["limit"] | 50, 1, 50);
+    JsonArray list = reply["memories"].to<JsonArray>();
+    for (const Memory &m : memories::store().page(offset, limit)) {
+      JsonObject o = list.add<JsonObject>();
+      o["id"] = m.id;
+      o["group"] = m.group;
+      o["text"] = m.text;
+      o["by"] = m.by;
+      o["added"] = m.added;
+      o["changed"] = m.changed;
+    }
+    reply["total"] = static_cast<int>(memories::store().all().size());
+    reply["max"] = MemoryStore::kMax;
+  });
+  ble::on("companion.memory.add", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
+    if (unavailable(reply)) return;
+    const MemoryStore::Added r = memories::store().add(args["text"] | "", args["group"] | "", "app", time(nullptr));
+    reply["ok"] = r.ok;
+    if (!r.ok) {
+      reply["error"] = r.error;
+      return;
+    }
+    reply["id"] = r.id;
+    changed();
+  });
+  ble::on("companion.memory.update", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
+    if (unavailable(reply)) return;
+    const std::string text = args["text"] | "", group = args["group"] | "";
+    const bool ok = memories::store().update(args["id"] | -1, args["text"].is<const char *>() ? &text : nullptr,
+                                             args["group"].is<const char *>() ? &group : nullptr, time(nullptr));
+    reply["ok"] = ok;
+    if (ok) changed();
+  });
+  ble::on("companion.memory.delete", [unavailable, changed](JsonObjectConst args, JsonObject reply) {
+    if (unavailable(reply)) return;
+    const bool ok = memories::store().remove(args["id"] | -1);
+    reply["ok"] = ok;
+    if (ok) changed();
+  });
+  ble::on("companion.memory.clear", [unavailable, changed](JsonObjectConst, JsonObject reply) {
+    if (unavailable(reply)) return;
+    memories::store().clear();
+    reply["ok"] = true;
+    changed();
   });
   // Every field optional; the key is trimmed, "" clears it, and it's never logged or sent back.
   ble::on("companion.settings", [](JsonObjectConst args, JsonObject reply) {
