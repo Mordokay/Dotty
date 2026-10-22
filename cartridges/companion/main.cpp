@@ -242,6 +242,10 @@ GeminiLive::Callbacks callbacks() {
     info.mood = turnMood;
   };
   cb.spent = [](int tokens) { usage::addTokens(tokens); };
+  cb.memory = [](const ToolCall &c) {  // TEMPORARY (memories plan Task 3): log only
+    LOGI("companion", "memory call %s id %d group %s: %.40s", c.name.c_str(), c.memoryId, c.group.c_str(), c.text.c_str());
+    return -1;
+  };
   cb.turnDone = [](int tokens) {
     quotaStrikes = 0;
     voice::playEnd();

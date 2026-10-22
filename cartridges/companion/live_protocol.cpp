@@ -137,6 +137,7 @@ std::string liveToolsOk(const std::vector<ToolCall> &answered) {
     response["name"] = call.name;
     response["response"]["result"] = "ok";
     response["response"]["scheduling"] = "SILENT";
+    if (call.resultId >= 0) response["response"]["memoryId"] = call.resultId;
   }
   return serialize(doc);
 }

@@ -22,7 +22,8 @@ class GeminiLive {
     std::function<void(const std::string &text)> heard;         // the user's words (pieces)
     std::function<void(const std::string &text)> said;          // the reply's words (pieces)
     std::function<void(const std::string &mood)> mood;          // set_mood
-    std::function<void(const ToolCall &call)> memory;           // remember / update_memory / forget_memory
+    // remember / update_memory / forget_memory; returns the memory's id (remember) or -1
+    std::function<int(const ToolCall &call)> memory;
     std::function<void(int tokens)> turnDone;                   // the reply ended
     std::function<void(int tokens)> spent;                      // tokens outside a question
     // The connection failed or closed: why, a retry delay if the server gave one (-1), and

@@ -106,17 +106,19 @@ void GeminiLive::onMessage(const std::string &message) {
   for (const ToolCall &c : e.calls) names.push_back(c.name);
   const TurnTracker::Out o = turns_.message(content, names, e.turnComplete, e.totalTokens);
   std::vector<ToolCall> answered;
-  for (size_t i = 0; i < e.calls.size(); i++) {
-    const ToolCall &c = e.calls[i];
+  std::vector<ToolCall> calls = e.calls;
+  for (size_t i = 0; i < calls.size(); i++) {
+    ToolCall &c = calls[i];
     LOGI("live", "%s(%s)%s%s", c.name.c_str(), c.name == "set_mood" ? c.mood.c_str() : c.group.c_str(),
          o.apply[i] ? "" : " - not applied", o.apply[i] && !o.answer[i] ? " - not answered" : "");
-    if (o.answer[i]) answered.push_back(c);
-    if (!o.apply[i]) continue;
-    if (c.name == "set_mood") {
-      if (!c.mood.empty() && cb_.mood) cb_.mood(c.mood);
-    } else if (cb_.memory) {
-      cb_.memory(c);
+    if (o.apply[i]) {
+      if (c.name == "set_mood") {
+        if (!c.mood.empty() && cb_.mood) cb_.mood(c.mood);
+      } else if (cb_.memory) {
+        c.resultId = cb_.memory(c);
+      }
     }
+    if (o.answer[i]) answered.push_back(c);
   }
   if (!answered.empty()) {
     ws_.sendText(liveToolsOk(answered));

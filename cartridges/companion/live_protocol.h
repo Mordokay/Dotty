@@ -33,6 +33,7 @@ std::string liveAudio(const int16_t *pcm, size_t frames);
 struct ToolCall {
   std::string id, name, mood, text, group;
   int memoryId = -1;
+  int resultId = -1;  // set by Dotty: the memory remember created, sent back so the model can name it
 };
 
 // Dotty's answer to function calls: done, and don't start a new reply because of them.

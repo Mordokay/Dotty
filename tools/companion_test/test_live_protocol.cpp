@@ -71,9 +71,12 @@ int main() {
   JsonDocument ok;
   ToolCall a, b;
   a.id = "call_1", a.name = "set_mood";
-  b.id = "call_2", b.name = "remember";
+  b.id = "call_2", b.name = "remember", b.resultId = 7;
   deserializeJson(ok, liveToolsOk({a, b}));
   JsonArray responses = ok["toolResponse"]["functionResponses"];
+  CHECK_EQ("tools ok: remember tells the model the new memory's number",
+           int(ok["toolResponse"]["functionResponses"][1]["response"]["memoryId"] | -1), 7);
+  CHECK("tools ok: no number when there's none", ok["toolResponse"]["functionResponses"][0]["response"]["memoryId"].isNull());
   CHECK_EQ("tools ok: one response per call", responses.size(), size_t(2));
   CHECK("tools ok: ids, names, silent", std::string(responses[0]["id"] | "") == "call_1" &&
                                             std::string(responses[1]["name"] | "") == "remember" &&
