@@ -24,6 +24,8 @@
 #include "core_ble.h"
 #include "gemini_live.h"
 #include "history.h"
+#include "companions.h"
+#include "ui.h"
 #include "memories.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
@@ -99,6 +101,8 @@ size_t replyFrames = 0;  // reply audio received so far
 uint32_t lastTextAt = 0;
 std::string turnMemory;        // what this exchange changed in the memories (history)
 std::string memorySection;     // the memories for the next session (built on the loop, read by the task)
+std::string personaSection;    // the companion's persona for the next session (same)
+std::string sessionCompanion;  // whose session is open: memory and name calls only land on them
 uint32_t noteUntil = 0;        // "Remembered"… shows until then
 // Bluetooth comes back a moment after a session's Wi-Fi is off: once, with it started in the same
 // instant, the iPhone's reconnect hung the Bluetooth controller (interrupt watchdog in
@@ -225,14 +229,49 @@ void beginReply() {
   setState(Talk::Speaking);
 }
 
+String idleStatus();
+void applyCompanion();
+
+// Another companion: its own persona, voice, avatar, memories and history from the next session.
+void switchCompanion(const std::string &id) {
+  if (id == companions::active().id || !companions::find(id)) return;
+  if (live.connected() || connecting) disconnect("companion changed");
+  companions::select(id);
+  applyCompanion();
+  setState(Talk::Offline, idleStatus());
+}
+
+// The idle line under the avatar: a companion that hasn't been named yet is still asleep.
+String idleStatus() {
+  return companions::active().awake() ? "Hold BOOT to talk" : "Not awake yet. Hold BOOT";
+}
+
+// The active companion's voice and avatar into the settings the screens and the session use.
+void applyCompanion() {
+  settings.voice = companions::active().voice.c_str();
+  settings.avatar = companions::active().avatar.c_str();
+  info.avatar = settings.avatar;
+  redraw = true;
+}
+
+// A voice or avatar changed (settings screen, app): it belongs to the active companion.
+void syncProfile() {
+  Profile p = companions::active();
+  setField(p, "voice", settings.voice.c_str());
+  setField(p, "avatar", settings.avatar.c_str());
+  companions::save(p);
+}
+
 // A memory call from the model: change the store, save it, show a note for 3 s, note it for the
 // history line. Returns the memory's id for remember (sent back so the model can name it).
 int applyMemory(const ToolCall &c) {
   if (toneTest) return -1;  // the acting demo's role-play isn't real life
+  // Switched companion since this session opened: nothing lands on the new one.
+  if (sessionCompanion != companions::active().id) return -1;
   MemoryStore &store = memories::store();
   const int64_t now = time(nullptr);
   int id = -1;
-  const char *note = nullptr;
+  String note;
   std::string change;
   if (c.name == "remember") {
     const MemoryStore::Added r = store.add(c.text, c.group, "dotty", now);
@@ -250,6 +289,12 @@ int applyMemory(const ToolCall &c) {
       note = "Updated";
       change = "updated: " + store.find(c.memoryId)->text;
     }
+  } else if (c.name == "set_name") {  // the first wake-up: it learns who it is
+    Profile p = companions::active();
+    if (setField(p, "name", c.text) && !p.name.empty() && companions::save(p)) {
+      note = String("Named: ") + ui::printable(p.name.c_str());
+      change = "named: " + p.name;
+    }
   } else if (c.name == "forget_memory") {
     const Memory *m = store.find(c.memoryId);
     const std::string text = m ? m->text : "";
@@ -258,12 +303,12 @@ int applyMemory(const ToolCall &c) {
       change = "forgot: " + text;
     }
   }
-  LOGI("companion", "%s %d: %s %.40s", c.name.c_str(), c.memoryId, note ? note : "ignored", change.c_str());
+  LOGI("companion", "%s %d: %s %.40s", c.name.c_str(), c.memoryId, note.length() ? note.c_str() : "ignored", change.c_str());
   if (!change.empty()) {
-    memories::save();
+    if (c.name != "set_name") memories::save();
     turnMemory += (turnMemory.empty() ? "" : "; ") + change;
   }
-  if (note) {
+  if (note.length()) {
     info.note = note;
     noteUntil = millis() + 3000;
     redraw = true;
@@ -281,7 +326,7 @@ GeminiLive::Callbacks callbacks() {
     lastTurnAt = millis();
     awaitingConnect = false;
     // A weak signal makes replies stutter (-78 dBm: 13 s to the first audio, refills mid-reply).
-    const char *status = net::rssi() < -75 ? "Weak Wi-Fi: replies may stutter" : "Hold BOOT to talk";
+    const String status = net::rssi() < -75 ? String("Weak Wi-Fi: replies may stutter") : idleStatus();
     if (net::rssi() < -75) LOGW("companion", "weak Wi-Fi: %d dBm", net::rssi());
     if (info.state == Talk::Connecting) setState(Talk::Ready, status);  // else talking already
   };
@@ -319,7 +364,7 @@ GeminiLive::Callbacks callbacks() {
       LOGI("companion", "memory review done (%d tokens)", tokens);
       disconnect("idle");
       reviewStart = 0;
-      setState(Talk::Offline, "Hold BOOT to talk");
+      setState(Talk::Offline, idleStatus());
       return;
     }
     voice::playEnd();
@@ -366,7 +411,7 @@ GeminiLive::Callbacks callbacks() {
 // ---------- connecting ----------
 
 std::string tonePersona() {
-  if (!toneTest) return "You are Dotty, a small desk companion.";
+  if (!toneTest) return personaSection;
   Profile p = presetProfile("partner");
   p.name = "Mia";
   std::string t = personaText(p);
@@ -414,7 +459,9 @@ void connect() {
   // internal RAM, largest block 12 KB, and a session hung in its sends until the watchdog reset.
   ble::stop();
   power::setWakeLock(power::kWakeLockNetwork, true);
-  memorySection = memories::store().promptSection();  // the task only reads this copy
+  memorySection = memories::store().promptSection();  // the task only reads these copies
+  personaSection = personaText(companions::active());
+  sessionCompanion = companions::active().id;
   connecting = true;
   awaitingConnect = true;
   connectError = "";
@@ -606,6 +653,7 @@ void onSettingsTap(uint16_t x, uint16_t y) {
     case SettingsHit::VoiceNext: {
       const int step = screens::settingsHit(x, y) == SettingsHit::VoiceNext ? 1 : -1;
       settings.voice = nextFavourite(settings.favourites.c_str(), settings.voice.c_str(), step);
+      syncProfile();  // the voice belongs to the active companion
       settingsChanged = true;
       drawApp();  // the name first, then the voice (the refresh would hold up the sound)
       shell::refresh(false, false);
@@ -738,7 +786,7 @@ void onTap(uint16_t x, uint16_t y) {
 
 void onLock() {
   if (live.connected() || connecting) disconnect("locked");
-  if (info.state != Talk::Error) setState(Talk::Offline, "Hold BOOT to talk");
+  if (info.state != Talk::Error) setState(Talk::Offline, idleStatus());
 }
 
 // ---------- BLE commands (the app; Bluetooth is on while no session is open) ----------
@@ -851,6 +899,7 @@ void registerCommands() {
       }
       reconnect |= settings.voice != args["voice"].as<const char *>();
       settings.voice = args["voice"].as<const char *>();
+      syncProfile();
     }
     if (args["favourites"].is<JsonArrayConst>()) {
       String list;
@@ -876,6 +925,7 @@ void registerCommands() {
         return;
       }
       settings.avatar = info.avatar = args["avatar"].as<const char *>();
+      syncProfile();
     }
     if (args["key"].is<const char *>()) {
       settings.key = trimKey(args["key"].as<const char *>()).c_str();
@@ -914,7 +964,9 @@ void registerCommands() {
 int16_t drawLockAvatar(Adafruit_GFX &gfx, const tm &, int16_t maxHeight) {
   if (maxHeight < avatar::kSmall) return 0;
   const int turns = usage::turnsToday();
-  const String line = turns ? String(turns) + (turns == 1 ? " chat today" : " chats today") : String();
+  const Profile &who = companions::active();
+  String line = who.awake() ? ui::printable(who.name.c_str()) : String("Not awake yet");
+  if (who.awake() && turns) line += String(" - ") + turns + (turns == 1 ? " chat" : " chats");
   gfx.setFont(&FreeSans9pt7b);
   int16_t bx, by;
   uint16_t tw = 0, th = 0;
@@ -943,12 +995,13 @@ void setup() {
   config.wakeApp = [] { player.powerUp(); };
   shell::begin(config);
   storage::begin();
-  memories::begin();
+  companions::begin();  // also points memories and history at the active companion
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
   voice::begin(player);
   loadSettings();
+  applyCompanion();
   registerCommands();
-  setState(Talk::Offline, "Hold BOOT to talk");
+  setState(Talk::Offline, idleStatus());
   shell::showApp();
 }
 
@@ -1002,7 +1055,7 @@ void loop() {
       // Closed by the server's goAway, the runaway guard or a quiet socket death: Wi-Fi, the
       // wake lock and Bluetooth still need undoing (else Dotty can't sleep and the app can't reach it).
       disconnect("closed");
-      setState(Talk::Offline, "Hold BOOT to talk");
+      setState(Talk::Offline, idleStatus());
     } else if (info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking) {
       voice::stopListening();
       voice::playStop();
@@ -1073,7 +1126,7 @@ void loop() {
       millis() - lastOutCheck > 10000) {
     lastOutCheck = millis();
     if (!usage::outUntilUtc()) {
-      setState(Talk::Offline, "Hold BOOT to talk");
+      setState(Talk::Offline, idleStatus());
       // (the next press connects: sessions open on the first BOOT press)
     }
   }
@@ -1090,7 +1143,7 @@ void loop() {
     } else if (!reviewStart || millis() - reviewStart > 20000) {
       reviewStart = 0;
       disconnect("idle");
-      setState(Talk::Offline, "Hold BOOT to talk");
+      setState(Talk::Offline, idleStatus());
     }
   }
   if (live.connected() || connecting) shell::wake();
@@ -1129,6 +1182,20 @@ void loop() {
     f.close();
     LOGI("companion", "memories.json broken on purpose: restart to see it set aside");
   }
+  if (input.key == 'S') {  // dev: the next companion
+    const std::vector<std::string> &order = companions::list().order();
+    size_t i = 0;
+    while (i < order.size() && order[i] != companions::active().id) i++;
+    switchCompanion(order[(i + 1) % order.size()]);
+    LOGI("companion", "now %s (%s)", companions::active().id.c_str(), companions::active().awake() ? "awake" : "asleep");
+  }
+  if (input.key == 'W') {  // dev: the active companion forgets its name (asleep again)
+    Profile p = companions::active();
+    p.name = "";
+    companions::save(p);
+    if (live.connected()) disconnect("asleep again");
+    setState(Talk::Offline, idleStatus());
+  }
   if (input.key == 'Y') {
     toneScreen = !toneScreen;
     redraw = true;
@@ -1152,7 +1219,7 @@ void loop() {
   }
   if (input.key == 'Q') {  // undo q
     usage::markOut(0);
-    setState(Talk::Offline, "Hold BOOT to talk");
+    setState(Talk::Offline, idleStatus());
   }
   if (input.key == 'q') callbacks().failed("Resource has been exhausted (e.g. check quota).", -1, true, false);
 

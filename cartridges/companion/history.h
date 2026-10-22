@@ -9,6 +9,8 @@
 // (usage_rules.h historyLine). The app reads them (companion.history).
 namespace history {
 
+// The active companion's folder: its history is <folder>/history/ (each companion has its own).
+void setFolder(const String &companionFolder);
 // memory: what this exchange changed in the memories ("remembered: …"), "" for nothing
 void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens,
             const std::string &memory = "");

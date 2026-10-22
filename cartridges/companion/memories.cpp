@@ -21,13 +21,18 @@ struct PsramAllocator : ArduinoJson::Allocator {
   void *reallocate(void *p, size_t size) override { return heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM); }
 } psram;
 
+String folder_;  // the active companion's folder
+
 String dir() {
-  return storage::myDataDir() + "/memory";
+  return folder_ + "/memory";
 }
 
 }  // namespace
 
-void begin() {
+void begin(const String &companionFolder) {
+  folder_ = companionFolder;
+  store_.clear();
+  store_.load("{\"memories\":[]}");  // a fresh, empty store (next id 1) before reading this companion's
   available_ = storage::available();
   if (!available_) return LOGW("memories", "no card: chats go on without memories");
   storage::makeDirs(dir());

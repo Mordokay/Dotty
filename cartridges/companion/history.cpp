@@ -13,8 +13,10 @@
 
 namespace {
 
+String folder_;  // the active companion's folder (companions::begin sets it)
+
 String dir() {
-  return storage::myDataDir() + "/history";
+  return (folder_.length() ? folder_ : storage::myDataDir()) + "/history";
 }
 
 int64_t nowUtc() {
@@ -26,6 +28,10 @@ int64_t nowUtc() {
 }  // namespace
 
 namespace history {
+
+void setFolder(const String &companionFolder) {
+  folder_ = companionFolder;
+}
 
 void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens,
             const std::string &memory) {
