@@ -368,7 +368,8 @@ void connectLoop(void *) {
     config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
     config.voice = settings.voice.c_str();
     config.textOnly = settings.textOnly;
-    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(), memorySection);
+    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(),
+                                                 "You are Dotty, a small desk companion.", memorySection);  // Task 4: the companion's persona
     ok = live.begin(settings.key.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
   } else {

@@ -62,8 +62,9 @@ struct LiveClose {
 };
 LiveClose liveCloseInfo(uint16_t code, const std::string &reason);
 
-// The companion's instructions; place "" leaves the place out; memorySection (MemoryStore's
+// The companion's instructions: the persona (personaText) first; place "" leaves the place out; memorySection (MemoryStore's
 // promptSection(), "" = none) goes at the end.
-std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &memorySection);
+std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &persona,
+                              const std::string &memorySection);
 
 std::string base64Decode(const char *data, size_t len);

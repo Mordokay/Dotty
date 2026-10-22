@@ -36,7 +36,8 @@ int main() {
   CHECK_EQ("setup: set_mood doesn't block speech", std::string(mood["behavior"] | ""), std::string("NON_BLOCKING"));
   std::string moods;
   for (JsonVariant m : mood["parameters"]["properties"]["mood"]["enum"].as<JsonArray>()) moods += std::string(m.as<const char *>()) + ",";
-  CHECK_EQ("setup: the seven moods", moods, std::string("happy,sad,surprised,thinking,laughing,love,neutral,"));
+  CHECK_EQ("setup: the sixteen moods", moods, std::string("happy,sad,surprised,thinking,laughing,love,neutral,excited,calm,curious,"
+                                                         "worried,embarrassed,proud,playful,sleepy,annoyed,"));
   JsonArray fns = setup["setup"]["tools"][0]["functionDeclarations"];
   std::string names;
   bool allNonBlocking = true;
@@ -44,7 +45,8 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the four tools", names, std::string("set_mood,remember,update_memory,forget_memory,"));
+  CHECK_EQ("setup: the five tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,"));
+  CHECK("set_name: needs name", fns[4]["parameters"]["required"][0] == "name");
   CHECK("setup: every tool non-blocking", allNonBlocking);
   std::string groups;
   for (JsonVariant g : fns[1]["parameters"]["properties"]["group"]["enum"].as<JsonArray>()) groups += std::string(g.as<const char *>()) + ",";
@@ -93,6 +95,8 @@ int main() {
   CHECK("parse: remember's text and group", many.calls.size() == 3 && many.calls[1].text == "Your sister is called Ana" &&
                                                 many.calls[1].group == "people");
   CHECK("parse: forget_memory's id", many.calls.size() == 3 && many.calls[2].memoryId == 12);
+  const LiveEvent named = liveParse(R"({"toolCall":{"functionCalls":[{"name":"set_name","args":{"name":"Luna"},"id":"c9"}]}})");
+  CHECK("parse: set_name's name", named.calls.size() == 1 && named.calls[0].name == "set_name" && named.calls[0].text == "Luna");
   const LiveEvent said = liveParse(sample("said.json"));
   CHECK_EQ("parse: reply text", said.outputText, std::string("That is absolutely "));
   CHECK_EQ("parse: reply audio decoded", said.audioPcm.size(), size_t(2));
@@ -111,20 +115,21 @@ int main() {
   CHECK("close: bad key", badKey.badKey && !badKey.quota);
   CHECK_EQ("close: retry delay in the reason", liveCloseInfo(1011, "Quota exceeded. Please retry in 21s.").retryDelaySeconds, 21);
 
-  const std::string withPlace = systemInstruction("14:05", "Lisbon", "");
+  const std::string withPlace = systemInstruction("14:05", "Lisbon", "You are Luna.", "");
   const std::string ending = "The local time is 14:05, the user is in Lisbon.";
   CHECK("instruction: with a place", withPlace.compare(withPlace.size() - ending.size(), ending.size(), ending) == 0);
-  const std::string noPlace = systemInstruction("14:05", "", "");
+  const std::string noPlace = systemInstruction("14:05", "", "You are Luna.", "");
   CHECK("instruction: no place clause", noPlace.find("user is in") == std::string::npos &&
                                             noPlace.compare(noPlace.size() - 24, 24, "The local time is 14:05.") == 0);
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);
   CHECK("instruction: no memories, no memory list", noPlace.find("What you remember") == std::string::npos);
   const std::string section = "What you remember about the user:\nPeople: [12] Your sister is called Ana.";
-  const std::string withMemories = systemInstruction("14:05", "", section);
+  const std::string withMemories = systemInstruction("14:05", "", "You are Luna.", section);
   CHECK("instruction: memories at the end",
         withMemories.compare(withMemories.size() - section.size(), section.size(), section) == 0);
-  CHECK("instruction: short replies", noPlace.rfind("You are Dotty, a small desk companion. Talk like a person in conversation:", 0) == 0);
+  CHECK("instruction: the persona first", noPlace.rfind("You are Luna.\n\n", 0) == 0);
+  CHECK("instruction: short replies", noPlace.find("Talk like a person in conversation:") != std::string::npos);
   CHECK("instruction: always English", noPlace.find("Always speak English") != std::string::npos);
   return failures ? 1 : 0;
 }

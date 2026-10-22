@@ -8,7 +8,8 @@
 
 namespace {
 
-const char *const kMoods[] = {"happy", "sad", "surprised", "thinking", "laughing", "love", "neutral"};
+const char *const kMoods[] = {"happy",   "sad",  "surprised", "thinking", "laughing",    "love",  "neutral",  "excited",
+                              "calm",    "curious", "worried", "embarrassed", "proud", "playful", "sleepy", "annoyed"};
 
 std::string serialize(const JsonDocument &doc) {
   std::string out;
@@ -112,6 +113,8 @@ std::string liveSetup(const LiveConfig &config) {
   groups(param(update, "group", "STRING", false));
   JsonObject forget = declare("forget_memory", "Delete a memory (by its number) the user asked you to forget");
   param(forget, "id", "INTEGER", true);
+  JsonObject named = declare("set_name", "Save your own name when the user tells you who you are");
+  param(named, "name", "STRING", true);
   return serialize(doc);
 }
 
@@ -156,7 +159,7 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | "";
+    c.text = args["text"] | (args["name"] | "");  // set_name's name travels as the text
     c.group = args["group"] | "";
     if (args["id"].is<int>()) c.memoryId = args["id"];
     else if (args["id"].is<float>()) c.memoryId = static_cast<int>(args["id"].as<float>());  // 12.0
@@ -198,9 +201,10 @@ LiveClose liveCloseInfo(uint16_t code, const std::string &reason) {
   return c;
 }
 
-std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &memorySection) {
+std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &persona,
+                              const std::string &memorySection) {
   std::string s =
-      "You are Dotty, a small desk companion. Talk like a person in conversation: usually one or two short "
+      persona + "\n\nTalk like a person in conversation: usually one or two short "
       "sentences; longer only when asked. You are on a tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "
       "Call set_mood with each reply. Let your voice carry your mood: how you sound matters as much as what you say. "

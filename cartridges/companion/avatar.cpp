@@ -11,8 +11,15 @@ Face forMood(const String &mood) {
   if (mood == "surprised") return Face::Surprised;
   if (mood == "thinking") return Face::Thinking;
   if (mood == "laughing") return Face::Laughing;
-  if (mood == "love") return Face::Love;
-  return Face::Idle;
+  if (mood == "love" || mood == "tender") return Face::Love;
+  // The wider range (16 moods) on the 12 faces: the closest one.
+  if (mood == "excited" || mood == "proud") return Face::Happy;
+  if (mood == "playful") return Face::Laughing;
+  if (mood == "curious") return Face::Listening;
+  if (mood == "worried" || mood == "embarrassed") return Face::Sad;
+  if (mood == "annoyed") return Face::Thinking;
+  if (mood == "sleepy") return Face::Sleeping;
+  return Face::Idle;  // neutral, calm
 }
 
 Face faceFor(Talk state, const String &mood, int frame) {

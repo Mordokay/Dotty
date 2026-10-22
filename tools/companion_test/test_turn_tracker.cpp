@@ -15,6 +15,8 @@ int main() {
   o = t.message(false, Names{"remember", "forget_memory"}, false, 0);
   CHECK("memory calls in a question: applied", o.apply.at(0) && o.apply.at(1));
   CHECK("memory calls in a question: answered", o.answer.at(0) && o.answer.at(1));
+  o = t.message(false, Names{"set_name"}, false, 0);
+  CHECK("set_name in a question: applied and answered", o.apply.at(0) && o.answer.at(0));
   o = t.message(false, Names{}, true, 800);  // its own turn, no speech yet
   CHECK("mood turn: not the reply", !o.done && !o.close);
   o = t.message(true, Names{}, false, 0);
@@ -46,6 +48,8 @@ int main() {
   CHECK("unasked: speech not delivered", !o.deliver);
   o = r.message(false, Names{"set_mood", "remember"}, false, 0);
   CHECK("unasked: no tool applied or answered", !o.apply.at(0) && !o.apply.at(1) && !o.answer.at(0) && !o.answer.at(1));
+  o = r.message(false, Names{"set_name"}, false, 0);
+  CHECK("unasked: set_name not applied", !o.apply.at(0));
   o = r.message(false, Names{}, true, 300);
   CHECK("unasked: 1st turn tolerated, tokens spent", !o.close && o.spent == 300);
   r.message(false, Names{}, true, 300);
