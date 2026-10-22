@@ -117,6 +117,7 @@ int main() {
   const std::string noPlace = systemInstruction("14:05", "", "");
   CHECK("instruction: no place clause", noPlace.find("user is in") == std::string::npos &&
                                             noPlace.compare(noPlace.size() - 24, 24, "The local time is 14:05.") == 0);
+  CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);
   CHECK("instruction: no memories, no memory list", noPlace.find("What you remember") == std::string::npos);
   const std::string section = "What you remember about the user:\nPeople: [12] Your sister is called Ana.";
