@@ -84,7 +84,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onAuthenticationComplete(NimBLEConnInfo &info) override {
     const bool ok = info.isEncrypted() && info.isAuthenticated();
     LOGI("ble", "pairing %s (bonded %d)", ok ? "succeeded" : "failed", info.isBonded());
-    if (pairingActive || !ok) {
+    // Only a pairing that showed a code reports its result on screen. A bonded iPhone's first
+    // reconnect after Bluetooth comes back on often fails once (status 0x7) and succeeds ~3 s
+    // later: that showed "That didn't work" on every unlock.
+    if (pairingActive) {
       pairingSucceeded = ok;
       pairingDone = true;
     }

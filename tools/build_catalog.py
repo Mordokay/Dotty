@@ -45,10 +45,17 @@ def run(cmd, **kwargs):
     return subprocess.run(cmd, cwd=REPO, check=True, text=True, **kwargs)
 
 
+def is_draft(folder):
+    """A cartridge still being built: cartridge.json says "draft": true (kept out of the catalog,
+    so launchers don't download it)."""
+    manifest = folder / "cartridge.json"
+    return manifest.exists() and json.loads(manifest.read_text()).get("draft", False)
+
+
 def cartridge_ids():
-    # Rescue (factory partition) is USB-only: never in the catalog.
+    # Rescue (factory partition) is USB-only: never in the catalog. Drafts aren't published yet.
     return sorted(p.name for p in (REPO / "cartridges").iterdir()
-                  if (p / "main.cpp").exists() and p.name != "rescue")
+                  if (p / "main.cpp").exists() and p.name != "rescue" and not is_draft(p))
 
 
 def build(cartridge_id):

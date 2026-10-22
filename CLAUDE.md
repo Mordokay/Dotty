@@ -222,7 +222,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (shell pairing screen) that the user types on the phone. Bonded, MITM, LE Secure
   Connections; bonds in NVS shared by all firmwares. `core.forget` deletes all bonds.
   Each `ble::start` logs "N bonded devices stored"; a failed encryption logs its status
-  (custom GAP handler). Once (2026-10-06, after a failed app backup) Dotty refused the bonded
+  (custom GAP handler). A bonded iPhone's first reconnect after BLE comes back on (unlock, boot)
+  often fails once (`encryption failed: status 0x7`, remote disconnects) and succeeds ~3 s later;
+  so the result screens ("Paired!" / "That didn't work") only show for a pairing that displayed a
+  code (`pairingActive`), never for a reconnect (it showed "That didn't work" on every unlock). Once (2026-10-06, after a failed app backup) Dotty refused the bonded
   iPhone *and* Mac ("pairing failed (bonded 0)", macOS: "Failed to encrypt the connection")
   across a reset, although the NVS bond records were byte-identical to the working state
   (decoded with a quick parser of `read-flash 0x9000 0x5000`); reflashing the cartridge fixed
@@ -364,7 +367,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   downgrades devices (happened: Music 0.5.1 replaced a USB-flashed 0.6.0). Run it with
   `.venv/bin/python tools/build_catalog.py --release` (needs Pillow); every cartridge change
   ends with commit → push → catalog release, without waiting for the user to ask. Optional per-cartridge
-  `cartridges/<id>/cartridge.json` = description + requires.
+  `cartridges/<id>/cartridge.json` = description + requires; `"draft": true` keeps a cartridge
+  that's still being built out of the catalog (launchers auto-download every catalog cartridge).
 - Two pictures per cartridge: `icon.png` → 64×64 1-bit for Dotty's install screen (base64
   in the catalog), and `artwork.png` → square full-colour picture for the app (published
   as `<id>-<version>.png`, scaled to 512, catalog field `artwork` = URL; the app falls back
