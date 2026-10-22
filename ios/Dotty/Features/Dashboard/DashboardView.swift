@@ -17,7 +17,7 @@ struct DashboardView: View {
     @State private var wifi: WiFiState?
 
     enum Route: Hashable {
-        case cartridges, wifi, music, jokes, weather, album, tape, news, pet, facts, backups
+        case cartridges, wifi, music, jokes, weather, album, tape, news, pet, facts, backups, voices
 
         /// The screen of the cartridge Dotty is running, if it has one (and its firmware
         /// has the commands that screen needs).
@@ -74,6 +74,8 @@ struct DashboardView: View {
                                      action: { confirmForget = true })
                             LightRow(title: "Backups", subtitle: "Copy Dotty's SD card to this iPhone, or put a copy back",
                                      systemImage: "externaldrive", action: { path.append(Route.backups) })
+                            LightRow(title: "Companion voices", subtitle: "Hear the voices the AI companion can speak with",
+                                     systemImage: "waveform", action: { path.append(Route.voices) })
                             LightRow(title: "Calibrate touch",
                                      subtitle: calibrateNote ?? "Tap a few targets on Dotty so every tap lands where you aim",
                                      systemImage: "scope", action: { Task { await calibrateTouch() } })
@@ -108,6 +110,7 @@ struct DashboardView: View {
                 case .pet: PetView()
                 case .facts: FactsView()
                 case .backups: BackupView()
+                case .voices: VoicesView()
                 }
             }
         }
