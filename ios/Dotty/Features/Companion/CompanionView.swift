@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// The companions (firmware: cartridges/companion/): a pager, one page per companion — each its own
@@ -139,6 +140,14 @@ struct CompanionPage: View {
     @State private var saving = false
     @State private var confirmDelete = false
     @State private var error: String?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var pickingPhoto = false
+    @State private var photoToEdit: PickedPhoto?
+
+    struct PickedPhoto: Identifiable {
+        let id = UUID()
+        let image: CGImage
+    }
 
     struct Profile: Equatable {
         var name = "", personality = "", speaking = "", backstory = "", traits = "", quirks = ""
@@ -230,8 +239,55 @@ struct CompanionPage: View {
                     }
                     .buttonStyle(.plain)
                 }
+                Button { pickingPhoto = true } label: {
+                    VStack(spacing: 2) {
+                        CompanionView.avatarImage(profile.avatar == "photo" ? "photo" : "none", companion: summary.id, size: 48)
+                            .overlay { if profile.avatar != "photo" { Image(systemName: "photo.badge.plus").font(.title2) } }
+                            .padding(4)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
+                            .overlay(RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(profile.avatar == "photo" ? DottyLight.firefly.color : Color.glassEdge,
+                                              lineWidth: profile.avatar == "photo" ? 3 : 1))
+                        Text("Your photo").font(.lpCaption).foregroundStyle(Color.inkMuted)
+                    }
+                }
+                .buttonStyle(.plain)
             }
             .padding(Spacing.m)
+            if profile.avatar == "photo" {
+                LightRow(title: "Remove photo", subtitle: "Back to a drawn avatar", systemImage: "photo.badge.minus",
+                         action: { Task { await clearPhoto() } })
+            }
+        }
+        .photosPicker(isPresented: $pickingPhoto, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self), let picked = UIImage(data: data),
+                   let upright = PhotoDither.upright(picked) {
+                    photoToEdit = PickedPhoto(image: upright)
+                }
+                photoItem = nil
+            }
+        }
+        .sheet(item: $photoToEdit) { photo in
+            AvatarPhotoEditor(companion: summary.id, image: photo.image) { _ in
+                Task {
+                    await load()
+                    onChanged()
+                }
+            }
+        }
+    }
+
+    private func clearPhoto() async {
+        do {
+            try await link.send("companion.photo.clear", ["id": summary.id])
+            AvatarPhotos.remove(summary.id)
+            await load()
+            onChanged()
+        } catch {
+            if !link.lostConnection(error) { self.error = error.localizedDescription }
         }
     }
 

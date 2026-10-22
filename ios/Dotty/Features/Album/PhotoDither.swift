@@ -29,15 +29,16 @@ enum PhotoDither {
         }.cgImage
     }
 
-    /// The `crop` square (in the image's pixels, top-left origin) as 200 x 200 grey levels.
-    static func grey(_ image: CGImage, crop: CGRect) -> [Float] {
-        var pixels = [UInt8](repeating: 255, count: size * size)
+    /// The `crop` square (in the image's pixels, top-left origin) as `side` x `side` grey levels
+    /// (200 for the Album, 128 and 48 for a companion's photo avatar).
+    static func grey(_ image: CGImage, crop: CGRect, side: Int = size) -> [Float] {
+        var pixels = [UInt8](repeating: 255, count: side * side)
         pixels.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(data: buffer.baseAddress, width: size, height: size, bitsPerComponent: 8,
-                                          bytesPerRow: size, space: CGColorSpaceCreateDeviceGray(),
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
+                                          bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
                                           bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
             context.interpolationQuality = .high
-            let scale = CGFloat(size) / crop.width
+            let scale = CGFloat(side) / crop.width
             let height = CGFloat(image.height)
             // Core Graphics counts y from the bottom.
             context.draw(image, in: CGRect(x: -crop.minX * scale, y: -(height - crop.maxY) * scale,
@@ -47,24 +48,24 @@ enum PhotoDither {
     }
 
     /// Grey levels → the 5000-byte bitmap (1 = black).
-    static func dither(_ grey: [Float], tone: Tone) -> Data {
+    static func dither(_ grey: [Float], tone: Tone, side: Int = size) -> Data {
         // Like Pillow's ImageEnhance: brightness scales, contrast pulls away from the mean.
         var px = grey.map { $0 * Float(tone.brightness) }
         let mean = px.reduce(0, +) / Float(px.count)
         px = px.map { mean + ($0 - mean) * Float(tone.contrast) }
 
         // Atkinson: spreads 6/8 of the error, keeping cleaner whites and more contrast.
-        var bits = [UInt8](repeating: 0, count: bitmapBytes)
+        var bits = [UInt8](repeating: 0, count: side * side / 8)
         let neighbours = [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)]
-        for y in 0..<size {
-            for x in 0..<size {
-                let old = px[y * size + x]
+        for y in 0..<side {
+            for x in 0..<side {
+                let old = px[y * side + x]
                 let white = old >= 128
-                if !white { bits[y * (size / 8) + x / 8] |= UInt8(0x80 >> (x % 8)) }
+                if !white { bits[y * (side / 8) + x / 8] |= UInt8(0x80 >> (x % 8)) }
                 let error = (old - (white ? 255 : 0)) / 8
                 for (dx, dy) in neighbours {
                     let nx = x + dx, ny = y + dy
-                    if nx >= 0, nx < size, ny < size { px[ny * size + nx] += error }
+                    if nx >= 0, nx < side, ny < side { px[ny * side + nx] += error }
                 }
             }
         }
@@ -77,11 +78,11 @@ enum PhotoDither {
     }
 
     /// The bitmap as a picture, in e-paper colours (ink on paper), for previews and thumbnails.
-    static func picture(_ bitmap: Data) -> UIImage? {
-        guard bitmap.count == bitmapBytes else { return nil }
-        var rgba = [UInt8](repeating: 0, count: size * size * 4)
+    static func picture(_ bitmap: Data, side: Int = size) -> UIImage? {
+        guard bitmap.count == side * side / 8 else { return nil }
+        var rgba = [UInt8](repeating: 0, count: side * side * 4)
         let ink: (UInt8, UInt8, UInt8) = (0x1C, 0x1D, 0x22), paper: (UInt8, UInt8, UInt8) = (0xEC, 0xE9, 0xE0)
-        for i in 0..<(size * size) {
+        for i in 0..<(side * side) {
             let black = bitmap[i / 8] & UInt8(0x80 >> (i % 8)) != 0
             let c = black ? ink : paper
             rgba[i * 4] = c.0
@@ -90,7 +91,7 @@ enum PhotoDither {
             rgba[i * 4 + 3] = 255
         }
         guard let provider = CGDataProvider(data: Data(rgba) as CFData),
-              let image = CGImage(width: size, height: size, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: size * 4,
+              let image = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
                                   space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                                   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
