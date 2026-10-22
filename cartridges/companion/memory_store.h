@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <ArduinoJson.h>
+
 #include <string>
 #include <vector>
 
@@ -28,7 +30,9 @@ class MemoryStore {
   // {"next": N, "memories": [{id, group, text, by, added, changed}]}. A broken file → false and
   // an empty store.
   bool load(const std::string &json);
-  std::string save() const;
+  // "" when the document couldn't be built (out of memory): never a file with memories missing.
+  // `allocator`: where ArduinoJson builds it (PSRAM on Dotty: a save happens mid-session).
+  std::string save(ArduinoJson::Allocator *allocator = nullptr) const;
 
   // The same text as an existing memory (case and spaces aside) adds nothing: ok, that id.
   Added add(const std::string &text, const std::string &group, const std::string &by, int64_t now);

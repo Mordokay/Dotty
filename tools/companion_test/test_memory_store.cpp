@@ -3,6 +3,8 @@
 // list given to Gemini at the start of a chat.
 #include <string>
 
+#include <ArduinoJson.h>
+
 #include "check.h"
 #include "memory_store.h"
 
@@ -46,6 +48,10 @@ int main() {
   const MemoryStore::Added again = m.add("you  love Swimming ", "you", "dotty", 500);
   CHECK("dedupe: ok with the existing id", again.ok && again.id == 3);
   CHECK_EQ("dedupe: nothing added", m.all().size(), size_t(2));
+  // The list Gemini sees ends each memory with a full stop: saying it back that way isn't new.
+  CHECK_EQ("dedupe: a final full stop doesn't make it new", m.add("You love swimming.", "likes", "dotty", 600).id, 3);
+  CHECK_EQ("dedupe: nor quotes and an exclamation mark", m.add("\"You love swimming!\"", "likes", "dotty", 600).id, 3);
+  CHECK_EQ("dedupe: still two", m.all().size(), size_t(2));
 
   // Cut: at most 200 characters, at a word boundary, never a broken UTF-8 character.
   std::string longText;
@@ -108,6 +114,15 @@ int main() {
             section.find("Plans & dates") == std::string::npos && section.find("Other") == std::string::npos);
   CHECK("prompt: full says so", full.promptSection().find("Memory is full (300): ask the user to delete some in the "
                                                           "app before remembering more.") != std::string::npos);
+
+  // Out of memory while saving: nothing rather than a file with memories missing (it would replace
+  // the good one and lose them).
+  struct Starved : ArduinoJson::Allocator {
+    void *allocate(size_t) override { return nullptr; }
+    void deallocate(void *) override {}
+    void *reallocate(void *, size_t) override { return nullptr; }
+  } starved;
+  CHECK_EQ("save: out of memory gives nothing", s.save(&starved), std::string(""));
 
   // A broken file: refused, the store left empty.
   MemoryStore broken;

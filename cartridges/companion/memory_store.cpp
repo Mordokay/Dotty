@@ -16,11 +16,16 @@ std::string trim(const std::string &s) {
   return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
 }
 
-// Lower-case ASCII, one space between words: two memories that differ only so are the same.
+// Lower-case ASCII, one space between words, no quotes around it or final full stop: two memories
+// that differ only so are the same (Gemini sees each memory ending with "." and may say it back so).
 std::string key(const std::string &text) {
+  std::string t = trim(text);
+  while (!t.empty() && (t.back() == '.' || t.back() == '!' || t.back() == '?' || t.back() == '"' || t.back() == '\''))
+    t.pop_back();
+  while (!t.empty() && (t.front() == '"' || t.front() == '\'')) t.erase(0, 1);
   std::string out;
   bool space = false;
-  for (unsigned char c : trim(text)) {
+  for (unsigned char c : trim(t)) {
     if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
       space = true;
       continue;
@@ -157,8 +162,8 @@ std::string MemoryStore::promptSection() const {
   return s;
 }
 
-std::string MemoryStore::save() const {
-  JsonDocument doc;
+std::string MemoryStore::save(ArduinoJson::Allocator *allocator) const {
+  JsonDocument doc(allocator ? allocator : ArduinoJson::detail::DefaultAllocator::instance());
   doc["next"] = next_;
   JsonArray list = doc["memories"].to<JsonArray>();
   for (const Memory &m : memories_) {
@@ -170,6 +175,7 @@ std::string MemoryStore::save() const {
     o["added"] = m.added;
     o["changed"] = m.changed;
   }
+  if (doc.overflowed()) return "";
   std::string out;
   serializeJson(doc, out);
   return out;

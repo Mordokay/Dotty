@@ -133,10 +133,6 @@ struct MemoriesView: View {
             var offset = 0
             while true {
                 let r = try await link.send("companion.memories", ["offset": offset, "limit": 50])
-                if r["ok"] as? Bool == false {
-                    error = (r["error"] as? String) == "unavailable" ? "Memories unavailable: Dotty can't read its SD card." : "Dotty couldn't list its memories."
-                    return
-                }
                 let page = (r["memories"] as? [[String: Any]] ?? []).map { m in
                     Memory(id: m["id"] as? Int ?? 0, group: m["group"] as? String ?? "other", text: m["text"] as? String ?? "",
                            by: m["by"] as? String ?? "dotty",
@@ -151,28 +147,34 @@ struct MemoriesView: View {
             memories = all
             loaded = true
             error = nil
+        } catch DottyError.refused(let code) {
+            error = Self.message(code)
         } catch {
             if !link.lostConnection(error) { self.error = error.localizedDescription }
         }
     }
 
+    /// Dotty's refusals (DottyLink throws them as `refused(code)`) in words.
+    static func message(_ code: String) -> String {
+        switch code {
+        case "full": "Memory full: delete some first."
+        case "unavailable": "Memories unavailable: Dotty can't read its SD card."
+        case "empty": "A memory needs some words."
+        default: "Dotty couldn't do that. The list is up to date again."
+        }
+    }
+
     private func send(_ cmd: String, _ args: [String: Any] = [:]) async {
         do {
-            let r = try await link.send(cmd, args)
-            if r["ok"] as? Bool == false {
-                switch r["error"] as? String {
-                case "full": error = "Memory full: delete some first."
-                case "unavailable": error = "Memories unavailable: Dotty can't read its SD card."
-                case "empty": error = "A memory needs some words."
-                default: error = "Dotty couldn't do that."
-                }
-            } else {
-                error = nil
-            }
-            await load()
+            try await link.send(cmd, args)
+            error = nil
+        } catch DottyError.refused(let code) {
+            error = Self.message(code)  // e.g. a memory Dotty forgot meanwhile: the reload shows it gone
         } catch {
             if !link.lostConnection(error) { self.error = error.localizedDescription }
+            return
         }
+        await load()
     }
 }
 

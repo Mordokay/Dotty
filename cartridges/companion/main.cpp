@@ -892,6 +892,9 @@ void loop() {
     if ((info.state == Talk::Listening && !turnSent) || awaitingSend) {
       connect();  // a recording is waiting for it
     } else if (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Connecting) {
+      // Closed by the server's goAway, the runaway guard or a quiet socket death: Wi-Fi, the
+      // wake lock and Bluetooth still need undoing (else Dotty can't sleep and the app can't reach it).
+      disconnect("closed");
       setState(Talk::Offline, "Hold BOOT to talk");
     } else if (info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking) {
       voice::stopListening();

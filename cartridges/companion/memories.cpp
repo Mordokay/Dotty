@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SD_MMC.h>
+#include <esp_heap_caps.h>
 
 #include "log.h"
 #include "storage.h"
@@ -12,6 +13,13 @@ namespace {
 MemoryStore store_;
 bool available_ = false;
 uint8_t chunk[1024];  // card reads and writes go through internal RAM, a piece at a time
+
+// The save's JSON document goes in PSRAM: it runs mid-session, when TLS needs the internal RAM.
+struct PsramAllocator : ArduinoJson::Allocator {
+  void *allocate(size_t size) override { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM); }
+  void deallocate(void *p) override { heap_caps_free(p); }
+  void *reallocate(void *p, size_t size) override { return heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM); }
+} psram;
 
 String dir() {
   return storage::myDataDir() + "/memory";
@@ -49,7 +57,11 @@ bool available() {
 
 bool save() {
   if (!available_) return false;
-  const std::string json = store_.save();
+  const std::string json = store_.save(&psram);
+  if (json.empty()) {  // out of memory: keep the file as it is rather than write one missing memories
+    LOGW("memories", "couldn't build the file (out of memory): not saved");
+    return false;
+  }
   const String path = dir() + "/memories.json", part = path + ".part";
   File f = SD_MMC.open(part, FILE_WRITE);
   bool ok = static_cast<bool>(f);
