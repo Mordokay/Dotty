@@ -25,7 +25,7 @@
 #include "weather_data.h"
 #include "weather_icons.h"
 
-DOTTY_CARTRIDGE("weather", "Weather Station", "0.3.15");
+DOTTY_CARTRIDGE("weather", "Weather Station", "0.3.16");
 
 namespace {
 

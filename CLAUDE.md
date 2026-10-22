@@ -847,11 +847,35 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   logged or sent back in full), `companion.history {day?}`, `companion.forget {day?}`; event
   `companion.changed`. App: `Features/Companion/` (CompanionView, VoicesView with ▶ and ☆,
   CompanionHistoryView).
+- **Memories** (0.2.0; spec/plan `docs/superpowers/{specs,plans}/2026-10-22-companion-memories*`):
+  `memory_store.*` (plain C++, host-tested): ≤ 300 memories of ≤ 200 characters (code points, cut
+  at a word) in groups you / people / likes / plans / other, no duplicates (case and spaces aside),
+  ids never reused; `memories.*` keeps them in `data/memory/memories.json` (via `.part`; a broken
+  file → `memories.bad.json`, empty store). Every memory goes into the system instruction at
+  connect, grouped and numbered (~25 tokens each, every turn). Tools `remember {text, group}`,
+  `update_memory {id, text, group?}`, `forget_memory {id}` (NON_BLOCKING, answered once each —
+  measured: no extra turns; `remember`'s answer carries `memoryId`, since the model guessed ids of
+  memories saved in the same chat). Applied only inside a question (TurnTracker). Note under the
+  avatar for 3 s: bookmark + Remembered / Updated / Forgotten / Memory full; history lines get
+  `memory`. **End-of-chat review**: at the 3-minute idle close a silent text turn asks Gemini to save
+  what it missed (it had kept "likes popcorn" but not "my name is Peter"), ≤ 20 s, then closes; not
+  on lock. App: Companion › Memories (`MemoriesView`: groups, search, edit sheet, swipe to delete,
+  add, forget everything); BLE `companion.memories {offset, limit ≤ 50}` (newest first) →
+  {memories, total, max}, `companion.memory.add/update/delete/clear`, `status.memories`; every memory
+  command answers `{ok: false, error: "unavailable"}` without a card.
+- Google refuses a new session within ~40 s of the previous one ("exceeded your current quota"),
+  even after a proper close: the 1-minute wait handles it. Bluetooth comes back 1 s after a
+  session's Wi-Fi is off (one BT-controller interrupt-watchdog crash, in ROM
+  `ll_connection_update_ind_handler`, came right after it came back at once). Weak Wi-Fi
+  (< -75 dBm) shows "Weak Wi-Fi: replies may stutter"; streamed audio refills a second after
+  running dry (dotty_core `stream_gate.h`, host-tested: -78 dBm gave 1,137 gaps in one reply).
+  Each reply logs "spoken; longest loop pause N ms" (choppy = network if small).
 - The key: NVS `companion/key` from the app; `cartridges/companion/dev_key.h` (gitignored, never
   commit) seeds an empty key on the bench. Dev keys: `r` simulated BOOT hold, `t` gear, `X` close the
-  socket, `m` cycle moods, `q` fake quota close, `Q` clear it. Host tests:
+  socket, `m` cycle moods, `q` fake quota close, `Q` clear it, `J` send invalid JSON (the server
+  closes: tests the close path), `M` break the memory file, `N` show the memory note. Host tests:
   `python3 tools/companion_test/run.py` (frames, protocol with captured samples, Pacific reset,
-  pages, voices, voice pack, PCM ring).
+  pages, voices, voice pack, PCM ring, turn tracker, memory store, stream gate).
 
 ## SD library + Wi-Fi fetch (launcher)
 
@@ -860,7 +884,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   {id, version?, sha256?}` flashes from the card in ~2.5 s (whole region erased up front;
   4 KB sequential erases took 10 s). `library.list` lists the card.
 - `lib/dotty_core/src/net.*` (every firmware): up to 8 saved networks as JSON in NVS
-  namespace `wifi`; `net::connect()` scans and joins the strongest known one. HTTPS via
+  namespace `wifi`; `net::connect()` scans and joins the strongest known one, and the strongest
+  access point of it (`WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL`: on the user's mesh the
+  default first-found node gave -86 dBm where the near one gave -40). HTTPS via
   `esp_http_client` + `esp_crt_bundle_attach` (real certificate checks), manual redirect
   loop (GitHub release downloads redirect). Wi-Fi is on only while something needs it.
 - Preferred network (NVS `wifi/preferred`, "" = automatic): `connect()` tries it first when

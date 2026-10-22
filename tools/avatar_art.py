@@ -358,8 +358,8 @@ def main():
     APP.mkdir(parents=True, exist_ok=True)
     for key in IDS:  # the app's picture: the idle face, 2 screen pixels per dot
         frame(key, "idle", BIG).convert("L").resize((BIG * 2, BIG * 2), Image.NEAREST).save(APP / f"{key}.png")
-    # The cartridge's install icon (64x64, 1-bit): the robot, happy.
-    frame("robot", "happy", 64).save(REPO / "cartridges/companion/icon.png")
+    # The cartridge's install icon (64x64, 1-bit): the girl, happy (the app artwork is her too).
+    frame("girl", "happy", 64).save(REPO / "cartridges/companion/icon.png")
     print(f"{len(IDS)} avatars x {len(FACES)} faces -> {OUT.relative_to(REPO)}, {PREVIEW.name}, {APP.relative_to(REPO)}/")
 
 
