@@ -24,6 +24,7 @@ class WsClient {
   void close();
   bool connected() const { return tls_ != nullptr; }
   uint16_t closeCode() const { return closeCode_; }
+  const std::string &closeReason() const { return closeReason_; }
 
  private:
   bool sendFrame(uint8_t opcode, const uint8_t *data, size_t len);
@@ -31,4 +32,5 @@ class WsClient {
   int fd_ = -1;
   WsDecoder decoder_;
   uint16_t closeCode_ = 0;
+  std::string closeReason_;  // the server's close reason text (e.g. a quota message)
 };

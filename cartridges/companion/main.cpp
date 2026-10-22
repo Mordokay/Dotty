@@ -12,7 +12,12 @@
 #include "core_ble.h"
 #include "log.h"
 #include "net.h"
+#include "gemini_live.h"
 #include "ws_client.h"
+#if __has_include("dev_key.h")
+#include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY
+#endif
+#include <Preferences.h>
 #include "shell.h"
 #include "storage.h"
 #include "ui.h"
@@ -90,6 +95,48 @@ void echoTest() {
   ble::start();
 }
 
+GeminiLive live;
+
+String apiKey() {
+  Preferences p;
+  p.begin("companion", true);
+  String key = p.getString("key", "");
+  p.end();
+#ifdef COMPANION_DEV_KEY
+  if (key.isEmpty()) key = COMPANION_DEV_KEY;
+#endif
+  return key;
+}
+
+// Developer aid (serial c, then T): connect to Gemini Live and send a typed turn.
+void liveTest(bool typed) {
+  if (!live.connected()) {
+    ble::stop();
+    String error;
+    if (!net::connect(error)) {
+      LOGW("live", "Wi-Fi: %s", error.c_str());
+      return;
+    }
+    LiveConfig config;
+    config.systemInstruction = systemInstruction("12:00", "");
+    GeminiLive::Callbacks cb;
+    cb.ready = [] { LOGI("live", "test: ready"); };
+    cb.said = [](const std::string &t) { LOGI("live", "said: %s", t.c_str()); };
+    cb.mood = [](const std::string &m) { LOGI("live", "mood: %s", m.c_str()); };
+    cb.audio = [](const int16_t *, size_t frames) {
+      static size_t total = 0;
+      total += frames;
+      if (total % 24000 < frames) LOGI("live", "audio: %u frames so far", static_cast<unsigned>(total));
+    };
+    cb.turnDone = [](int tokens) { LOGI("live", "turn done, %d tokens", tokens); };
+    cb.failed = [](const std::string &e, int retry, bool quota, bool badKey) {
+      LOGW("live", "failed: %s (retry %d, quota %d, badKey %d)", e.c_str(), retry, quota, badKey);
+    };
+    live.begin(apiKey().c_str(), config, cb);
+  }
+  if (typed && live.ready()) live.sendText("Say hello to me in one short sentence.");
+}
+
 const shell::Picture kOffPictures[] = {{kSleepPanda, kSleepPandaWidth, kSleepPandaHeight}};
 
 }  // namespace
@@ -112,5 +159,8 @@ void loop() {
   if (!shell::update(input)) return;
   if (input.key == 'S') streamTestTone();
   if (input.key == 'W') echoTest();
+  if (input.key == 'c') liveTest(false);
+  if (input.key == 'T') liveTest(true);
+  live.poll();
   delay(10);
 }

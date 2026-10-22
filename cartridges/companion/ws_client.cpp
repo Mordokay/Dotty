@@ -14,6 +14,7 @@ constexpr int kTimeoutMs = 15000;
 bool WsClient::connect(const char *host, const char *path, String &error) {
   close();
   closeCode_ = 0;
+  closeReason_.clear();
   decoder_ = WsDecoder();
   esp_tls_cfg_t cfg = {};
   cfg.crt_bundle_attach = esp_crt_bundle_attach;
@@ -123,6 +124,7 @@ bool WsClient::poll(const std::function<void(const std::string &)> &onMessage) {
       else if (r == WsDecoder::Ping) sendFrame(0xA, reinterpret_cast<const uint8_t *>(decoder_.control.data()), decoder_.control.size());
       else if (r == WsDecoder::Close) {
         closeCode_ = decoder_.closeCode;
+        closeReason_ = decoder_.control.size() > 2 ? decoder_.control.substr(2) : "";
         LOGW("ws", "server closed: %u %s", closeCode_, decoder_.control.size() > 2 ? decoder_.control.c_str() + 2 : "");
         close();
         return false;
