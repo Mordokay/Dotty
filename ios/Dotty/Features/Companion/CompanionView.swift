@@ -308,13 +308,18 @@ struct CompanionPage: View {
     private var characterCard: some View {
         GlassCard(title: "Who they are") {
             VStack(alignment: .leading, spacing: Spacing.m) {
-                field("Name", text: $profile.name, limit: 24, lines: 1,
-                      hint: summary.awake ? nil : "Usually given when they first wake up on Dotty")
-                field("Personality", text: $profile.personality, limit: 600, lines: 4)
-                field("Traits (one per line)", text: $profile.traits, limit: 6 * 41, lines: 3)
-                field("Quirks (one per line)", text: $profile.quirks, limit: 6 * 61, lines: 3)
-                field("Way of speaking", text: $profile.speaking, limit: 300, lines: 3)
-                field("Backstory", text: $profile.backstory, limit: 600, lines: 4)
+                CharacterField(title: "Name", text: $profile.name, limit: 24, lines: 1,
+                               hint: summary.awake ? nil : "Usually given when they first wake up on Dotty")
+                CharacterField(title: "Personality", text: $profile.personality, limit: 600, lines: 4,
+                               suggest: { await suggest("personality", "personality") })
+                CharacterField(title: "Traits (one per line)", text: $profile.traits, limit: 6 * 41, lines: 3,
+                               suggest: { await suggest("traits", "set of traits") })
+                CharacterField(title: "Quirks (one per line)", text: $profile.quirks, limit: 6 * 61, lines: 3,
+                               suggest: { await suggest("quirks", "set of quirks") })
+                CharacterField(title: "Way of speaking", text: $profile.speaking, limit: 300, lines: 3,
+                               suggest: { await suggest("speaking", "way of speaking") })
+                CharacterField(title: "Backstory", text: $profile.backstory, limit: 600, lines: 4,
+                               suggest: { await suggest("backstory", "backstory") })
                 if profile != saved {
                     HStack {
                         Button("Undo") { profile = saved }.buttonStyle(.quiet())
@@ -328,20 +333,24 @@ struct CompanionPage: View {
         }
     }
 
-    private func field(_ title: String, text: Binding<String>, limit: Int, lines: Int, hint: String? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.lpLabel).foregroundStyle(Color.inkMuted)
-                Spacer()
-                Text("\(text.wrappedValue.count)/\(limit)").font(.lpCaption).foregroundStyle(Color.inkFaint)
+    /// ✨ Suggest: Gemini writes this field again, keeping the rest of the character in mind.
+    private func suggest(_ field: String, _ label: String) async {
+        let current = ["personality": profile.personality, "traits": profile.traits, "quirks": profile.quirks,
+                       "speaking": profile.speaking, "backstory": profile.backstory]
+        let (prompt, schema) = CompanionDesign.field(field, label: label, description: "", current: current)
+        do {
+            let answer = try await GeminiText.generate(prompt, schema: schema)
+            let value = (answer["value"] as? [String])?.joined(separator: "\n") ?? answer["value"] as? String ?? ""
+            switch field {
+            case "personality": profile.personality = value
+            case "traits": profile.traits = value
+            case "quirks": profile.quirks = value
+            case "speaking": profile.speaking = value
+            default: profile.backstory = value
             }
-            TextField(title, text: text, axis: .vertical)
-                .lineLimit(lines...max(lines, 8))
-                .font(.lpBody).foregroundStyle(Color.ink)
-                .padding(Spacing.s)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.glassStrong))
-                .onChange(of: text.wrappedValue) { _, v in if v.count > limit { text.wrappedValue = String(v.prefix(limit)) } }
-            if let hint { Text(hint).font(.lpCaption).foregroundStyle(Color.inkFaint) }
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
@@ -433,28 +442,200 @@ struct CompanionPage: View {
     }
 }
 
-/// The "+" page: a new custom companion (Task 9 adds the Gemini co-designer here).
+/// One character field: a counter, and a ✨ button that asks Gemini to write it again.
+struct CharacterField: View {
+    let title: String
+    @Binding var text: String
+    let limit: Int
+    let lines: Int
+    var hint: String? = nil
+    var suggest: (() async -> Void)? = nil
+    @State private var suggesting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.lpLabel).foregroundStyle(Color.inkMuted)
+                Spacer()
+                if let suggest {
+                    if suggesting {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Button {
+                            suggesting = true
+                            Task {
+                                await suggest()
+                                suggesting = false
+                            }
+                        } label: { Label("Suggest", systemImage: "sparkles").font(.lpCaption) }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(DottyLight.firefly.color)
+                    }
+                }
+                Text("\(text.count)/\(limit)").font(.lpCaption).foregroundStyle(Color.inkFaint)
+            }
+            TextField(title, text: $text, axis: .vertical)
+                .lineLimit(lines...max(lines, 8))
+                .font(.lpBody).foregroundStyle(Color.ink)
+                .padding(Spacing.s)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.glassStrong))
+                .onChange(of: text) { _, v in if v.count > limit { text = String(v.prefix(limit)) } }
+            if let hint { Text(hint).font(.lpCaption).foregroundStyle(Color.inkFaint) }
+        }
+    }
+}
+
+/// The "+" page: describe who you'd like and Gemini designs them (personality, traits, quirks, way of
+/// speaking, backstory, a voice and an avatar); everything stays editable before Create. No name:
+/// they get one when they first wake up on Dotty.
 struct NewCompanionPage: View {
     let onCreated: (String) -> Void
     @Environment(DottyLink.self) private var link
+    @State private var description = ""
+    @State private var designing = false
+    @State private var designed = false
+    @State private var creating = false
+    @State private var personality = ""
+    @State private var traits = ""
+    @State private var quirks = ""
+    @State private var speaking = ""
+    @State private var backstory = ""
+    @State private var voice = "Zephyr"
+    @State private var voiceReason = ""
+    @State private var avatar = "robot"
     @State private var error: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xl) {
-                PageHeader(title: "New companion", subtitle: "Someone new to talk to. They wake up on Dotty without a name.")
+                PageHeader(title: "New companion",
+                           subtitle: "Describe who you'd like to talk to, and Gemini designs them. They wake up on Dotty without a name.")
                     .padding(.top, Spacing.l)
                 if let error { NoticeCard(kind: .error, text: error) }
-                Button("Create") { Task { await create() } }.buttonStyle(.light()).needsDotty(link)
+                GlassCard(title: "Describe them") {
+                    VStack(alignment: .leading, spacing: Spacing.s) {
+                        TextField("A grumpy retired sea captain who secretly loves poetry", text: $description, axis: .vertical)
+                            .lineLimit(3...6)
+                            .font(.lpBody).foregroundStyle(Color.ink)
+                            .padding(Spacing.s)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.glassStrong))
+                        HStack {
+                            if designing { ProgressView().controlSize(.small); Text("Gemini is designing…").font(.lpCaption) }
+                            Spacer()
+                            Button(designed ? "Design again" : "Design with Gemini") { Task { await design() } }
+                                .buttonStyle(.light())
+                                .disabled(designing || description.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                    }
+                    .padding(Spacing.m)
+                }
+                if designed {
+                    GlassCard(title: "Voice and avatar") {
+                        HStack(spacing: Spacing.m) {
+                            CompanionView.avatarImage(avatar, companion: "", size: 64)
+                                .padding(4)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(voice).font(.lpHeadline).foregroundStyle(Color.ink)
+                                Text(voiceReason).font(.lpCaption).foregroundStyle(Color.inkMuted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(Spacing.m)
+                        Text("You can change both on their page after creating them.")
+                            .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                            .padding(.horizontal, Spacing.m).padding(.bottom, Spacing.s)
+                    }
+                    GlassCard(title: "Who they are") {
+                        VStack(alignment: .leading, spacing: Spacing.m) {
+                            CharacterField(title: "Personality", text: $personality, limit: 600, lines: 4,
+                                           suggest: { await suggest("personality", "personality") })
+                            CharacterField(title: "Traits (one per line)", text: $traits, limit: 6 * 41, lines: 3,
+                                           suggest: { await suggest("traits", "set of traits") })
+                            CharacterField(title: "Quirks (one per line)", text: $quirks, limit: 6 * 61, lines: 3,
+                                           suggest: { await suggest("quirks", "set of quirks") })
+                            CharacterField(title: "Way of speaking", text: $speaking, limit: 300, lines: 3,
+                                           suggest: { await suggest("speaking", "way of speaking") })
+                            CharacterField(title: "Backstory", text: $backstory, limit: 600, lines: 4,
+                                           suggest: { await suggest("backstory", "backstory") })
+                        }
+                        .padding(Spacing.m)
+                    }
+                }
+                HStack {
+                    if creating { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button(designed ? "Create" : "Create a blank one") { Task { await create() } }
+                        .buttonStyle(.light())
+                        .disabled(creating || designing)
+                }
+                .needsDotty(link)
             }
             .padding(.horizontal, Spacing.l)
+            .padding(.bottom, Spacing.xxl * 2)
+        }
+    }
+
+    private func design() async {
+        designing = true
+        defer { designing = false }
+        let (prompt, schema) = CompanionDesign.everything(description)
+        do {
+            let a = try await GeminiText.generate(prompt, schema: schema)
+            personality = a["personality"] as? String ?? ""
+            traits = (a["traits"] as? [String] ?? []).joined(separator: "\n")
+            quirks = (a["quirks"] as? [String] ?? []).joined(separator: "\n")
+            speaking = a["speaking"] as? String ?? ""
+            backstory = a["backstory"] as? String ?? ""
+            voice = a["voice"] as? String ?? "Zephyr"
+            voiceReason = a["voiceReason"] as? String ?? ""
+            avatar = a["avatar"] as? String ?? "robot"
+            designed = true
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func suggest(_ field: String, _ label: String) async {
+        let current = ["personality": personality, "traits": traits, "quirks": quirks, "speaking": speaking, "backstory": backstory]
+        let (prompt, schema) = CompanionDesign.field(field, label: label, description: description, current: current)
+        do {
+            let a = try await GeminiText.generate(prompt, schema: schema)
+            let value = (a["value"] as? [String])?.joined(separator: "\n") ?? a["value"] as? String ?? ""
+            switch field {
+            case "personality": personality = value
+            case "traits": traits = value
+            case "quirks": quirks = value
+            case "speaking": speaking = value
+            default: backstory = value
+            }
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
     private func create() async {
+        creating = true
+        defer { creating = false }
         do {
-            let r = try await link.send("companion.create", ["type": "custom"])
-            onCreated(r["id"] as? String ?? "")
+            var args: [String: Any] = ["type": "custom"]
+            if designed {
+                args["voice"] = voice
+                args["avatar"] = avatar
+            }
+            let r = try await link.send("companion.create", args)
+            let id = r["id"] as? String ?? ""
+            if designed {
+                for (field, value) in [("personality", personality), ("traits", traits), ("quirks", quirks),
+                                       ("speaking", speaking), ("backstory", backstory)] where !value.isEmpty {
+                    try await CompanionPage.sendField(link, id: id, field: field, value: value)
+                }
+            }
+            description = ""
+            designed = false
+            onCreated(id)
         } catch {
             if !link.lostConnection(error) { self.error = error.localizedDescription }
         }
