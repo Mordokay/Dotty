@@ -1,4 +1,4 @@
 {
-  "description": "Talk to an AI companion: hold BOOT and speak, it answers out loud and remembers what matters to you.",
+  "description": "Talk to AI companions: hold BOOT and speak. A few companions, each their own person, who answer out loud and remember you.",
   "requires": ["wifi"]
 }

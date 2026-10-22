@@ -49,7 +49,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.2.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.3.0");
 
 namespace {
 

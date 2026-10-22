@@ -863,6 +863,34 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   add, forget everything); BLE `companion.memories {offset, limit ≤ 50}` (newest first) →
   {memories, total, max}, `companion.memory.add/update/delete/clear`, `status.memories`; every memory
   command answers `{ok: false, error: "unavailable"}` without a card.
+- **Roles** (0.3.0; spec/plan `docs/superpowers/{specs,plans}/2026-10-22-companion-roles*`): up to
+  8 companions, each its own person: `companion_store.*` (host-tested: Profile — name ≤ 24,
+  personality ≤ 600, traits 6 × 40, quirks 6 × 60, way of speaking ≤ 300, backstory ≤ 600, voice,
+  avatar or `photo`; CompanionList — ids `coach friend partner teacher debug` / `c<N>` never reused,
+  never the last one; `migrationPlan`), `companions.*` (card `data/companions/<id>/{profile.json,
+  memory/, history/, photo.bin}`, `index.json`, NVS `companion/active`; first boot of 0.3.0 moves
+  piece 2a's `data/memory` + `data/history` into Debug's folder, resumable). Presets: Coach (dog,
+  Puck), Friend (cat, Zephyr), Partner = the user's girlfriend (girl, Achernar), Teacher (owl,
+  Charon), Debug (robot, named, holds the old memories). **Waking up**: a nameless companion's
+  persona (`persona.*`) says it just woke up and can't remember who it is — "speak softly and
+  hesitantly, a little lost and sad" (a listening A/B on the device: slower, lower, doubtful) — and
+  `set_name {name}` saves the name it's given; until then "Not awake yet. Hold BOOT". Every persona
+  ends with **acting notes** (commit to each line's emotion: whispers, laughs, sighs…; the user's
+  A/B: a little spark, +~200 tokens a turn, kept) and set_mood has 16 moods on the 12 faces.
+  Affective dialog is not supported on gemini-3.8-live (1007 both ways). The acting demo (6
+  recordings, `data/act_*.wav`) opens from an A/B button bottom-left on the idle screen.
+  Switching companion (settings row, app pager, `companion.select`) closes the session; memory and
+  name calls only land on the session's companion. Layout: avatar 128 px, text 2 lines, settings 4
+  rows (Companion, Volume, Speak, Voice); a photo avatar shows a mood badge. **Keys**: up to 3, one
+  per session in turn (`key_ring.h`, host-tested), a key out of allowance skipped until its reset,
+  usage per key; the app checks each key with Google (`GET /v1beta/models`) before keeping it
+  (Keychain + Dotty). BLE: `companion.list/get/select/create/update/field` (long fields in pieces,
+  `piece_buffer.h`) `/delete/photo/photo.clear`; memory and history commands take `companion`.
+  App: `CompanionView` pager (a page per companion + a "+" page), `CompanionSettingsSheet` (gear:
+  keys, Speak, volume, today), `AvatarPhotoEditor` (circle crop, dithered 128/48), the **Gemini
+  co-designer** (`GeminiText`, `gemini-flash-lite-latest`: ~2-9 s, where 3.8 Flash took 20-60 s
+  thinking) with ✨ Suggest per field. Dev keys S (next companion), W (forget its name), P (test
+  photo / back), Z ("Zoë 🌙" / Luna), V and Y (acting demo).
 - Google refuses a new session within ~40 s of the previous one ("exceeded your current quota"),
   even after a proper close: the 1-minute wait handles it. Bluetooth comes back 1 s after a
   session's Wi-Fi is off (one BT-controller interrupt-watchdog crash, in ROM
@@ -875,7 +903,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   socket, `m` cycle moods, `q` fake quota close, `Q` clear it, `J` send invalid JSON (the server
   closes: tests the close path), `M` break the memory file, `N` show the memory note. Host tests:
   `python3 tools/companion_test/run.py` (frames, protocol with captured samples, Pacific reset,
-  pages, voices, voice pack, PCM ring, turn tracker, memory store, stream gate).
+  pages, voices, voice pack, PCM ring, turn tracker, memory store, stream gate, companion store,
+  persona, pieces, key ring).
 
 ## SD library + Wi-Fi fetch (launcher)
 
