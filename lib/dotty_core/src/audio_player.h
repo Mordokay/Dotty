@@ -1,5 +1,7 @@
 #pragma once
 
+#include "stream_gate.h"
+
 #include <Arduino.h>
 
 // Streams an MP3 or WAV (16-bit PCM) file from the SD card to the speaker, plays short
@@ -93,6 +95,5 @@ class AudioPlayer {
   volatile bool stream_ = false;
   volatile bool streamEnding_ = false;
   class PcmRing *ring_ = nullptr;
-  uint32_t underruns_ = 0;
-  bool streamGotData_ = false;
+  StreamGate gate_{24000};  // when the stream may play (reset by startStream)
 };

@@ -193,8 +193,7 @@ bool AudioPlayer::startStream(uint32_t rate) {
     i2s.configureTX(rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     codec.setSampleRate(rate);
   }
-  underruns_ = 0;
-  streamGotData_ = false;
+  gate_ = StreamGate(rate);
   streamEnding_ = false;
   synth_ = wav_ = false;
   samplesPlayed_ = 0;
@@ -229,26 +228,25 @@ size_t AudioPlayer::streamSpace() const {
 
 void AudioPlayer::playStream() {
   constexpr size_t kFrames = 256;
-  // Start with a quarter second in hand: network audio arrives in bursts, and starting on the
-  // first piece ran the ring dry a few times at the start of every reply.
-  if (!streamGotData_ && !streamEnding_ && ring_->available() < sampleRate_ / 4) {
+  // Network audio arrives in bursts: wait for some in hand to start, and for a second's worth
+  // after running dry (StreamGate), instead of playing every crumb as it comes.
+  if (!gate_.canPlay(ring_->available(), streamEnding_)) {
     writeSilence();
     return;
   }
   const size_t got = ring_->read(pcm, kFrames);
   if (got == 0) {
     if (streamEnding_) {
-      LOGI("audio", "stream: %lu underruns", static_cast<unsigned long>(underruns_));
+      LOGI("audio", "stream: %d pauses to refill", gate_.pauses());
       stream_ = false;
       playing_ = false;
       power::setWakeLock(power::kWakeLockAudio, false);
       return;
     }
-    if (streamGotData_) underruns_++;
+    gate_.ranDry();
     writeSilence();
     return;
   }
-  streamGotData_ = true;
   for (int i = got - 1; i >= 0; i--) pcm[2 * i] = pcm[2 * i + 1] = pcm[i];
   i2s.write(reinterpret_cast<uint8_t *>(pcm), got * 2 * sizeof(int16_t));
   samplesPlayed_ += got;

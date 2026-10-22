@@ -265,7 +265,10 @@ GeminiLive::Callbacks callbacks() {
          heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
     lastTurnAt = millis();
     awaitingConnect = false;
-    if (info.state == Talk::Connecting) setState(Talk::Ready, "Hold BOOT to talk");  // else talking already
+    // A weak signal makes replies stutter (-78 dBm: 13 s to the first audio, refills mid-reply).
+    const char *status = net::rssi() < -75 ? "Weak Wi-Fi: replies may stutter" : "Hold BOOT to talk";
+    if (net::rssi() < -75) LOGW("companion", "weak Wi-Fi: %d dBm", net::rssi());
+    if (info.state == Talk::Connecting) setState(Talk::Ready, status);  // else talking already
   };
   cb.heard = [](const std::string &t) {
     heard += t;
