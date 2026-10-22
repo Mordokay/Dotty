@@ -27,13 +27,14 @@ int64_t nowUtc() {
 
 namespace history {
 
-void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens) {
+void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens,
+            const std::string &memory) {
   if (!storage::available()) return;
   storage::makeDirs(dir());
   const int64_t local = time(nullptr);
   File f = SD_MMC.open(dir() + "/" + dayFile(local).c_str(), FILE_APPEND);
   if (!f) return;
-  f.println(historyLine(local, you, dotty, mood, ms, tokens).c_str());
+  f.println(historyLine(local, you, dotty, mood, ms, tokens, memory).c_str());
 }
 
 std::vector<String> days() {

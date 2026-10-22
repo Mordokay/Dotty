@@ -13,7 +13,8 @@ int64_t nextPacificMidnightUtc(int64_t nowUtc);
 
 // One line of data/history/<day>.jsonl (no trailing newline).
 std::string historyLine(int64_t localEpoch, const std::string &you, const std::string &dotty, const std::string &mood,
-                        int ms, int tokens);
+                        int ms, int tokens,
+                        const std::string &memory = "");
 // The day's history file name for a local time: "2026-10-22.jsonl".
 std::string dayFile(int64_t localEpoch);
 // An API key as pasted: surrounding spaces, tabs and newlines removed.

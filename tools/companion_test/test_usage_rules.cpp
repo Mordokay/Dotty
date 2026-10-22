@@ -30,6 +30,10 @@ int main() {
   CHECK_EQ("history: one JSON line",
            historyLine(1790000000, "Tell me a \"joke\"", "Why?\nBecause.", "happy", 950, 412),
            std::string(R"({"t":1790000000,"you":"Tell me a \"joke\"","dotty":"Why?\nBecause.","mood":"happy","ms":950,"tokens":412})"));
+  CHECK_EQ("history: a memory change at the end",
+           historyLine(1790000000, "My sister is Ana", "Nice!", "happy", 900, 400, "remembered: Your sister is called Ana"),
+           std::string(R"({"t":1790000000,"you":"My sister is Ana","dotty":"Nice!","mood":"happy","ms":900,"tokens":400,)"
+                       R"("memory":"remembered: Your sister is called Ana"})"));
   CHECK_EQ("history: the day's file", dayFile(utc(2026, 10, 22, 23, 59)), std::string("2026-10-22.jsonl"));
 
   CHECK_EQ("key: spaces and a newline trimmed", trimKey("  AIza123 \n"), std::string("AIza123"));

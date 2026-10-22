@@ -37,6 +37,18 @@ void drawHistoryIcon() {
   epd.drawLine(cx, cy, cx + 4, cy + 3, kBlack);
 }
 
+// A memory change: a bookmark and the word, under the avatar (beside it in text-only mode).
+void drawNote(const String &note, bool small) {
+  epd.setFont(nullptr);  // the small built-in font: 6 px a character
+  const int16_t w = 10 + 4 + 6 * note.length();
+  const int16_t x = small ? kW - 6 - w : (kW - w) / 2, y = small ? 82 : 107;
+  epd.fillRect(x, y, 10, 12, kBlack);
+  epd.fillTriangle(x, y + 12, x + 9, y + 12, x + 5, y + 7, kWhite);
+  epd.setTextColor(kBlack);
+  epd.setCursor(x + 14, y + 3);
+  epd.print(note);
+}
+
 void drawMeter(int levelDb, int16_t y) {
   // 20 bars from -60 to 0 dBFS, like Tape's.
   const int bars = constrain((levelDb + 60) / 3, 0, 20);
@@ -122,6 +134,7 @@ void draw(const ScreenInfo &info) {
   if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
   else avatar::draw(epd, (kW - kAvatarSize) / 2, 8, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
+  if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   drawHistoryIcon();
 
   epd.setFont(&FreeSans9pt7b);

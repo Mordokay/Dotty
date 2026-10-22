@@ -85,9 +85,10 @@ std::string jsonString(const std::string &s) {
 }  // namespace
 
 std::string historyLine(int64_t localEpoch, const std::string &you, const std::string &dotty, const std::string &mood,
-                        int ms, int tokens) {
+                        int ms, int tokens, const std::string &memory) {
   return "{\"t\":" + std::to_string(localEpoch) + ",\"you\":" + jsonString(you) + ",\"dotty\":" + jsonString(dotty) +
-         ",\"mood\":" + jsonString(mood) + ",\"ms\":" + std::to_string(ms) + ",\"tokens\":" + std::to_string(tokens) + "}";
+         ",\"mood\":" + jsonString(mood) + ",\"ms\":" + std::to_string(ms) + ",\"tokens\":" + std::to_string(tokens) +
+         (memory.empty() ? "" : ",\"memory\":" + jsonString(memory)) + "}";
 }
 
 std::string dayFile(int64_t localEpoch) {

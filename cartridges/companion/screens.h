@@ -16,6 +16,7 @@ struct ScreenInfo {
   int levelDb = -60;     // the microphone meter while listening
   bool textOnly = false;
   int frame = 0;         // the animation clock (blink, bob, talking mouth)
+  String note;           // "Remembered"… under the avatar for a few seconds ("" = none)
   int page = -1;         // a long reply's page after it ends (-1 = the last one)
 };
 

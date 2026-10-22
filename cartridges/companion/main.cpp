@@ -24,6 +24,7 @@
 #include "core_ble.h"
 #include "gemini_live.h"
 #include "history.h"
+#include "memories.h"
 #include "images/sleep_panda.h"
 #include "log.h"
 #include "nav_bar.h"
@@ -95,6 +96,10 @@ struct TextPiece {
 std::vector<TextPiece> textQueue;
 size_t replyFrames = 0;  // reply audio received so far
 uint32_t lastTextAt = 0;
+std::string turnMemory;        // what this exchange changed in the memories (history)
+std::string memorySection;     // the memories for the next session (built on the loop, read by the task)
+uint32_t noteUntil = 0;        // "Remembered"… shows until then
+uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
 int peakDb = -60;
 
@@ -206,6 +211,51 @@ void beginReply() {
   setState(Talk::Speaking);
 }
 
+// A memory call from the model: change the store, save it, show a note for 3 s, note it for the
+// history line. Returns the memory's id for remember (sent back so the model can name it).
+int applyMemory(const ToolCall &c) {
+  MemoryStore &store = memories::store();
+  const int64_t now = time(nullptr);
+  int id = -1;
+  const char *note = nullptr;
+  std::string change;
+  if (c.name == "remember") {
+    const MemoryStore::Added r = store.add(c.text, c.group, "dotty", now);
+    if (r.ok) {
+      id = r.id;
+      note = "Remembered";
+      change = "remembered: " + store.find(r.id)->text;
+    } else if (r.error == "full") {
+      note = "Memory full";
+    }
+  } else if (c.name == "update_memory") {
+    const std::string *group = c.group.empty() ? nullptr : &c.group;
+    if (store.update(c.memoryId, &c.text, group, now)) {
+      id = c.memoryId;
+      note = "Updated";
+      change = "updated: " + store.find(c.memoryId)->text;
+    }
+  } else if (c.name == "forget_memory") {
+    const Memory *m = store.find(c.memoryId);
+    const std::string text = m ? m->text : "";
+    if (store.remove(c.memoryId)) {
+      note = "Forgotten";
+      change = "forgot: " + text;
+    }
+  }
+  LOGI("companion", "%s %d: %s %.40s", c.name.c_str(), c.memoryId, note ? note : "ignored", change.c_str());
+  if (!change.empty()) {
+    memories::save();
+    turnMemory += (turnMemory.empty() ? "" : "; ") + change;
+  }
+  if (note) {
+    info.note = note;
+    noteUntil = millis() + 3000;
+    redraw = true;
+  }
+  return id;
+}
+
 // ---------- Gemini callbacks (run inside live.poll(), on the main loop) ----------
 
 GeminiLive::Callbacks callbacks() {
@@ -242,17 +292,14 @@ GeminiLive::Callbacks callbacks() {
     info.mood = turnMood;
   };
   cb.spent = [](int tokens) { usage::addTokens(tokens); };
-  cb.memory = [](const ToolCall &c) {  // TEMPORARY (memories plan Task 3): log only
-    LOGI("companion", "memory call %s id %d group %s: %.40s", c.name.c_str(), c.memoryId, c.group.c_str(), c.text.c_str());
-    return -1;
-  };
+  cb.memory = [](const ToolCall &c) { return applyMemory(c); };
   cb.turnDone = [](int tokens) {
     quotaStrikes = 0;
     voice::playEnd();
     std::string full = said;  // history gets the whole reply, even before it's all been heard
     for (const TextPiece &p : textQueue) full += p.text;
     const uint32_t ms = firstAudioAt ? firstAudioAt - releasedAt : millis() - releasedAt;
-    history::append(heard, full, turnMood.c_str(), ms, tokens);
+    history::append(heard, full, turnMood.c_str(), ms, tokens, turnMemory);
     usage::addTurn(tokens);
     LOGI("companion", "turn: %u ms to first audio, %d tokens; heard \"%s\"; said \"%s\"", static_cast<unsigned>(ms),
          tokens, heard.c_str(), full.c_str());
@@ -304,7 +351,7 @@ void connectLoop(void *) {
     config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
     config.voice = settings.voice.c_str();
     config.textOnly = settings.textOnly;
-    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(), "");
+    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(), memorySection);
     ok = live.begin(settings.key.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
   } else {
@@ -330,6 +377,7 @@ void connect() {
   // internal RAM, largest block 12 KB, and a session hung in its sends until the watchdog reset.
   ble::stop();
   power::setWakeLock(power::kWakeLockNetwork, true);
+  memorySection = memories::store().promptSection();  // the task only reads this copy
   connecting = true;
   awaitingConnect = true;
   connectError = "";
@@ -383,6 +431,7 @@ void startTalking() {
   info.heard = info.said = "";
   turnMood = info.mood = "neutral";
   firstAudioAt = 0;
+  turnMemory.clear();
   textQueue.clear();
   replyFrames = 0;
   sentFrames = 0;
@@ -710,6 +759,7 @@ void setup() {
   config.wakeApp = [] { player.powerUp(); };
   shell::begin(config);
   storage::begin();
+  memories::begin();
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
   voice::begin(player);
   loadSettings();
@@ -719,6 +769,9 @@ void setup() {
 }
 
 void loop() {
+  static uint32_t passStart = millis();
+  if (info.state == Talk::Speaking) longestPause = max(longestPause, millis() - passStart);
+  passStart = millis();
   shell::Input input;
   const bool unlocked = shell::update(input);
   if (cancelConnect && !connecting) {  // a cancelled connect has finished: Bluetooth back
@@ -814,6 +867,8 @@ void loop() {
     releaseText(!voice::playing());
   }
   if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn()) {
+    LOGI("companion", "spoken; longest loop pause %lu ms", static_cast<unsigned long>(longestPause));
+    longestPause = 0;
     releaseText(true);
     setState(Talk::After);
   }
@@ -864,6 +919,21 @@ void loop() {
     static int i = 0;
     info.mood = moods[i++ % 7];
     setState(Talk::After);
+  }
+  if (input.key == 'M') {  // a broken memory file, to test that it's set aside (takes effect at the next boot)
+    File f = SD_MMC.open(storage::myDataDir() + "/memory/memories.json", FILE_WRITE);
+    if (f) f.print("garbage");
+    f.close();
+    LOGI("companion", "memories.json broken on purpose: restart to see it set aside");
+  }
+  if (input.key == 'N') {  // dev: show the memory note
+    info.note = "Remembered";
+    noteUntil = millis() + 3000;
+    redraw = true;
+  }
+  if (info.note.length() && millis() > noteUntil) {
+    info.note = "";
+    redraw = true;
   }
   if (input.key == 'Q') {  // undo q
     usage::markOut(0);

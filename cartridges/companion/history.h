@@ -9,7 +9,9 @@
 // (usage_rules.h historyLine). The app reads them (companion.history).
 namespace history {
 
-void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens);
+// memory: what this exchange changed in the memories ("remembered: …"), "" for nothing
+void append(const std::string &you, const std::string &dotty, const std::string &mood, int ms, int tokens,
+            const std::string &memory = "");
 std::vector<String> days();       // "2026-10-22", newest first
 String day(const String &yyyymmdd);  // that day's lines as a JSON array text ("[]" if none)
 bool forget(const String &yyyymmdd);  // "" = every day
