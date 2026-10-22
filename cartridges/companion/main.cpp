@@ -13,6 +13,7 @@
 #include "log.h"
 #include "net.h"
 #include "gemini_live.h"
+#include "history.h"
 #include "ws_client.h"
 #if __has_include("dev_key.h")
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY
@@ -159,6 +160,13 @@ void loop() {
   if (!shell::update(input)) return;
   if (input.key == 'S') streamTestTone();
   if (input.key == 'W') echoTest();
+  if (input.key == 'H') {  // developer aid: a fake turn into history and usage
+    history::append("Is this a test?", "Yes, \"just\" a test.", "happy", 900, 123);
+    usage::addTurn(123);
+    const std::vector<String> d = history::days();
+    LOGI("history", "%s: %s; today %d turns, %d tokens", d.empty() ? "none" : d[0].c_str(),
+         d.empty() ? "" : history::day(d[0]).c_str(), usage::turnsToday(), usage::tokensToday());
+  }
   if (input.key == 'c') liveTest(false);
   if (input.key == 'T') liveTest(true);
   live.poll();
