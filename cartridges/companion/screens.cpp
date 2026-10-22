@@ -41,7 +41,9 @@ void drawHistoryIcon() {
 void drawNote(const String &note, bool small) {
   epd.setFont(nullptr);  // the small built-in font: 6 px a character
   const int16_t w = 10 + 4 + 6 * note.length();
-  const int16_t x = small ? kW - 6 - w : (kW - w) / 2, y = small ? 82 : 107;
+  const int16_t x = small ? kW - 6 - w : (kW - w) / 2, y = small ? 82 : 116;
+  epd.fillRoundRect(x - 4, y - 2, w + 8, 16, 4, kWhite);  // a white strip over the avatar's edge
+  epd.drawRoundRect(x - 4, y - 2, w + 8, 16, 4, kBlack);
   epd.fillRect(x, y, 10, 12, kBlack);
   epd.fillTriangle(x, y + 12, x + 9, y + 12, x + 5, y + 7, kWhite);
   epd.setTextColor(kBlack);
@@ -66,63 +68,82 @@ std::vector<String> wrap(const String &text, int16_t width, int maxLines) {
 
 }  // namespace
 
+// Four rows of 38 px under the nav bar: Companion ‹ › / Volume - + / Speak switch / Voice ‹ ›.
+namespace {
+constexpr int16_t kRow = 38, kRow0 = 45;  // rows at 45, 83, 121, 159
+
+void arrows(int16_t top) {
+  for (int i = 0; i < 2; i++) {
+    const int16_t cx = i ? kW - 14 : 14, cy = top + kRow / 2;
+    const int16_t d = i ? 5 : -5;  // the tip points outwards
+    epd.fillTriangle(cx - d, cy - 8, cx - d, cy + 8, cx + d, cy, kBlack);
+  }
+}
+
+// A bold line and a small one under it, centred between the arrows.
+void stepper(int16_t top, const String &big, const String &small, bool showArrows) {
+  if (showArrows) arrows(top);
+  epd.setFont(&FreeSansBold9pt7b);
+  ui::drawCentered(epd, big, top + 18);
+  epd.setFont(nullptr);
+  epd.setCursor((kW - 6 * small.length()) / 2, top + 25);
+  epd.print(small);
+}
+}  // namespace
+
 void drawSettings(const SettingsView &v) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   nav::draw(epd, "Settings", nav::Icon::Back, nav::Icon::None);
-  epd.drawFastHLine(8, 97, kW - 16, kBlack);
-  epd.drawFastHLine(8, 149, kW - 16, kBlack);
+  for (int r = 1; r < 4; r++) epd.drawFastHLine(8, kRow0 + r * kRow, kW - 16, kBlack);
 
+  stepper(kRow0, v.companion, v.companionType, v.companions > 1);
+
+  const int16_t vol = kRow0 + kRow;
   epd.setFont(&FreeSansBold9pt7b);
-  epd.setCursor(8, 68);
+  epd.setCursor(8, vol + 24);
   epd.print("Volume");
   epd.setFont(&FreeSans9pt7b);
-  epd.setCursor(8, 88);
-  epd.print(String(v.volume) + "%");
+  epd.print(" " + String(v.volume) + "%");
   for (int i = 0; i < 2; i++) {  // - and + buttons
-    const int16_t x = i ? 154 : 104;
-    epd.drawRoundRect(x, 55, 40, 34, 5, kBlack);
-    epd.fillRect(x + 12, 71, 16, 3, kBlack);
-    if (i) epd.fillRect(x + 18, 64, 3, 16, kBlack);
+    const int16_t x = i ? 162 : 124;
+    epd.drawRoundRect(x, vol + 5, 34, 28, 5, kBlack);
+    epd.fillRect(x + 10, vol + 18, 14, 3, kBlack);
+    if (i) epd.fillRect(x + 16, vol + 12, 3, 15, kBlack);
   }
 
+  const int16_t speak = kRow0 + 2 * kRow;
   epd.setFont(&FreeSansBold9pt7b);
-  epd.setCursor(8, 120);
+  epd.setCursor(8, speak + 24);
   epd.print("Speak");
   epd.setFont(&FreeSans9pt7b);
-  epd.setCursor(8, 140);
-  epd.print(v.speak ? "Out loud" : "Text only");
-  // A switch: knob right and filled when on.
-  epd.drawRoundRect(146, 111, 46, 26, 13, kBlack);
+  epd.print(v.speak ? " out loud" : " text only");
+  epd.drawRoundRect(150, speak + 7, 44, 24, 12, kBlack);  // a switch: knob right and filled when on
   if (v.speak) {
-    epd.fillRoundRect(146, 111, 46, 26, 13, kBlack);
-    epd.fillCircle(179, 124, 9, kWhite);
+    epd.fillRoundRect(150, speak + 7, 44, 24, 12, kBlack);
+    epd.fillCircle(182, speak + 19, 8, kWhite);
   } else {
-    epd.drawCircle(159, 124, 9, kBlack);
+    epd.drawCircle(162, speak + 19, 8, kBlack);
   }
 
-  // Voice: < name > with Google's description under it.
-  for (int i = 0; i < 2 && v.choices != 1; i++) {  // 0 favourites = every voice
-    const int16_t cx = i ? kW - 18 : 18;
-    const int16_t d = i ? 5 : -5;  // the tip points outwards
-    epd.fillTriangle(cx - d, 166, cx - d, 184, cx + d, 175, kBlack);
-  }
-  epd.setFont(&FreeSansBold9pt7b);
-  ui::drawCentered(epd, v.voice, 172);
-  epd.setFont(&FreeSans9pt7b);
-  ui::drawCentered(epd, v.style, 192);
+  stepper(kRow0 + 3 * kRow, v.voice, v.style, v.choices != 1);  // 0 favourites = every voice
 }
 
 SettingsHit settingsHit(uint16_t x, uint16_t y) {
   if (y < nav::kHeight) return nav::hit(x, y) < 0 ? SettingsHit::Back : SettingsHit::None;
-  if (y < 98) return x >= 150 ? SettingsHit::VolumeUp : x >= 96 ? SettingsHit::VolumeDown : SettingsHit::None;
-  if (y < 150) return SettingsHit::Speak;
-  return x < 70 ? SettingsHit::VoicePrev : x > kW - 70 ? SettingsHit::VoiceNext : SettingsHit::None;
+  const int row = (y - kRow0) / kRow;
+  const bool left = x < 70, right = x > kW - 70;
+  switch (row) {
+    case 0: return left ? SettingsHit::CompanionPrev : right ? SettingsHit::CompanionNext : SettingsHit::None;
+    case 1: return x >= 158 ? SettingsHit::VolumeUp : x >= 116 ? SettingsHit::VolumeDown : SettingsHit::None;
+    case 2: return SettingsHit::Speak;
+    default: return left ? SettingsHit::VoicePrev : right ? SettingsHit::VoiceNext : SettingsHit::None;
+  }
 }
 
 int replyPages(const ScreenInfo &info) {
   const bool small = info.textOnly;
-  return pageCount(wrap(info.said, small ? kW - 70 : kW - 16, 40).size(), small ? 8 : 3);
+  return pageCount(wrap(info.said, small ? kW - 70 : kW - 16, 40).size(), small ? 8 : 2);
 }
 
 void draw(const ScreenInfo &info) {
@@ -132,29 +153,31 @@ void draw(const ScreenInfo &info) {
   // The avatar: centred and large, or small in the corner when text takes the screen.
   const avatar::Face face = avatar::faceFor(info.state, info.mood, info.frame);
   if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
-  else avatar::draw(epd, (kW - kAvatarSize) / 2, 8, info.avatar, face, info.frame, kAvatarSize);
+  else avatar::draw(epd, (kW - kAvatarSize) / 2, 2, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
   if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   drawHistoryIcon();
 
   epd.setFont(&FreeSans9pt7b);
-  int16_t y = small ? 34 : 124;
+  // Below the 128 px avatar: two lines of text (baselines 158 and 177), the meter between them.
+  constexpr int16_t kText = 158;
+  int16_t y = small ? 50 : kText;
   switch (info.state) {
     case Talk::Listening: {
-      drawMeter(info.levelDb, 128);
-      const std::vector<String> lines = wrap(info.heard.length() ? info.heard : String("Listening..."), kW - 16, 3);
-      for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], 148 + i * kLineH);
+      drawMeter(info.levelDb, 144);
+      const std::vector<String> lines = wrap(info.heard.length() ? info.heard : String("Listening..."), kW - 16, 2);
+      for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], 163 + i * kLineH);
       return;
     }
     case Talk::Speaking:
     case Talk::After: {
       const int16_t width = small ? kW - 70 : kW - 16;
-      const int visible = small ? 8 : 3;
+      const int visible = small ? 8 : 2;
       std::vector<String> lines = wrap(info.said, width, 40);
       const int n = lines.size();
       const int page = info.state == Talk::Speaking ? livePage(n, visible) : shownPage(info.page, n, visible);
       for (int i = 0; i < visible && page * visible + i < n; i++) {
-        epd.setCursor(8, (small ? 50 : 140) + i * kLineH);
+        epd.setCursor(8, (small ? 50 : kText) + i * kLineH);
         epd.print(lines[page * visible + i]);
       }
       const int pages = pageCount(n, visible);
@@ -168,16 +191,16 @@ void draw(const ScreenInfo &info) {
     }
     case Talk::Thinking:
       if (info.heard.length()) {
-        const std::vector<String> lines = wrap(info.heard, kW - 16, 3);
-        for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], 140 + i * kLineH);
+        const std::vector<String> lines = wrap(info.heard, kW - 16, 2);
+        for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], kText + i * kLineH);
         return;
       }
       break;
     default:
       break;
   }
-  const std::vector<String> lines = wrap(info.status, kW - 16, 3);
-  for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], y + 16 + i * kLineH);
+  const std::vector<String> lines = wrap(info.status, kW - 16, 2);
+  for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], y + i * kLineH);
 }
 
 void drawHistory(const std::vector<std::pair<String, String>> &exchanges, int scroll) {

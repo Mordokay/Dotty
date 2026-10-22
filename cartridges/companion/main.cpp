@@ -242,8 +242,36 @@ void switchCompanion(const std::string &id) {
 }
 
 // The idle line under the avatar: a companion that hasn't been named yet is still asleep.
+// A name for the screen: the e-paper fonts are ASCII (ui::printable), and a name with nothing
+// printable at all (Korean, emoji) shows as "Companion".
+String screenName(const Profile &p) {
+  const String n = ui::printable(p.name.c_str());
+  return n.length() ? n : String("Companion");
+}
+
 String idleStatus() {
   return companions::active().awake() ? "Hold BOOT to talk" : "Not awake yet. Hold BOOT";
+}
+
+// A photo avatar's two circles (PSRAM), read from the active companion's photo.bin.
+uint8_t *photo = nullptr;
+
+void loadPhoto() {
+  avatar::setPhoto(nullptr, nullptr);
+  if (companions::active().avatar != "photo") return;
+  if (!photo) photo = static_cast<uint8_t *>(heap_caps_malloc(avatar::kPhotoBig + avatar::kPhotoSmall, MALLOC_CAP_SPIRAM));
+  File f = SD_MMC.open(companions::folder(companions::active().id) + "/photo.bin");
+  static uint8_t chunk[512];
+  size_t got = 0;
+  while (f && photo && got < avatar::kPhotoBig + avatar::kPhotoSmall) {
+    const int n = f.read(chunk, min(sizeof(chunk), avatar::kPhotoBig + avatar::kPhotoSmall - got));
+    if (n <= 0) break;
+    memcpy(photo + got, chunk, n);
+    got += n;
+  }
+  f.close();
+  if (got == avatar::kPhotoBig + avatar::kPhotoSmall) avatar::setPhoto(photo, photo + avatar::kPhotoBig);
+  else LOGW("companion", "photo.bin missing or short (%u bytes): the robot instead", static_cast<unsigned>(got));
 }
 
 // The active companion's voice and avatar into the settings the screens and the session use.
@@ -251,6 +279,7 @@ void applyCompanion() {
   settings.voice = companions::active().voice.c_str();
   settings.avatar = companions::active().avatar.c_str();
   info.avatar = settings.avatar;
+  loadPhoto();
   redraw = true;
 }
 
@@ -292,7 +321,7 @@ int applyMemory(const ToolCall &c) {
   } else if (c.name == "set_name") {  // the first wake-up: it learns who it is
     Profile p = companions::active();
     if (setField(p, "name", c.text) && !p.name.empty() && companions::save(p)) {
-      note = String("Named: ") + ui::printable(p.name.c_str());
+      note = String("Named: ") + screenName(p);
       change = "named: " + p.name;
     }
   } else if (c.name == "forget_memory") {
@@ -579,6 +608,13 @@ SettingsView settingsView() {
   v.voice = settings.voice;
   v.style = kVoices[max(0, voiceIndex(settings.voice.c_str()))].style;
   v.choices = favouriteCount(settings.favourites.c_str());
+  const Profile &who = companions::active();
+  v.companion = who.awake() ? screenName(who) : String("Not awake yet");
+  static const char *kTypes[][2] = {{"coach", "Coach"}, {"friend", "Friend"}, {"partner", "Partner"},
+                                    {"teacher", "Teacher"}, {"debug", "Debug"}, {"custom", "Custom"}};
+  for (auto &t : kTypes)
+    if (who.type == t[0]) v.companionType = t[1];
+  v.companions = companions::list().order().size();
   return v;
 }
 
@@ -638,6 +674,15 @@ void onSettingsTap(uint16_t x, uint16_t y) {
   switch (screens::settingsHit(x, y)) {
     case SettingsHit::Back:
       return closeSettings();
+    case SettingsHit::CompanionPrev:
+    case SettingsHit::CompanionNext: {  // the next session talks to them (any open one closes)
+      const std::vector<std::string> &order = companions::list().order();
+      size_t i = 0;
+      while (i < order.size() && order[i] != companions::active().id) i++;
+      const int step = screens::settingsHit(x, y) == SettingsHit::CompanionNext ? 1 : order.size() - 1;
+      switchCompanion(order[(i + step) % order.size()]);
+      break;
+    }
     case SettingsHit::VolumeDown:
     case SettingsHit::VolumeUp:
       settings.volume = constrain(settings.volume + (screens::settingsHit(x, y) == SettingsHit::VolumeUp ? 10 : -10), 0, 100);
@@ -965,7 +1010,7 @@ int16_t drawLockAvatar(Adafruit_GFX &gfx, const tm &, int16_t maxHeight) {
   if (maxHeight < avatar::kSmall) return 0;
   const int turns = usage::turnsToday();
   const Profile &who = companions::active();
-  String line = who.awake() ? ui::printable(who.name.c_str()) : String("Not awake yet");
+  String line = who.awake() ? screenName(who) : String("Not awake yet");
   if (who.awake() && turns) line += String(" - ") + turns + (turns == 1 ? " chat" : " chats");
   gfx.setFont(&FreeSans9pt7b);
   int16_t bx, by;
@@ -1181,6 +1226,43 @@ void loop() {
     if (f) f.print("garbage");
     f.close();
     LOGI("companion", "memories.json broken on purpose: restart to see it set aside");
+  }
+  if (input.key == 'Z') {  // dev: a name the e-paper fonts can't show in full ("Zoë 🌙")
+    Profile p = companions::active();  // pressed again: back to Luna
+    setField(p, "name", p.name == "Zo\xC3\xAB \xF0\x9F\x8C\x99" ? "Luna" : "Zo\xC3\xAB \xF0\x9F\x8C\x99");
+    companions::save(p);
+    setState(Talk::Offline, idleStatus());
+  }
+  if (input.key == 'P' && companions::active().avatar == "photo") {  // pressed again: the preset's avatar back
+    Profile p = companions::active();
+    setField(p, "avatar", presetProfile(p.type).avatar);
+    companions::save(p);
+    applyCompanion();
+  } else if (input.key == 'P') {  // dev: a test photo avatar for the active companion (a dithered disc)
+    static uint8_t img[avatar::kPhotoBig + avatar::kPhotoSmall];
+    memset(img, 0, sizeof(img));
+    auto disc = [](uint8_t *bits, int n) {
+      for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+          const float dx = x - n / 2 + 0.5f, dy = y - n / 2 + 0.5f, d = sqrtf(dx * dx + dy * dy);
+          const bool ring = d <= n / 2 && d > n / 2 - 2, inside = d <= n / 2 - 2 && ((x / 4 + y / 4) % 2 == 0) && dy > -n / 6;
+          if (ring || inside) bits[y * (n / 8) + x / 8] |= 0x80 >> (x % 8);
+        }
+    };
+    disc(img, 128);
+    disc(img + avatar::kPhotoBig, 48);
+    File f = SD_MMC.open(companions::folder(companions::active().id) + "/photo.bin", FILE_WRITE);
+    static uint8_t chunk[512];
+    for (size_t at = 0; f && at < sizeof(img); at += sizeof(chunk)) {
+      const size_t n = min(sizeof(chunk), sizeof(img) - at);
+      memcpy(chunk, img + at, n);
+      f.write(chunk, n);
+    }
+    f.close();
+    Profile p = companions::active();
+    setField(p, "avatar", "photo");
+    companions::save(p);
+    applyCompanion();
   }
   if (input.key == 'S') {  // dev: the next companion
     const std::vector<std::string> &order = companions::list().order();

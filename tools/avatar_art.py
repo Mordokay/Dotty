@@ -22,14 +22,15 @@ OUT = REPO / "cartridges/companion/images/avatars.h"
 PREVIEW = Path(__file__).resolve().parent / "avatar_art_preview.png"
 APP = REPO / "ios/Dotty/Resources/Avatars"
 
-BIG, SMALL = 96, 48
+BIG, SMALL = 128, 48
+REF = 96  # FACE, MOUTH_DROP, ERASE and the placeholders are measured on a 96-px grid
 IDS = ["robot", "dog", "cat", "fox", "owl", "bear", "girl", "guy", "ghost", "dragon"]
 NAMES = ["Robot", "Dog", "Cat", "Fox", "Owl", "Bear", "Girl", "Guy", "Ghost", "Dragon"]
 # Same order as avatar::Face in avatar.h.
 FACES = ["idle", "blink", "listening", "thinking", "talkA", "talkB", "happy", "sad", "surprised",
          "laughing", "love", "sleeping"]
 
-# Where the face goes, in 96-px coordinates: (centre x, eye line y, scale). Scale 1 = eyes 10 px
+# Where the face goes, in 96-px (REF) coordinates: (centre x, eye line y, scale). Scale 1 = eyes 10 px
 # apart from the centre. Tuned per picture; these fit the placeholders.
 FACE = {
     "robot": (48, 46, 1.0), "dog": (48, 44, 0.95), "cat": (48, 46, 0.95), "fox": (48, 46, 0.9),
@@ -200,7 +201,7 @@ def body(key, size):
             grow = max(3, int(side / size * 0.5)) | 1  # thicken so lines survive the shrink
             sq = sq.filter(ImageFilter.MinFilter(grow))
             return sq.resize((size, size), Image.LANCZOS).point(lambda v: 0 if v < 150 else 255).convert("1")
-    big = Image.new("L", (BIG * K, BIG * K), 255)
+    big = Image.new("L", (REF * K, REF * K), 255)
     PLACEHOLDERS[key](ImageDraw.Draw(big))
     return big.resize((size, size), Image.LANCZOS).point(lambda v: 0 if v < 140 else 255).convert("1")
 
@@ -209,7 +210,7 @@ def body(key, size):
 
 def face(img, key, expr, size):
     d = ImageDraw.Draw(img)
-    f = size / BIG
+    f = size / REF
     cx, cy, sc = FACE[key]
     cx, cy, s = cx * f, cy * f, sc * f
     gap = 11 * s
@@ -304,7 +305,7 @@ def face(img, key, expr, size):
 
 def frame(key, expr, size):
     img = body(key, size)
-    f = size / BIG
+    f = size / REF
     d = ImageDraw.Draw(img)
     for x, y, r in ERASE.get(key, []) if (SRC / f"{key}.png").exists() else []:
         d.ellipse([(x - r) * f, (y - r) * f, (x + r) * f, (y + r) * f], fill=1)

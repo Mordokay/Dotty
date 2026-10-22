@@ -24,7 +24,13 @@ char asciiFor(uint32_t cp) {
     case 0xFF0C: case 0x3001: return ',';
     case 0xFF1A: return ':';
     case 0x2026: return '.';
-    default: return 0;
+    default:
+      // Accented Latin letters → the plain ones (Zoë → Zoe, café → cafe), U+00C0..U+00FF.
+      if (cp >= 0xC0 && cp <= 0xFF) {
+        static const char kLatin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+        return kLatin1[cp - 0xC0];
+      }
+      return 0;
   }
 }
 
