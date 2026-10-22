@@ -73,6 +73,12 @@ bool WsClient::connect(const char *host, const char *path, String &error) {
   // From now on reads must not wait: poll() checks the socket first.
   timeval tv = {0, 50 * 1000};
   setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  // A Wi-Fi drop mid-reply leaves nothing to send, so only keepalives notice it (~11 s).
+  int on = 1, idle = 5, interval = 2, count = 3;
+  setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+  setsockopt(fd_, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+  setsockopt(fd_, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+  setsockopt(fd_, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
   return true;
 }
 
@@ -142,6 +148,7 @@ bool WsClient::poll(const std::function<void(const std::string &)> &onMessage) {
       offset += used;
       if (r == WsDecoder::Message) onMessage(decoder_.message);
       else if (r == WsDecoder::Ping) sendFrame(0xA, reinterpret_cast<const uint8_t *>(decoder_.control.data()), decoder_.control.size());
+      if (!tls_) return true;  // the handler (or a failed send) closed it: stop touching the socket
       else if (r == WsDecoder::Close) {
         closeCode_ = decoder_.closeCode;
         closeReason_ = decoder_.control.size() > 2 ? decoder_.control.substr(2) : "";

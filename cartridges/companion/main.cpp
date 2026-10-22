@@ -101,6 +101,7 @@ int peakDb = -60;
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
 volatile bool connecting = false;
+volatile bool cancelConnect = false;  // disconnected while connecting: the task undoes it
 String connectError;
 
 void setState(Talk s, const String &status = String()) {
@@ -164,9 +165,14 @@ void disconnect(const char *why) {
   early.clear();
   earlyAt = 0;
   turnSent = awaitingSend = awaitingConnect = false;
-  live.close();
   voice::stopListening();
   voice::playStop();
+  if (connecting) {  // the connect task is using the socket and Wi-Fi: it closes them when done
+    cancelConnect = true;
+    LOGI("companion", "connect cancelled (%s)", why);
+    return;
+  }
+  live.close();
   net::disconnect();
   power::setWakeLock(power::kWakeLockNetwork, false);
   if (!shell::locked()) ble::start();
@@ -235,6 +241,7 @@ GeminiLive::Callbacks callbacks() {
     turnMood = m.c_str();
     info.mood = turnMood;
   };
+  cb.spent = [](int tokens) { usage::addTokens(tokens); };
   cb.turnDone = [](int tokens) {
     quotaStrikes = 0;
     voice::playEnd();
@@ -290,6 +297,7 @@ void connectLoop(void *) {
   }
   if (ok) {
     LiveConfig config;
+    config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
     config.voice = settings.voice.c_str();
     config.textOnly = settings.textOnly;
     config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str());
@@ -301,6 +309,10 @@ void connectLoop(void *) {
   }
   if (!ok && connectError.isEmpty()) connectError = error;
   if (!ok) LOGW("companion", "connect failed: %s", error.c_str());
+  if (cancelConnect) {  // locked (or stopped) meanwhile: undo it here, the loop restores the rest
+    live.close();
+    net::disconnect();
+  }
   connecting = false;
   connectTask = nullptr;
   vTaskDelete(nullptr);
@@ -705,6 +717,12 @@ void setup() {
 void loop() {
   shell::Input input;
   const bool unlocked = shell::update(input);
+  if (cancelConnect && !connecting) {  // a cancelled connect has finished: Bluetooth back
+    cancelConnect = false;
+    power::setWakeLock(power::kWakeLockNetwork, false);
+    if (!shell::locked()) ble::start();
+    LOGI("companion", "cancelled connect cleaned up");
+  }
   if (!unlocked) {
     if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
     return;
@@ -727,6 +745,10 @@ void loop() {
     finishTurn();
   }
 
+  // A session nobody is using (left by a cancelled connect): close it, Bluetooth comes back.
+  if (!connecting && !awaitingConnect && live.connected() && (info.state == Talk::Offline || info.state == Talk::Error)) {
+    disconnect("not in use");
+  }
   // The session ended without a word (closed here, or the socket died quietly).
   if (!connecting && !awaitingConnect && !live.connected()) {
     if ((info.state == Talk::Listening && !turnSent) || awaitingSend) {
@@ -773,6 +795,14 @@ void loop() {
       info.levelDb = voice::levelDb();
       redraw = true;
     }
+  }
+  // Nothing from Gemini for 15 s while a reply is due (and nothing left to play): the link is dead
+  // (a Wi-Fi drop mid-reply sends nothing, so only this or the TCP keepalive notices it).
+  if ((info.state == Talk::Speaking || info.state == Talk::Thinking) && !awaitingSend && live.inTurn() &&
+      !voice::playing() && millis() - live.lastMessageAt() > 15000) {
+    voice::playStop();
+    disconnect("no reply");
+    setState(Talk::Error, "Connection lost");
   }
   if (info.state == Talk::Thinking && !awaitingSend && millis() - releasedAt > 20000) setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {

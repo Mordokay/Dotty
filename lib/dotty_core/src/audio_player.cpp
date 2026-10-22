@@ -223,6 +223,10 @@ void AudioPlayer::stopStream() {
 
 // One block of the stream to the speaker: silence while the ring is empty (an underrun once
 // audio has started), the end once endStream() was called and the ring has run dry.
+size_t AudioPlayer::streamSpace() const {
+  return ring_ ? ring_->space() : 0;
+}
+
 void AudioPlayer::playStream() {
   constexpr size_t kFrames = 256;
   // Start with a quarter second in hand: network audio arrives in bursts, and starting on the

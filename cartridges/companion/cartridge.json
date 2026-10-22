@@ -1,5 +1,4 @@
 {
-  "draft": true,
   "description": "Talk to an AI companion: hold BOOT and speak, it answers out loud.",
   "requires": ["wifi"]
 }

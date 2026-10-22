@@ -94,6 +94,15 @@ void addTurn(int tokens) {
   p.end();
 }
 
+void addTokens(int tokens) {
+  if (tokens <= 0) return;
+  Preferences p;
+  p.begin("companion", false);
+  rollOver(p);
+  p.putInt("tokens", p.getInt("tokens", 0) + tokens);
+  p.end();
+}
+
 int turnsToday() {
   Preferences p;
   p.begin("companion", false);

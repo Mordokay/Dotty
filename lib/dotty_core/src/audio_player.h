@@ -48,6 +48,7 @@ class AudioPlayer {
   void stopStream();
   bool streaming() const { return stream_ && playing_; }
   uint64_t streamPlayed() const { return samplesPlayed_; }  // frames of this stream already played
+  size_t streamSpace() const;  // frames writeStream takes now
 
   // Microphone, at the rate given to begin() (stops playback; the speaker is off while
   // capturing). capture() blocks until `frames` mono samples have arrived.

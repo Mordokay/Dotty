@@ -21,6 +21,7 @@ bool forget(const String &yyyymmdd);  // "" = every day
 namespace usage {
 
 void addTurn(int tokens);
+void addTokens(int tokens);  // spent outside a question (interrupted or unasked replies)
 int turnsToday();
 int tokensToday();
 void markOut(int64_t untilUtc);

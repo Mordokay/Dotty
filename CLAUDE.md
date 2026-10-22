@@ -785,6 +785,74 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `Features/Facts/FactsView.swift` (on Dotty now, "Show a new fact", categories → a fact from
   one, favourites with share / remove).
 
+## Companion cartridge (`cartridges/companion/`)
+
+- Talk to an AI: hold BOOT, speak, it answers out loud with the text on screen (spec/plan:
+  `docs/superpowers/{specs,plans}/2026-10-22-companion-talking*`; roadmap and later pieces —
+  memories next, then a Bluetooth-through-the-iPhone spike, roles, scheduled moments — in the
+  memory file `dotty-ai-companion`). English only.
+- Engine: **Gemini Live API** (`models/gemini-3.8-live`, WebSocket
+  `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=…`),
+  our own client: `ws_frame.*` (RFC 6455 frames, handshake, own SHA-1; host-tested), `ws_client.*`
+  (esp_tls + cert bundle; a send that can't finish drops the connection; `close()` sends a close
+  frame first — without it Google kept the session open and a reconnect seconds later was refused
+  "exceeded your current quota"), `live_protocol.*` (setup, push-to-talk `activityStart/End` with
+  automatic activity detection off, transcription both ways, `set_mood` tool NON_BLOCKING +
+  SILENT, resumption handles; errors arrive as a close code + reason), `gemini_live.*` (session).
+  `set_mood` comes in its own turn before the speech turn; it's answered **once per question**
+  (each answer made Gemini speak again: a loop that billed 23,792 tokens for one question) and 3
+  turns nobody asked for close the session (`turn_tracker.h`, host-tested: also drops an
+  interrupted reply's leftovers, which used to become a phantom turn). Google's goAway (~10 min)
+  closes the session after the reply and the next press resumes with its handle (the inline
+  reconnect froze the screen; still untested on the device). TCP keepalive + 15 s of silence while
+  a reply is due = "Connection lost". The system instruction says short replies, always
+  English (a silent turn once got Spanish), the local time and the Weather cartridge's place.
+- Measured: Wi-Fi join ~4-5 s, TLS 1.3-2 s at home (8.4 s on an office network), first reply audio
+  1.0-1.8 s after release (the set_mood turn costs ~0.5 s). Free tier: ~1,800 tokens per short
+  exchange (each turn re-reads the session).
+- **Bluetooth is off during a session**: with it on (iPhone connected) TLS left 36 KB internal RAM,
+  largest block 12 KB, and a session hung in its sends until the watchdog reset Dotty. So a session
+  opens on the **first BOOT press** (not on unlock: the shell restarts BLE after the wake hook, and
+  the app could never reach Dotty), closes after 3 idle minutes, on lock or when settings change.
+  **Talking while it connects**: the voice goes into a PSRAM buffer (≤ 60 s) and is sent once the
+  session is ready, a few chunks per loop pass (sending 7 s at once overflowed the 2 s capture
+  buffer); you never wait to speak, only for the reply. Locking while it connects only flags a cancel: the connect
+  task closes what it opened (closing its socket from the loop was a use-after-free).
+- Audio: `voice.*` (capture task on core 0 → 64 KB PSRAM stream buffer, 100 ms chunks, 16 kHz;
+  replies 24 kHz into a fixed 60 s PSRAM `PcmRing` backlog (a growing string doubled to 8 MB on a
+  long reply), then `AudioPlayer::startStream/writeStream/endStream` — dotty_core: a 2 s PSRAM
+  `PcmRing`, playback starts with 250 ms buffered). Reply text is paced by the audio heard (a piece
+  shows once the speaker has played the audio that came with it) and shown **a page at a time**
+  (3 lines; the next line clears the page — the user found scrolling text hard to read); the reply
+  stays after it ends, swipes = pages ("2/3").
+- Screens: avatar 96 px (48 px beside the text when text-only), gear (top left) = settings: volume
+  − / + (beep), Speak out loud / text only, Voice ‹ › through the **favourite voices** (NVS
+  `companion/favourites`, default "Zephyr,Achernar", starred in the app), playing each one's sample
+  (`voices.bin`: 30 MP3s, 32 kHz MPEG-1 — 24 kHz MPEG-2 ones gave "No MP3 frames" — packed by
+  `tools/build_voice_pack.py`, embedded, copied to `data/voices/` through a RAM buffer: a direct
+  write from flash left zeros). Clock (top right) = today's chats. Lock screen: the avatar asleep
+  under the clock + "N chats today".
+- Quota: a close saying quota without a retry time waits 1 minute first (short limits look the
+  same); a second in a row = "I'm out of words for today. Back at 08:00." (midnight Pacific in
+  local time, `nextPacificMidnightUtc`). The free tier has no quota API; usage is counted on Dotty.
+- Card `data/history/YYYY-MM-DD.jsonl` (one line per exchange: you, dotty, mood, ms, tokens), NVS
+  `companion`: key, voice, favourites, avatar, textOnly, volume, usage counters, outUntil.
+- Avatars: 10 (robot, dog, cat, fox, owl, bear, girl, guy, ghost, dragon) × 12 faces at 96 and 48
+  px, generated by `tools/avatar_art.py` from the user's pictures in `tools/avatar_art_src/` (prompts:
+  `docs/companion-avatar-prompts.md`), faces placed per picture (`FACE`, `MOUTH_DROP`, `ERASE`);
+  also the app's previews (`ios/Dotty/Resources/Avatars`) and the install icon.
+- BLE (only while no session): `companion.status` {connected, state, mood, avatar, voice,
+  favourites, volume, textOnly, keySet, keyHint (last 4), today{turns, tokens}, outUntil?},
+  `companion.settings {avatar?, voice?, favourites?, volume?, textOnly?, key?}` (key trimmed, never
+  logged or sent back in full), `companion.history {day?}`, `companion.forget {day?}`; event
+  `companion.changed`. App: `Features/Companion/` (CompanionView, VoicesView with ▶ and ☆,
+  CompanionHistoryView).
+- The key: NVS `companion/key` from the app; `cartridges/companion/dev_key.h` (gitignored, never
+  commit) seeds an empty key on the bench. Dev keys: `r` simulated BOOT hold, `t` gear, `X` close the
+  socket, `m` cycle moods, `q` fake quota close, `Q` clear it. Host tests:
+  `python3 tools/companion_test/run.py` (frames, protocol with captured samples, Pacific reset,
+  pages, voices, voice pack, PCM ring).
+
 ## SD library + Wi-Fi fetch (launcher)
 
 - `cartridges/launcher/library.*`: cartridges on the card as `/cartridges/<id>/firmware/<version>`

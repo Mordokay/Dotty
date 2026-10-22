@@ -9,12 +9,13 @@
 
 #include "audio_player.h"
 #include "log.h"
+#include "pcm_ring.h"
 
 namespace voice {
 namespace {
 
 constexpr size_t kCaptureBytes = 64 * 1024;           // ~2 s of microphone, if the network stalls
-constexpr size_t kMaxBacklogBytes = 90 * kOutRate * 2;  // 90 s of reply
+constexpr size_t kBacklogFrames = 60 * kOutRate;      // a minute of reply, allocated once (2.9 MB PSRAM)
 
 AudioPlayer *audio = nullptr;
 StreamBufferHandle_t captured = nullptr;
@@ -22,8 +23,9 @@ TaskHandle_t captureTask = nullptr;
 volatile bool listening = false, captureRunning = false;
 volatile int level = -60;
 
-std::string backlog;  // reply PCM bytes not yet in the player's ring (PSRAM: it grows past 4 KB)
-size_t backlogRead = 0;
+// Reply audio not yet in the player's 2 s ring (replies arrive faster than they play). Fixed size:
+// a growing string doubled itself to 8 MB on a long reply and couldn't be allocated.
+PcmRing *backlog = nullptr;
 bool replyEnding = false, replyActive = false;
 
 void captureLoop(void *) {
@@ -56,6 +58,9 @@ void begin(AudioPlayer &player) {
   uint8_t *storage = static_cast<uint8_t *>(heap_caps_malloc(kCaptureBytes + 1, MALLOC_CAP_SPIRAM));
   static StaticStreamBuffer_t control;
   captured = xStreamBufferCreateStatic(kCaptureBytes, kChunkFrames * 2, storage, &control);
+  auto *frames = static_cast<int16_t *>(heap_caps_malloc(kBacklogFrames * sizeof(int16_t), MALLOC_CAP_SPIRAM));
+  if (frames) backlog = new PcmRing(frames, kBacklogFrames);
+  else LOGE("voice", "no memory for the reply backlog");
   xTaskCreatePinnedToCore(captureLoop, "voice-in", 4096, nullptr, configMAX_PRIORITIES - 3, &captureTask, 0);
 }
 
@@ -88,19 +93,14 @@ int levelDb() {
 }
 
 void playStart() {
-  backlog.clear();
-  backlogRead = 0;
+  if (backlog) backlog->clear();
   replyEnding = false;
   replyActive = audio->startStream(kOutRate);
 }
 
 void play(const int16_t *pcm, size_t frames) {
-  if (!replyActive) return;
-  if (backlog.size() - backlogRead + frames * 2 > kMaxBacklogBytes) {
-    LOGW("voice", "reply longer than 90 s: dropping audio");
-    return;
-  }
-  backlog.append(reinterpret_cast<const char *>(pcm), frames * 2);
+  if (!replyActive || !backlog) return;
+  if (backlog->write(pcm, frames) < frames) LOGW("voice", "reply over a minute ahead: dropping audio");
   poll();
 }
 
@@ -112,12 +112,11 @@ void playEnd() {
 void playStop() {
   if (replyActive) audio->stopStream();
   replyActive = false;
-  backlog.clear();
-  backlogRead = 0;
+  if (backlog) backlog->clear();
 }
 
 bool playing() {
-  return replyActive && (backlogRead < backlog.size() || audio->streaming());
+  return replyActive && ((backlog && backlog->available()) || audio->streaming());
 }
 
 size_t playedFrames() {
@@ -126,21 +125,18 @@ size_t playedFrames() {
 
 void poll() {
   if (!replyActive) return;
-  while (backlogRead + 1 < backlog.size()) {
-    const size_t frames = (backlog.size() - backlogRead) / 2;
-    const size_t taken = audio->writeStream(reinterpret_cast<const int16_t *>(backlog.data() + backlogRead), frames);
-    if (taken == 0) break;
-    backlogRead += taken * 2;
+  static int16_t chunk[1024];
+  while (backlog && backlog->available()) {  // only what the player's ring can take now
+    const size_t n = min(min(backlog->available(), audio->streamSpace()), sizeof(chunk) / 2);
+    if (n == 0) break;
+    backlog->read(chunk, n);
+    audio->writeStream(chunk, n);
   }
-  if (backlogRead >= backlog.size()) {
-    backlog.clear();
-    backlogRead = 0;
-    if (replyEnding) {
-      audio->endStream();
-      replyEnding = false;
-    }
+  if (backlog && !backlog->available() && replyEnding) {
+    audio->endStream();
+    replyEnding = false;
   }
-  if (!audio->streaming() && backlog.empty()) replyActive = false;
+  if (!audio->streaming() && (!backlog || !backlog->available())) replyActive = false;
 }
 
 }  // namespace voice
