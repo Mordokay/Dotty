@@ -32,11 +32,14 @@ FACES = ["idle", "blink", "listening", "thinking", "talkA", "talkB", "happy", "s
 # Where the face goes, in 96-px coordinates: (centre x, eye line y, scale). Scale 1 = eyes 10 px
 # apart from the centre. Tuned per picture; these fit the placeholders.
 FACE = {
-    "robot": (48, 50, 1.0), "dog": (48, 50, 0.95), "cat": (48, 54, 0.95), "fox": (48, 54, 0.9),
-    "owl": (48, 50, 1.05), "bear": (48, 48, 0.95), "girl": (48, 50, 0.9), "guy": (48, 52, 0.9),
-    "ghost": (48, 44, 1.05), "dragon": (48, 52, 0.95),
+    "robot": (48, 46, 1.0), "dog": (48, 44, 0.95), "cat": (48, 46, 0.95), "fox": (48, 46, 0.9),
+    "owl": (48, 38, 1.0), "bear": (48, 40, 0.95), "girl": (48, 40, 0.7), "guy": (48, 42, 0.7),
+    "ghost": (48, 42, 1.0), "dragon": (48, 42, 0.85),
 }
-MOUTH_DROP = {"dog": 4, "bear": 4, "dragon": 4, "owl": 6, "cat": 2, "fox": 2}  # below a snout or beak
+# Mouths go further down below a snout, nose or beak (96-px units at scale 1).
+MOUTH_DROP = {"dog": 6, "cat": 3, "fox": 5, "owl": 11, "bear": 6, "girl": 2, "guy": 4, "dragon": 6}
+# Marks in a picture where the face goes, whitened first: (x, y, radius) in 96-px coordinates.
+ERASE = {"ghost": [(48, 40, 4)]}
 
 # ---------- placeholder bodies (drawn 4x larger, then shrunk: smooth curves) ----------
 
@@ -301,6 +304,10 @@ def face(img, key, expr, size):
 
 def frame(key, expr, size):
     img = body(key, size)
+    f = size / BIG
+    d = ImageDraw.Draw(img)
+    for x, y, r in ERASE.get(key, []) if (SRC / f"{key}.png").exists() else []:
+        d.ellipse([(x - r) * f, (y - r) * f, (x + r) * f, (y + r) * f], fill=1)
     return face(img, key, expr, size)
 
 
