@@ -4,6 +4,8 @@ import SwiftUI
 /// (`companion.history`): the days, then a day's exchanges as chat bubbles.
 struct CompanionHistoryView: View {
     @Environment(DottyLink.self) private var link
+    /// Whose chats (nil = the companion active on Dotty).
+    var companion: String? = nil
     @State private var days: [String] = []
     @State private var loaded = false
     @State private var error: String?
@@ -22,7 +24,7 @@ struct CompanionHistoryView: View {
                         }
                         ForEach(days, id: \.self) { day in
                             NavigationLink {
-                                CompanionDayView(day: day)
+                                CompanionDayView(day: day, companion: companion)
                             } label: {
                                 LightRow(title: Self.title(day), systemImage: "calendar") {
                                     Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -57,7 +59,7 @@ struct CompanionHistoryView: View {
 
     private func load() async {
         do {
-            let r = try await link.send("companion.history")
+            let r = try await link.send("companion.history", companion.map { ["companion": $0] } ?? [:])
             days = r["days"] as? [String] ?? []
             loaded = true
             error = nil
@@ -70,6 +72,7 @@ struct CompanionHistoryView: View {
 /// One day's chats: what you said on the right, Dotty's answer on the left.
 struct CompanionDayView: View {
     let day: String
+    var companion: String? = nil
     @Environment(DottyLink.self) private var link
     @Environment(\.dismiss) private var dismiss
     @State private var turns: [Turn] = []
@@ -113,6 +116,8 @@ struct CompanionDayView: View {
         }
     }
 
+    private var scope: [String: Any] { companion.map { ["companion": $0] } ?? [:] }
+
     private func bubble(_ text: String, mine: Bool) -> some View {
         HStack {
             if mine { Spacer(minLength: 48) }
@@ -130,7 +135,7 @@ struct CompanionDayView: View {
 
     private func load() async {
         do {
-            let r = try await link.send("companion.history", ["day": day])
+            let r = try await link.send("companion.history", ["day": day].merging(scope) { a, _ in a })
             let list = r["turns"] as? [[String: Any]] ?? []
             turns = list.enumerated().map { i, t in
                 Turn(id: i, time: Date(timeIntervalSince1970: TimeInterval(t["t"] as? Int ?? 0)),
@@ -144,7 +149,7 @@ struct CompanionDayView: View {
 
     private func forget() async {
         do {
-            try await link.send("companion.forget", ["day": day])
+            try await link.send("companion.forget", ["day": day].merging(scope) { a, _ in a })
             dismiss()
         } catch {
             if !link.lostConnection(error) { self.error = error.localizedDescription }

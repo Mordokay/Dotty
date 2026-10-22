@@ -5,6 +5,8 @@ import SwiftUI
 /// changes made here apply from the next chat.
 struct MemoriesView: View {
     @Environment(DottyLink.self) private var link
+    /// Whose memories (nil = the companion active on Dotty).
+    var companion: String? = nil
     @State private var memories: [Memory] = []
     @State private var total = 0
     @State private var max = 300
@@ -94,6 +96,8 @@ struct MemoriesView: View {
         }
     }
 
+    private var scope: [String: Any] { companion.map { ["companion": $0] } ?? [:] }
+
     private var shown: [Memory] {
         let q = search.trimmingCharacters(in: .whitespaces)
         return q.isEmpty ? memories : memories.filter { $0.text.localizedCaseInsensitiveContains(q) }
@@ -132,7 +136,7 @@ struct MemoriesView: View {
             var all: [Memory] = []
             var offset = 0
             while true {
-                let r = try await link.send("companion.memories", ["offset": offset, "limit": 50])
+                let r = try await link.send("companion.memories", ["offset": offset, "limit": 50].merging(scope) { a, _ in a })
                 let page = (r["memories"] as? [[String: Any]] ?? []).map { m in
                     Memory(id: m["id"] as? Int ?? 0, group: m["group"] as? String ?? "other", text: m["text"] as? String ?? "",
                            by: m["by"] as? String ?? "dotty",
@@ -166,7 +170,7 @@ struct MemoriesView: View {
 
     private func send(_ cmd: String, _ args: [String: Any] = [:]) async {
         do {
-            try await link.send(cmd, args)
+            try await link.send(cmd, args.merging(scope) { a, _ in a })
             error = nil
         } catch DottyError.refused(let code) {
             error = Self.message(code)  // e.g. a memory Dotty forgot meanwhile: the reload shows it gone
