@@ -34,7 +34,9 @@
 #include "storage.h"
 #include "usage_rules.h"
 #include "voice.h"
+#include "voice_pack.h"
 #include "voices.h"
+#include <SD_MMC.h>
 #if __has_include("dev_key.h")
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
@@ -72,7 +74,13 @@ bool historyOpen = false;
 int historyScroll = 0;
 
 uint32_t lastTurnAt = 0, stateSince = 0, releasedAt = 0, firstAudioAt = 0, lastFrameAt = 0, lastFullAt = 0;
-bool pendingTalk = false;   // BOOT was held while connecting: listen once ready
+// Talking before the session is ready (it takes ~10 s to connect): the voice is kept here and
+// sent the moment it is, so you never wait to speak, only for the reply.
+std::string early;            // PCM bytes recorded before the turn could open (PSRAM: > 16 KB)
+constexpr size_t kEarlyMaxBytes = 60 * 16000 * 2;  // a minute
+bool turnSent = false;        // activityStart went out for this recording
+bool awaitingSend = false;    // released before the session was ready: send it all then
+bool awaitingConnect = false; // a connect is under way (the screen may be listening meanwhile)
 bool simulatedHold = false;  // dev key r
 std::string heard, said;    // this turn (std::string: they also go to history)
 String turnMood = "neutral";
@@ -149,6 +157,8 @@ String placeName() {
 }
 
 void disconnect(const char *why) {
+  early.clear();
+  turnSent = awaitingSend = awaitingConnect = false;
   live.close();
   voice::stopListening();
   voice::playStop();
@@ -191,7 +201,8 @@ GeminiLive::Callbacks callbacks() {
   GeminiLive::Callbacks cb;
   cb.ready = [] {
     lastTurnAt = millis();
-    setState(Talk::Ready, "Hold BOOT to talk");
+    awaitingConnect = false;
+    if (info.state == Talk::Connecting) setState(Talk::Ready, "Hold BOOT to talk");  // else talking already
   };
   cb.heard = [](const std::string &t) {
     heard += t;
@@ -236,6 +247,8 @@ GeminiLive::Callbacks callbacks() {
       connectError = error.c_str();
       return;
     }
+    early.clear();
+    awaitingSend = awaitingConnect = false;
     voice::stopListening();
     voice::playStop();
     if (quota) {
@@ -293,8 +306,9 @@ void connect() {
   ble::stop();  // TLS needs the internal RAM Bluetooth holds
   power::setWakeLock(power::kWakeLockNetwork, true);
   connecting = true;
+  awaitingConnect = true;
   connectError = "";
-  setState(Talk::Connecting, "Waking up...");
+  if (info.state != Talk::Listening && !awaitingSend) setState(Talk::Connecting, "Waking up...");  // else keep listening
   if (xTaskCreatePinnedToCore(connectLoop, "companion-connect", 12288, nullptr, 2, &connectTask, 1) != pdPASS) {
     connecting = false;
     setState(Talk::Error, "Out of memory");
@@ -302,6 +316,27 @@ void connect() {
 }
 
 // ---------- a turn ----------
+
+// One recorded chunk: to Gemini once the turn is open, else kept for later.
+void sendVoice(const int16_t *pcm, size_t frames) {
+  sentFrames += frames;
+  if (turnSent) return live.sendAudio(pcm, frames);
+  if (early.size() + frames * 2 > kEarlyMaxBytes) return;  // a minute is plenty
+  early.append(reinterpret_cast<const char *>(pcm), frames * 2);
+}
+
+// Opens the turn and sends what was recorded while connecting.
+void openTurn() {
+  live.startTurn();
+  turnSent = true;
+  const size_t chunkBytes = voice::kChunkFrames * 2;
+  for (size_t at = 0; at < early.size(); at += chunkBytes) {
+    live.sendAudio(reinterpret_cast<const int16_t *>(early.data() + at), min(chunkBytes, early.size() - at) / 2);
+  }
+  if (early.size()) LOGI("companion", "sent %.1f s recorded while connecting", early.size() / 2.0f / voice::kInRate);
+  early.clear();
+  early.shrink_to_fit();
+}
 
 void startTalking() {
   heard.clear();
@@ -313,23 +348,33 @@ void startTalking() {
   replyFrames = 0;
   sentFrames = 0;
   peakDb = -60;
+  early.clear();
+  turnSent = awaitingSend = false;
   if (!voice::startListening()) return;
-  live.startTurn();
+  if (live.ready()) openTurn();
+  else info.heard = "Listening... I'll send it once I'm connected.";
   setState(Talk::Listening);
+}
+
+void finishTurn() {
+  live.endTurn();
+  LOGI("companion", "sent %.1f s of voice, peak %d dBFS", sentFrames / float(voice::kInRate), peakDb);
+  releasedAt = millis();
 }
 
 void stopTalking() {
   voice::stopListening();
   static int16_t chunk[voice::kChunkFrames];
   size_t frames = 0;
-  while (voice::nextChunk(chunk, frames)) {
-    live.sendAudio(chunk, frames);
-    sentFrames += frames;
+  while (voice::nextChunk(chunk, frames)) sendVoice(chunk, frames);
+  if (turnSent) {
+    finishTurn();
+    setState(Talk::Thinking);
+  } else {  // still connecting: it goes out the moment the session is ready
+    awaitingSend = true;
+    info.heard = "";
+    setState(Talk::Thinking, "Connecting...");
   }
-  live.endTurn();
-  LOGI("companion", "sent %.1f s of voice, peak %d dBFS", sentFrames / float(voice::kInRate), peakDb);
-  releasedAt = millis();
-  setState(Talk::Thinking);
 }
 
 void loadHistory(std::vector<std::pair<String, String>> &out) {
@@ -371,6 +416,46 @@ void closeSettings() {
   }
 }
 
+void drawApp();
+
+extern const uint8_t voicePackStart[] asm("_binary_cartridges_companion_voices_bin_start");
+extern const uint8_t voicePackEnd[] asm("_binary_cartridges_companion_voices_bin_end");
+
+// Plays a voice's sample (as the app does): copied from the firmware to the card when it isn't
+// there yet (or differs), since the player reads files.
+void playSample(const char *name) {
+  if (voice::playing() || info.state == Talk::Listening || info.state == Talk::Thinking) return;
+  const String dir = storage::myDataDir() + "/voices";
+  const String path = dir + "/" + name + ".mp3";
+  const VoicePack pack(voicePackStart, voicePackEnd - voicePackStart);
+  const uint8_t *bytes = nullptr;
+  size_t len = 0;
+  if (!pack.find(name, bytes, len)) return LOGW("companion", "no sample for %s", name);
+  // Is the card's copy this sample? Same size and same first bytes (a straight write from flash
+  // once left a file of zeros with the right size).
+  File existing = SD_MMC.open(path);
+  uint8_t head[64] = {};
+  const bool current = existing && existing.size() == len && existing.read(head, sizeof(head)) == sizeof(head) &&
+                       memcmp(head, bytes, sizeof(head)) == 0;
+  existing.close();
+  if (!current) {
+    SD_MMC.mkdir(dir);
+    File f = SD_MMC.open(path + ".part", FILE_WRITE);
+    // Through RAM: the card driver can't read the firmware's flash directly (it wrote zeros).
+    static uint8_t chunk[4096];
+    bool ok = static_cast<bool>(f);
+    for (size_t at = 0; ok && at < len; at += sizeof(chunk)) {
+      const size_t n = min(sizeof(chunk), len - at);
+      memcpy(chunk, bytes + at, n);
+      ok = f.write(chunk, n) == n;
+    }
+    f.close();
+    SD_MMC.remove(path);
+    if (!ok || !SD_MMC.rename(path + ".part", path)) return LOGW("companion", "couldn't save the %s sample", name);
+  }
+  player.play(path.c_str());
+}
+
 void onSettingsTap(uint16_t x, uint16_t y) {
   static const AudioPlayer::Note kBeep[] = {{76, 120}};
   switch (screens::settingsHit(x, y)) {
@@ -392,7 +477,10 @@ void onSettingsTap(uint16_t x, uint16_t y) {
       const int step = screens::settingsHit(x, y) == SettingsHit::VoiceNext ? 1 : -1;
       settings.voice = nextFavourite(settings.favourites.c_str(), settings.voice.c_str(), step);
       settingsChanged = true;
-      break;
+      drawApp();  // the name first, then the voice (the refresh would hold up the sound)
+      shell::refresh(false, false);
+      playSample(settings.voice.c_str());
+      return;  // already drawn
     }
     case SettingsHit::None:
       return;
@@ -470,41 +558,59 @@ void loop() {
   if (!connecting) live.poll();  // the connect task owns the socket until it ends
   voice::poll();
 
-  // The background connect finished.
-  if (!connecting && info.state == Talk::Connecting && !live.connected()) {
+  // The background connect finished (the screen may already be listening).
+  if (awaitingConnect && !connecting && !live.connected()) {
+    awaitingConnect = awaitingSend = false;
+    early.clear();
+    voice::stopListening();
     disconnect("connect failed");
     setState(Talk::Error, connectError.length() ? connectError : String("Can't connect"));
   }
-  if (!connecting && info.state == Talk::Connecting && live.ready()) setState(Talk::Ready, "Hold BOOT to talk");
+  if (!turnSent && live.ready() && (info.state == Talk::Listening || awaitingSend)) {
+    openTurn();
+    if (awaitingSend) {
+      awaitingSend = false;
+      finishTurn();
+    }
+  }
 
-  // Push-to-talk.
+  // The session ended without a word (closed here, or the socket died quietly).
+  if (!connecting && !awaitingConnect && !live.connected()) {
+    if ((info.state == Talk::Listening && !turnSent) || awaitingSend) {
+      connect();  // a recording is waiting for it
+    } else if (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Connecting) {
+      setState(Talk::Offline, "Hold BOOT to talk");
+    } else if (info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking) {
+      voice::stopListening();
+      voice::playStop();
+      disconnect("lost");
+      setState(Talk::Error, "Connection lost");
+    }
+  }
+
+  // Push-to-talk: talking can start before the session is ready.
   const bool bootDown = digitalRead(PIN_BTN_BOOT) == LOW || simulatedHold;
   static uint32_t downAt = 0;
   if (!bootDown) downAt = 0;
   else if (!downAt) downAt = millis();
   const bool held = bootDown && millis() - downAt >= kHoldMs;
-  if (held && !historyOpen && !settingsOpen) {
-    if (info.state == Talk::Offline || info.state == Talk::Error) {
+  if (held && !historyOpen && !settingsOpen && !awaitingSend) {
+    static uint32_t triedAt = 0;  // one connect per press (an error screen would retry every pass)
+    if ((info.state == Talk::Offline || info.state == Talk::Error) && triedAt != downAt) {
+      triedAt = downAt;
       connect();
-      pendingTalk = true;
-    } else if (info.state == Talk::Connecting) {
-      pendingTalk = true;
-    } else if (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Speaking) {
+    }
+    if (info.state == Talk::Connecting || info.state == Talk::Ready || info.state == Talk::After ||
+        info.state == Talk::Speaking) {
       startTalking();  // also interrupts a reply
     }
   }
-  if (pendingTalk && info.state == Talk::Ready) {
-    pendingTalk = false;
-    if (bootDown) startTalking();
-  }
-  if (!bootDown) pendingTalk = false;
 
   if (info.state == Talk::Listening) {
     static int16_t chunk[voice::kChunkFrames];
     size_t frames = 0;
     while (voice::nextChunk(chunk, frames)) {
-      live.sendAudio(chunk, frames);
-      sentFrames += frames;
+      sendVoice(chunk, frames);
       peakDb = max(peakDb, voice::levelDb());
     }
     if (!bootDown) stopTalking();
@@ -515,7 +621,7 @@ void loop() {
       redraw = true;
     }
   }
-  if (info.state == Talk::Thinking && millis() - releasedAt > 20000) setState(Talk::Ready, "No reply. Try again?");
+  if (info.state == Talk::Thinking && !awaitingSend && millis() - releasedAt > 20000) setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
     lastTextAt = millis();  // at most a redraw a second: a partial refresh takes 0.6 s
     releaseText(!voice::playing());

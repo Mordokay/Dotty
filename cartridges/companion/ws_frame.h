@@ -18,6 +18,8 @@ std::string wsAcceptFor(const std::string &key);
 bool wsCheckAccept(const std::string &responseHeaders, const std::string &key);
 // One frame: FIN set, the payload masked with `mask`.
 std::vector<uint8_t> wsEncode(uint8_t opcode, const uint8_t *data, size_t len, const uint8_t mask[4]);
+// A close frame with `code` (1000 = normal).
+std::vector<uint8_t> wsCloseFrame(uint16_t code, const uint8_t mask[4]);
 std::string base64Encode(const uint8_t *data, size_t len);
 
 // Reads server frames from a byte stream, any number of bytes at a time. feed() consumes bytes

@@ -153,3 +153,8 @@ WsDecoder::Result WsDecoder::feed(const uint8_t *data, size_t len, size_t &used)
   }
   return NeedMore;
 }
+
+std::vector<uint8_t> wsCloseFrame(uint16_t code, const uint8_t mask[4]) {
+  const uint8_t payload[2] = {static_cast<uint8_t>(code >> 8), static_cast<uint8_t>(code & 0xFF)};
+  return wsEncode(0x8, payload, sizeof(payload), mask);
+}

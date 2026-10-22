@@ -77,10 +77,13 @@ bool WsClient::connect(const char *host, const char *path, String &error) {
 }
 
 bool WsClient::sendFrame(uint8_t opcode, const uint8_t *data, size_t len) {
-  if (!tls_) return false;
   uint8_t mask[4];
   esp_fill_random(mask, sizeof(mask));
-  const std::vector<uint8_t> frame = wsEncode(opcode, data, len, mask);
+  return writeAll(wsEncode(opcode, data, len, mask));
+}
+
+bool WsClient::writeAll(const std::vector<uint8_t> &frame) {
+  if (!tls_) return false;
   size_t done = 0;
   const uint32_t start = millis();
   while (done < frame.size()) {
@@ -141,6 +144,11 @@ bool WsClient::poll(const std::function<void(const std::string &)> &onMessage) {
 
 void WsClient::close() {
   if (!tls_) return;
+  // Say goodbye first: without it Google keeps the session open until it times out, and
+  // reconnecting seconds later was refused as over quota (too many open sessions).
+  uint8_t mask[4];
+  esp_fill_random(mask, sizeof(mask));
+  writeAll(wsCloseFrame(1000, mask));
   esp_tls_conn_destroy(tls_);
   tls_ = nullptr;
   fd_ = -1;

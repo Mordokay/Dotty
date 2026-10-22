@@ -79,5 +79,8 @@ int main() {
     offset += n;
   }
   CHECK("ws: a 300 KB message arrives intact", r == WsDecoder::Message && large.message.size() == payload.size() && large.opcode == 0x2);
+  // Closing says so (code 1000), so the server ends the session at once instead of timing out.
+  const std::vector<uint8_t> bye = wsCloseFrame(1000, mask);
+  CHECK("ws: close frame, code 1000, masked", bye == (std::vector<uint8_t>{0x88, 0x82, 1, 2, 3, 4, 0x03 ^ 1, 0xE8 ^ 2}));
   return failures ? 1 : 0;
 }
