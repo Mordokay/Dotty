@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <vector>
 
 // The Gemini Live API's messages (https://ai.google.dev/gemini-api/docs/live), with no I/O so
 // they can be tested on a computer (tools/companion_test, against messages captured from a real
@@ -27,8 +28,15 @@ std::string liveActivityStart();
 std::string liveActivityEnd();
 // 16 kHz 16-bit mono PCM, base64 in a realtimeInput message.
 std::string liveAudio(const int16_t *pcm, size_t frames);
-// Dotty's answer to a function call: done, and don't start a new reply because of it.
-std::string liveToolOk(const std::string &callId, const std::string &name);
+// One function call from the model: set_mood {mood}, remember {text, group},
+// update_memory {id, text, group?}, forget_memory {id}.
+struct ToolCall {
+  std::string id, name, mood, text, group;
+  int memoryId = -1;
+};
+
+// Dotty's answer to function calls: done, and don't start a new reply because of them.
+std::string liveToolsOk(const std::vector<ToolCall> &answered);
 
 struct LiveEvent {
   bool setupComplete = false, turnComplete = false, generationComplete = false, interrupted = false, goAway = false;
@@ -36,7 +44,7 @@ struct LiveEvent {
   std::string inputText;   // the user's words (transcript piece)
   std::string outputText;  // the reply's words (transcript piece)
   std::string text;        // a text-only reply's text piece
-  std::string toolCallId, toolName, mood;  // a set_mood call
+  std::vector<ToolCall> calls;  // every function call in this message, in order
   std::string resumeHandle;
   int totalTokens = -1;
   int errorCode = 0;
@@ -53,7 +61,8 @@ struct LiveClose {
 };
 LiveClose liveCloseInfo(uint16_t code, const std::string &reason);
 
-// The companion's instructions; place "" leaves the place out.
-std::string systemInstruction(const std::string &localTime, const std::string &place);
+// The companion's instructions; place "" leaves the place out; memorySection (MemoryStore's
+// promptSection(), "" = none) goes at the end.
+std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &memorySection);
 
 std::string base64Decode(const char *data, size_t len);

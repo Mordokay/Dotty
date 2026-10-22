@@ -300,7 +300,7 @@ void connectLoop(void *) {
     config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
     config.voice = settings.voice.c_str();
     config.textOnly = settings.textOnly;
-    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str());
+    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(), "");
     ok = live.begin(settings.key.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
   } else {

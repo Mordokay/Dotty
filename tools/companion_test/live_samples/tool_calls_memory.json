@@ -1,0 +1,1 @@
+{"toolCall": {"functionCalls": [{"name": "set_mood", "args": {"mood": "happy"}, "id": "call_1"}, {"name": "remember", "args": {"text": "Your sister is called Ana", "group": "people"}, "id": "call_2"}, {"name": "forget_memory", "args": {"id": 12}, "id": "call_3"}]}}

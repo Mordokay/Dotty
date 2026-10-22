@@ -102,12 +102,25 @@ void GeminiLive::onMessage(const std::string &message) {
   // Your words belong to the question being asked, whatever is still draining.
   if (!e.inputText.empty() && cb_.heard) cb_.heard(e.inputText);
   const bool content = !e.outputText.empty() || !e.text.empty() || !e.audioPcm.empty();
-  const TurnTracker::Out o = turns_.message(content, !e.toolCallId.empty(), e.turnComplete, e.totalTokens);
-  if (!e.toolCallId.empty()) {
-    LOGI("live", "%s(%s)%s", e.toolName.c_str(), e.mood.c_str(), o.answerTool ? "" : " - not answered");
-    if (o.answerTool) ws_.sendText(liveToolOk(e.toolCallId, e.toolName));
+  std::vector<std::string> names;
+  for (const ToolCall &c : e.calls) names.push_back(c.name);
+  const TurnTracker::Out o = turns_.message(content, names, e.turnComplete, e.totalTokens);
+  std::vector<ToolCall> answered;
+  for (size_t i = 0; i < e.calls.size(); i++) {
+    const ToolCall &c = e.calls[i];
+    LOGI("live", "%s(%s)%s%s", c.name.c_str(), c.name == "set_mood" ? c.mood.c_str() : c.group.c_str(),
+         o.apply[i] ? "" : " - not applied", o.apply[i] && !o.answer[i] ? " - not answered" : "");
+    if (o.answer[i]) answered.push_back(c);
+    if (!o.apply[i]) continue;
+    if (c.name == "set_mood") {
+      if (!c.mood.empty() && cb_.mood) cb_.mood(c.mood);
+    } else if (cb_.memory) {
+      cb_.memory(c);
+    }
+  }
+  if (!answered.empty()) {
+    ws_.sendText(liveToolsOk(answered));
     if (!ws_.connected()) return;  // the send failed and dropped the connection
-    if (o.showMood && !e.mood.empty() && cb_.mood) cb_.mood(e.mood);
   }
   if (o.deliver) {
     if (!e.outputText.empty() && cb_.said) cb_.said(e.outputText);

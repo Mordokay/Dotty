@@ -84,6 +84,34 @@ std::string liveSetup(const LiveConfig &config) {
   moodParam["type"] = "STRING";
   for (const char *m : kMoods) moodParam["enum"].add(m);
   mood["parameters"]["required"].add("mood");
+
+  // Memories (spec: docs/superpowers/specs/2026-10-22-companion-memories-design.md).
+  JsonArray tools = setup["tools"][0]["functionDeclarations"];
+  auto declare = [&](const char *name, const char *description) {
+    JsonObject f = tools.add<JsonObject>();
+    f["name"] = name;
+    f["behavior"] = "NON_BLOCKING";
+    f["description"] = description;
+    f["parameters"]["type"] = "OBJECT";
+    return f;
+  };
+  auto param = [](JsonObject f, const char *name, const char *type, bool required) {
+    f["parameters"]["properties"][name]["type"] = type;
+    if (required) f["parameters"]["required"].add(name);
+    return f["parameters"]["properties"][name].as<JsonObject>();
+  };
+  auto groups = [](JsonObject p) {
+    for (const char *g : {"you", "people", "likes", "plans", "other"}) p["enum"].add(g);
+  };
+  JsonObject remember = declare("remember", "Save something lasting about the user to remember in future chats");
+  param(remember, "text", "STRING", true);
+  groups(param(remember, "group", "STRING", true));
+  JsonObject update = declare("update_memory", "Change a memory (by its number) that is out of date");
+  param(update, "id", "INTEGER", true);
+  param(update, "text", "STRING", true);
+  groups(param(update, "group", "STRING", false));
+  JsonObject forget = declare("forget_memory", "Delete a memory (by its number) the user asked you to forget");
+  param(forget, "id", "INTEGER", true);
   return serialize(doc);
 }
 
@@ -100,13 +128,16 @@ std::string liveAudio(const int16_t *pcm, size_t frames) {
          base64Encode(reinterpret_cast<const uint8_t *>(pcm), frames * 2) + R"("}}})";
 }
 
-std::string liveToolOk(const std::string &callId, const std::string &name) {
+std::string liveToolsOk(const std::vector<ToolCall> &answered) {
   JsonDocument doc;
-  JsonObject response = doc["toolResponse"]["functionResponses"].add<JsonObject>();
-  response["id"] = callId;
-  response["name"] = name;
-  response["response"]["result"] = "ok";
-  response["response"]["scheduling"] = "SILENT";
+  JsonArray responses = doc["toolResponse"]["functionResponses"].to<JsonArray>();
+  for (const ToolCall &call : answered) {
+    JsonObject response = responses.add<JsonObject>();
+    response["id"] = call.id;
+    response["name"] = call.name;
+    response["response"]["result"] = "ok";
+    response["response"]["scheduling"] = "SILENT";
+  }
   return serialize(doc);
 }
 
@@ -119,9 +150,16 @@ LiveEvent liveParse(const std::string &message) {
   if (const char *handle = doc["sessionResumptionUpdate"]["newHandle"]) e.resumeHandle = handle;
   if (!doc["usageMetadata"]["totalTokenCount"].isNull()) e.totalTokens = doc["usageMetadata"]["totalTokenCount"];
   for (JsonObject call : doc["toolCall"]["functionCalls"].as<JsonArray>()) {
-    e.toolCallId = call["id"] | "";
-    e.toolName = call["name"] | "";
-    if (e.toolName == "set_mood") e.mood = call["args"]["mood"] | "";
+    ToolCall c;
+    c.id = call["id"] | "";
+    c.name = call["name"] | "";
+    JsonObject args = call["args"];
+    c.mood = args["mood"] | "";
+    c.text = args["text"] | "";
+    c.group = args["group"] | "";
+    if (args["id"].is<int>()) c.memoryId = args["id"];
+    else if (args["id"].is<float>()) c.memoryId = static_cast<int>(args["id"].as<float>());  // 12.0
+    e.calls.push_back(c);
   }
   JsonObject content = doc["serverContent"];
   if (!content.isNull()) {
@@ -159,12 +197,21 @@ LiveClose liveCloseInfo(uint16_t code, const std::string &reason) {
   return c;
 }
 
-std::string systemInstruction(const std::string &localTime, const std::string &place) {
+std::string systemInstruction(const std::string &localTime, const std::string &place, const std::string &memorySection) {
   std::string s =
       "You are Dotty, a small desk companion. Talk like a person in conversation: usually one or two short "
       "sentences; longer only when asked. You are on a tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "
-      "Call set_mood with each reply. The local time is " + localTime;
+      "Call set_mood with each reply. "
+      "You have a memory that lasts between chats. When the user tells you something lasting about themselves, "
+      "the people in their life, what they like or dislike, their plans and dates, their goals, or asks you to "
+      "remember something, call remember with one short sentence written to them (\"Your sister is called "
+      "Ana\"). Don't remember small talk or one-off questions. If it's already in your memory, call update_memory "
+      "with its number instead of repeating it; when they ask you to forget something, call forget_memory. Never "
+      "remember passwords, codes or other secrets. Don't announce that you saved something. "
+      "The local time is " + localTime;
   if (!place.empty()) s += ", the user is in " + place;
-  return s + ".";
+  s += ".";
+  if (!memorySection.empty()) s += "\n\n" + memorySection;
+  return s;
 }
