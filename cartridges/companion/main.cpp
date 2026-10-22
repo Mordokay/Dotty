@@ -25,6 +25,7 @@
 #include "gemini_live.h"
 #include "history.h"
 #include "memories.h"
+#include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
 #include "nav_bar.h"
@@ -103,6 +104,13 @@ uint32_t noteUntil = 0;        // "Remembered"… shows until then
 // instant, the iPhone's reconnect hung the Bluetooth controller (interrupt watchdog in
 // ll_connection_update_ind_handler, 2026-10-22).
 uint32_t bleBackAt = 0;
+// The acting demo (2026-10-23): Mia's replies to three scenes (sad news, dolphins, worried), with
+// and without the persona's acting notes, recorded as data/act_<variant><scene>.wav and played on a
+// screen of 6 buttons, opened from a small A/B corner button on the idle main screen — kept so the
+// user can let others hear the difference. Dev key V records (first press: acting, next: plain).
+bool toneTest = false, toneScreen = false;
+int toneVariant = 0, toneIndex = 0;  // variant 0 = acting, 1 = plain; index = the scenario
+std::string toneRec;
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
@@ -220,6 +228,7 @@ void beginReply() {
 // A memory call from the model: change the store, save it, show a note for 3 s, note it for the
 // history line. Returns the memory's id for remember (sent back so the model can name it).
 int applyMemory(const ToolCall &c) {
+  if (toneTest) return -1;  // the acting demo's role-play isn't real life
   MemoryStore &store = memories::store();
   const int64_t now = time(nullptr);
   int id = -1;
@@ -295,6 +304,7 @@ GeminiLive::Callbacks callbacks() {
     if (!voice::playing()) beginReply();
     voice::play(pcm, frames);
     replyFrames += frames;
+    if (toneTest && toneRec.size() < 24000u * 2 * 30) toneRec.append(reinterpret_cast<const char *>(pcm), frames * 2);
   };
   cb.mood = [](const std::string &m) {
     turnMood = m.c_str();
@@ -355,6 +365,15 @@ GeminiLive::Callbacks callbacks() {
 
 // ---------- connecting ----------
 
+std::string tonePersona() {
+  if (!toneTest) return "You are Dotty, a small desk companion.";
+  Profile p = presetProfile("partner");
+  p.name = "Mia";
+  std::string t = personaText(p);
+  if (toneVariant == 1) t = t.substr(0, t.find(" Acting:"));
+  return t;
+}
+
 void connectLoop(void *) {
   String error;
   bool ok = net::connect(error);
@@ -369,7 +388,7 @@ void connectLoop(void *) {
     config.voice = settings.voice.c_str();
     config.textOnly = settings.textOnly;
     config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(),
-                                                 "You are Dotty, a small desk companion.", memorySection);  // Task 4: the companion's persona
+                                                 tonePersona(), memorySection);  // Task 4: the companion's persona
     ok = live.begin(settings.key.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
   } else {
@@ -599,8 +618,82 @@ void onSettingsTap(uint16_t x, uint16_t y) {
   redraw = true;
 }
 
+String tonePath(int v, int i) {
+  return storage::myDataDir() + "/act_" + String(v) + String(i) + ".wav";
+}
+
+void saveTone() {
+  if (toneRec.empty() || toneIndex > 2) return toneRec.clear();
+  const uint32_t bytes = toneRec.size();
+  uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0};
+  auto put32 = [&](int at, uint32_t v) { for (int i = 0; i < 4; i++) h[at + i] = v >> (8 * i); };
+  put32(4, 36 + bytes);
+  put32(24, 24000);
+  put32(28, 48000);
+  h[32] = 2, h[34] = 16;
+  memcpy(h + 36, "data", 4);
+  put32(40, bytes);
+  File f = SD_MMC.open(tonePath(toneVariant, toneIndex), FILE_WRITE);
+  static uint8_t chunk[2048];
+  if (f) {
+    f.write(h, sizeof(h));
+    for (size_t at = 0; at < toneRec.size(); at += sizeof(chunk)) {
+      const size_t n = min(sizeof(chunk), toneRec.size() - at);
+      memcpy(chunk, toneRec.data() + at, n);
+      f.write(chunk, n);
+    }
+  }
+  f.close();
+  LOGI("companion", "acting test: variant %d scenario %d saved (%.1f s)", toneVariant, toneIndex, bytes / 48000.0f);
+  toneRec.clear();
+  toneRec.shrink_to_fit();
+  toneIndex++;
+}
+
+void drawToneScreen() {
+  epd.fillScreen(EpdDisplay::kWhite);
+  nav::draw(epd, "Acting test", nav::Icon::Back, nav::Icon::None);
+  static const char *rows[] = {"Sad news", "Dolphins", "Worried"};
+  epd.setFont(nullptr);
+  epd.setTextColor(EpdDisplay::kBlack);
+  epd.setCursor(40, 50);
+  epd.print("acting");
+  epd.setCursor(138, 50);
+  epd.print("plain");
+  for (int r = 0; r < 3; r++)
+    for (int v = 0; v < 2; v++) {
+      const int16_t x = 4 + v * 98, y = 62 + r * 46, w = 94, hgt = 42;
+      const bool has = SD_MMC.exists(tonePath(v, r));
+      epd.drawRoundRect(x, y, w, hgt, 6, EpdDisplay::kBlack);
+      if (has) epd.drawRoundRect(x + 1, y + 1, w - 2, hgt - 2, 5, EpdDisplay::kBlack);
+      const String label = has ? rows[r] : "-";
+      epd.setCursor(x + (w - 6 * label.length()) / 2, y + 17);
+      epd.print(label);
+    }
+}
+
+void onToneTap(uint16_t x, uint16_t y) {
+  if (y < nav::kHeight) {
+    if (nav::hit(x, y) < 0) toneScreen = false;
+  } else if (y >= 62) {
+    const int v = x >= 100 ? 1 : 0, r = min(2, (y - 62) / 46);
+    if (SD_MMC.exists(tonePath(v, r))) player.play(tonePath(v, r).c_str());
+  }
+  redraw = true;
+}
+
+bool demoAvailable() {
+  return SD_MMC.exists(tonePath(0, 0)) || SD_MMC.exists(tonePath(1, 0));
+}
+
+bool idleScreen() {
+  return info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::Error;
+}
+
 void drawApp() {
-  if (settingsOpen) {
+  if (toneScreen) {
+    drawToneScreen();
+  } else if (settingsOpen) {
     screens::drawSettings(settingsView());
   } else if (historyOpen) {
     std::vector<std::pair<String, String>> exchanges;
@@ -608,10 +701,23 @@ void drawApp() {
     screens::drawHistory(exchanges, historyScroll);
   } else {
     screens::draw(info);
+    if (idleScreen() && demoAvailable()) {  // the acting demo's corner button
+      epd.drawRoundRect(4, 176, 34, 20, 4, EpdDisplay::kBlack);
+      epd.setFont(nullptr);
+      epd.setTextColor(EpdDisplay::kBlack);
+      epd.setCursor(12, 183);
+      epd.print("A/B");
+    }
   }
 }
 
 void onTap(uint16_t x, uint16_t y) {
+  if (toneScreen) return onToneTap(x, y);
+  if (!settingsOpen && !historyOpen && idleScreen() && x < 44 && y > 166 && demoAvailable()) {
+    toneScreen = true;
+    redraw = true;
+    return;
+  }
   if (settingsOpen) return onSettingsTap(x, y);
   if (historyOpen) {
     if (nav::hit(x, y) < 0) historyOpen = false;
@@ -953,6 +1059,7 @@ void loop() {
   }
   if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn()) {
     LOGI("companion", "spoken; longest loop pause %lu ms", static_cast<unsigned long>(longestPause));
+    if (toneTest) saveTone();
     longestPause = 0;
     releaseText(true);
     setState(Talk::After);
@@ -1021,6 +1128,17 @@ void loop() {
     if (f) f.print("garbage");
     f.close();
     LOGI("companion", "memories.json broken on purpose: restart to see it set aside");
+  }
+  if (input.key == 'Y') {
+    toneScreen = !toneScreen;
+    redraw = true;
+  }
+  if (input.key == 'V') {  // the acting test: first press = acting, the next = plain
+    toneVariant = toneTest ? 1 - toneVariant : 0;
+    toneTest = true;
+    toneIndex = 0;
+    LOGI("companion", "acting test: variant %d", toneVariant);
+    if (live.connected()) disconnect("acting test");
   }
   if (input.key == 'J' && live.connected()) live.sendRaw("not json");  // dev: the server closes the session
   if (input.key == 'N') {  // dev: show the memory note
