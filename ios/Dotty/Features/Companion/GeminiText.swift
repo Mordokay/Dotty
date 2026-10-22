@@ -82,11 +82,32 @@ enum CompanionDesign {
         return (prompt, schema)
     }
 
-    /// One field again, keeping the rest of the character in mind.
-    static func field(_ field: String, label: String, description: String, current: [String: String]) -> (prompt: String, schema: [String: Any]) {
-        let known = current.filter { !$0.value.isEmpty && $0.key != field }.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
-        let prompt = rules + "\n\nThe character so far:\n\(known)\n\(description.isEmpty ? "" : "\nDescription: \(description)\n")" +
-            "\nWrite a new, different \(label) for it that fits all of this."
+    /// One field again, with the whole character in mind: every filled field (the one being
+    /// rewritten too, as the version to improve on), the name, the voice and the avatar.
+    static func field(_ field: String, label: String, description: String, current: [String: String],
+                      name: String = "", voice: String = "", avatar: String = "") -> (prompt: String, schema: [String: Any]) {
+        let labels = ["personality": "Personality", "traits": "Traits", "quirks": "Quirks",
+                      "speaking": "Way of speaking", "backstory": "Backstory"]
+        var known: [String] = []
+        if !name.isEmpty { known.append("Name: \(name)") }
+        if !voice.isEmpty {
+            let style = VoicesView.voices.first { $0.name == voice }?.style ?? ""
+            known.append("Voice: \(voice)\(style.isEmpty ? "" : " (\(style))")")
+        }
+        if !avatar.isEmpty && avatar != "photo" { known.append("Looks like: a \(avatar)") }
+        for key in ["personality", "traits", "quirks", "speaking", "backstory"] where key != field {
+            if let value = current[key], !value.isEmpty { known.append("\(labels[key] ?? key): \(value)") }
+        }
+        let mine = current[field] ?? ""
+        var prompt = rules + "\n\n"
+        if !description.isEmpty { prompt += "Description: \(description)\n" }
+        if !known.isEmpty { prompt += "The character so far:\n" + known.joined(separator: "\n") + "\n" }
+        if mine.isEmpty {
+            prompt += "\nWrite its \(label), fitting everything above."
+        } else {
+            prompt += "\nIts \(label) now:\n\(mine)\n\nRewrite its \(label) so it fits everything above: keep what works, " +
+                "make it fresher and more vivid, and don't repeat what the other fields already say."
+        }
         let list = field == "traits" || field == "quirks"
         let schema: [String: Any] = [
             "type": "OBJECT",

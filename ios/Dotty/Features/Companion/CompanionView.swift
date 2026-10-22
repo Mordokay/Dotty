@@ -376,7 +376,8 @@ struct CompanionPage: View {
     private func suggest(_ field: String, _ label: String) async {
         let current = ["personality": profile.personality, "traits": profile.traits, "quirks": profile.quirks,
                        "speaking": profile.speaking, "backstory": profile.backstory]
-        let (prompt, schema) = CompanionDesign.field(field, label: label, description: "", current: current)
+        let (prompt, schema) = CompanionDesign.field(field, label: label, description: "", current: current,
+                                                     name: profile.name, voice: profile.voice, avatar: profile.avatar)
         do {
             let answer = try await GeminiText.generate(prompt, schema: schema)
             let value = (answer["value"] as? [String])?.joined(separator: "\n") ?? answer["value"] as? String ?? ""
@@ -638,7 +639,8 @@ struct NewCompanionPage: View {
 
     private func suggest(_ field: String, _ label: String) async {
         let current = ["personality": personality, "traits": traits, "quirks": quirks, "speaking": speaking, "backstory": backstory]
-        let (prompt, schema) = CompanionDesign.field(field, label: label, description: description, current: current)
+        let (prompt, schema) = CompanionDesign.field(field, label: label, description: description, current: current,
+                                                     voice: voice, avatar: avatar)
         do {
             let a = try await GeminiText.generate(prompt, schema: schema)
             let value = (a["value"] as? [String])?.joined(separator: "\n") ?? a["value"] as? String ?? ""
