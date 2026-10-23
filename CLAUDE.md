@@ -920,6 +920,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (difflib ratio 1.000), ~6k tokens — reading isn't held to the ~30 s its own replies keep to. Live
   is speech-to-speech: we never pass the words it says, only instructions; a script it reads is the
   one way to control length and wording.
+  **A second TLS connection during a session** (dev key Y, a Flash-Lite generateContent request
+  while Live is open, 2026-10-23): with the prebuilt core it fails at once (68 KB internal free,
+  largest 30 KB → `mbedtls_ssl_setup` -0x7F00, out of memory; Live unharmed). Rebuilt with
+  mbedTLS's buffers in PSRAM (pioarduino `custom_sdkconfig = CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`,
+  `# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set`; first build 3 min 42 s, rollback still on):
+  106 KB free, largest 53 KB during a session, the request worked (HTTP 200, 2.7 s, 138 words,
+  −6 KB internal) and the chat carried on normally.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

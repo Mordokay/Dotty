@@ -47,6 +47,8 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include "voices.h"
 #include <SD_MMC.h>
+#include <esp_crt_bundle.h>
+#include <esp_http_client.h>
 #if __has_include("dev_key.h")
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
@@ -956,6 +958,63 @@ void pollReplay() {
   }
 }
 
+// ---------- measurement (dev key Y): a text-model request while the Live session is open ----------
+// Can Dotty hold a second TLS connection during a chat (a text model writing a long script for Live
+// to read)? Logs internal RAM before and right after the second handshake, the result and timing.
+
+std::string testBody;
+size_t testFreeConnected = 0, testLargestConnected = 0;
+
+esp_err_t testEvent(esp_http_client_event_t *e) {
+  if (e->event_id == HTTP_EVENT_ON_CONNECTED) {  // TLS is up: its buffers are allocated now
+    testFreeConnected = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    testLargestConnected = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  } else if (e->event_id == HTTP_EVENT_ON_DATA) {
+    testBody.append(static_cast<const char *>(e->data), e->data_len);
+  }
+  return ESP_OK;
+}
+
+void textModelTest() {
+  if (!live.ready()) return LOGW("measure", "open a session first (r, r)");
+  const size_t free0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), largest0 = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  const size_t psram0 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  LOGI("measure", "before: internal %u KB free, largest %u KB; PSRAM %u KB", free0 / 1024, largest0 / 1024, psram0 / 1024);
+  JsonDocument req;
+  req["contents"][0]["parts"][0]["text"] =
+      "Write a calm guided meditation that takes one minute to read aloud, about 150 words, in plain sentences. "
+      "Only the meditation text.";
+  std::string body;
+  serializeJson(req, body);
+  const String url = String("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=") + sessionKeyText;
+  testBody.clear();
+  testFreeConnected = testLargestConnected = 0;
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.method = HTTP_METHOD_POST;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.timeout_ms = 30000;
+  config.event_handler = testEvent;
+  const uint32_t started = millis();
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  esp_http_client_set_header(client, "Content-Type", "application/json");
+  esp_http_client_set_post_field(client, body.c_str(), body.size());
+  const esp_err_t err = esp_http_client_perform(client);
+  const int status = esp_http_client_get_status_code(client);
+  esp_http_client_cleanup(client);
+  const uint32_t ms = millis() - started;
+  LOGI("measure", "second TLS up: internal %u KB free, largest %u KB", testFreeConnected / 1024, testLargestConnected / 1024);
+  JsonDocument answer;
+  deserializeJson(answer, testBody);
+  const std::string text = answer["candidates"][0]["content"]["parts"][0]["text"] | "";
+  int words = 0;
+  for (size_t i = 0; i < text.size(); i++) words += text[i] != ' ' && (i == 0 || text[i - 1] == ' ');
+  LOGI("measure", "%s, HTTP %d, %lu ms, %d words; after: internal %u KB free, Live %s", esp_err_to_name(err), status,
+       static_cast<unsigned long>(ms), words, heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+       live.ready() ? "still up" : "DOWN");
+  if (status != 200) LOGW("measure", "%.150s", testBody.c_str());
+}
+
 bool idleScreen() {
   return info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::Error;
 }
@@ -1821,6 +1880,7 @@ void loop() {
   if (input.key == 'K') {  // dev: the saved last line's text, piece by piece with its time (read with `d`)
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
+  if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
   if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
   // dev: a typed question (U; G asks for a one-minute guided meditation), and ending the chat now (E:
   // the review runs, which may evolve it).
