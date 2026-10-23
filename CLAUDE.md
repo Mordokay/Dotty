@@ -991,6 +991,14 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   to the newest exchange, and a "Today's chat" row on each companion page opens today. Measured: chat
   closed at 65.6 s, iPhone back at 67.3 s, the app reading the history at 67.7 s. The day view's
   times now subtract the UTC offset (Dotty's epochs are local).
+- **Bluetooth-relay spike, probe 1** (2026-10-23, throwaway code on branch `spike/ble-relay`):
+  iPhone ⇄ Dotty over BLE (2M PHY, ~29 ms interval, MTU 293 → 290-byte frames): Dotty → iPhone
+  notifications 23.1-26.2 KB/s, iPhone → Dotty writes-without-response 22.6-23.7 KB/s (waiting for
+  canSendWriteWithoutResponse), command round trip median 58 ms (39-115). A relayed chat needs
+  ~8 KB/s up (16 kHz voice, IMA ADPCM 4:1) and ~12 KB/s down (24 kHz reply, ADPCM): 2-3× headroom;
+  raw PCM (32 / 48 KB/s) doesn't fit. Found on the way: `ble::notify` sent a short message in one
+  notification with no retry, so a reply right after a burst was dropped (the app waited 90 s) —
+  the spike branch retries it like the pieces; carry that fix over if the relay goes ahead.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
