@@ -244,7 +244,7 @@ final class RelayService {
             return
         }
         beginBackground()
-        var request = URLRequest(url: url, timeoutInterval: 30)
+        var request = URLRequest(url: url, timeoutInterval: 60)  // the text model can take 20 s+ on a slow day
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data(body.utf8)

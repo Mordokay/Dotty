@@ -16,7 +16,9 @@
 namespace relay {
 
 constexpr int kVersion = 1;
-constexpr uint32_t kFetchTimeoutMs = 30000;
+// The text model was slow on 2026-10-23: 22-24 s through the phone and 5-16 s from a Mac (2-3 s
+// that morning); 30 s cut a bedtime story off (the fallback is a short improvised reply).
+constexpr uint32_t kFetchTimeoutMs = 60000;
 
 void begin();  // the buffer, the Data handler, the relay.hello command
 // Drains what the phone sent while no relay session is reading it (fetch results kept, the rest
@@ -27,7 +29,7 @@ bool phoneHasKey(const String &keyHint);
 
 // A text-model call through the phone (generateContent for `model`); the id to collect it with.
 uint32_t fetch(const std::string &model, const std::string &body);
-// true once the answer is in (or 30 s passed: status 0, body "timed out").
+// true once the answer is in (or kFetchTimeoutMs passed: status 0, body "timed out").
 bool takeFetched(uint32_t id, int &status, std::string &body);
 
 class Transport : public LiveTransport {

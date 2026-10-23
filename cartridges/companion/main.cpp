@@ -502,7 +502,7 @@ void writerTask(void *arg) {
   config.url = url.c_str();
   config.method = HTTP_METHOD_POST;
   config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.timeout_ms = 25000;
+  config.timeout_ms = 60000;  // the text model has taken 15-25 s on slow days (relay_link.h)
   config.event_handler = [](esp_http_client_event_t *e) {
     if (e->event_id == HTTP_EVENT_ON_DATA) static_cast<std::string *>(e->user_data)->append(static_cast<const char *>(e->data), e->data_len);
     return ESP_OK;
