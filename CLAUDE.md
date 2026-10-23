@@ -121,6 +121,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `cartridges/<name>/` with its own `[env:<name>]` in `platformio.ini`
   (`build_src_filter = +<name>/`). Never add cartridge-specific code to dotty_core
   unless a second cartridge needs it.
+- **Cartridges are sandboxed** (user, 2026-10-24: like iOS apps; a Dotty "App Store" may come one
+  day, so privacy and security count): a cartridge reads and writes only its own
+  `/cartridges/<id>/data/` and its own NVS namespace (named after its id), never another
+  cartridge's files or settings, and no feature may depend on another cartridge being installed
+  (it may never be, and any can leave the catalog). Shared things are **system** data, owned by
+  dotty_core and set by the system or the app (e.g. `clock/utcOffset`, `wifi`, bonds, the touch
+  calibration). Only the system — the launcher, Rescue and dotty_core's own commands
+  (`storage.remove`, `storage.list`, backups' whole-card mode) — may touch every cartridge's folder.
+  Known exception to remove: the companion reads the Weather cartridge's place (NVS `weather/name`,
+  `placeName()` in `cartridges/companion/main.cpp`); it should become a system setting the app sends.
 - Flash layout 2 (`partitions.csv`, since 2026-10-06; migrating needs one USB flash of
   launcher + rescue + a cartridge, NVS stays): `rescue` = factory 768 KB (Rescue, 593 KB),
   `launcher` = ota_1 2 MB, `ota_0` 4 MB = the active cartridge, `storage` 1.1 MB (unused
