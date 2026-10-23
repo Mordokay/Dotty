@@ -32,6 +32,7 @@
 #include "macro_store.h"
 #include "recall.h"
 #include "relay_link.h"
+#include "relay_path.h"
 #include "script_writer.h"
 #include "piece_buffer.h"
 #include "ui.h"
@@ -57,7 +58,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.3.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.4.0");
 
 namespace {
 
@@ -166,6 +167,16 @@ uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy r
 size_t sentFrames = 0;  // this turn's voice, for the log
 int peakDb = -60;
 
+// Which way the chat goes (relay_path.h): through the iPhone, or Wi-Fi raced against it. The Wi-Fi
+// task claims the session (wifiBegan) under a short lock before its WebSocket opens; a phone that wins
+// before that cancels the task and the relay starts at once; after it, Wi-Fi keeps the chat (the grace
+// window may still hand it to the phone).
+RelayPath path;
+relay::Transport relayTransport;
+portMUX_TYPE raceLock = portMUX_INITIALIZER_UNLOCKED;
+volatile bool wifiBegan = false;
+bool phoneWasReady = false;
+
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
 volatile bool connecting = false;
@@ -267,6 +278,7 @@ void loadMacros();
 
 void disconnect(const char *why) {
   reviewStart = 0;
+  path.end();
   cancelWriter();
   early.clear();
   earlyAt = 0;
@@ -518,6 +530,12 @@ void writerTask(void *arg) {
 
 // The job in writerBody / jobKind, now; or once the last (cancelled) task has finished: never two
 // TLS requests on top of Live.
+// In a chat through the iPhone, Dotty has no Wi-Fi: the text-model call goes through the phone.
+struct RelayFetch {
+  bool active = false;
+  uint32_t job = 0, id = 0, startedAt = 0;
+} relayFetch;
+
 void launchJob() {
   if (jobs.busy()) {
     jobPending = true;
@@ -525,6 +543,11 @@ void launchJob() {
     return;
   }
   jobPending = false;
+  if (live.overRelay() && live.connected()) {
+    relayFetch = {true, jobs.start(), relay::fetch(kWriterModel, writerBody), millis()};
+    LOGI(jobKind == Job::Recall ? "recall" : "writer", "through the iPhone (%u bytes)", static_cast<unsigned>(writerBody.size()));
+    return;
+  }
   WriterRequest *r = new WriterRequest{jobs.start(), jobKind, writerBody, sessionKeyText};
   const uint32_t job = r->job;
   if (xTaskCreatePinnedToCore(writerTask, "writer", 12288, r, 1, nullptr, 0) != pdPASS) {
@@ -589,6 +612,18 @@ void cancelWriter() {
 
 // Both done (the text, and the question's own turn): Live reads it, or answers itself if it failed.
 void writerPoll() {
+  if (relayFetch.active) {  // collected even when nobody waits for it any more: the slot frees
+    int status = 0;
+    std::string body;
+    if (relay::takeFetched(relayFetch.id, status, body)) {
+      Written w = status ? parseWritten(status, body) : Written();
+      if (!status) w.error = body;
+      LOGI("writer", "through the iPhone: %s in %lu ms (%u characters)", w.ok ? "written" : w.error.c_str(),
+           static_cast<unsigned long>(millis() - relayFetch.startedAt), static_cast<unsigned>(w.text.size()));
+      relayFetch.active = false;
+      jobs.finish(relayFetch.job, w);
+    }
+  }
   if (!writing) return;
   if (jobPending && !jobs.busy()) launchJob();
   if (!written && jobs.take(writtenResult)) written = true;
@@ -620,6 +655,7 @@ GeminiLive::Callbacks callbacks() {
          heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
     lastTurnAt = millis();
     awaitingConnect = false;
+    if (!live.overRelay()) path.wifiReady(millis());
     // A weak signal makes replies stutter (-78 dBm: 13 s to the first audio, refills mid-reply).
     const String status = net::rssi() < -75 ? String("Weak Wi-Fi: replies may stutter") : idleStatus();
     if (net::rssi() < -75) LOGW("companion", "weak Wi-Fi: %d dBm", net::rssi());
@@ -680,6 +716,7 @@ GeminiLive::Callbacks callbacks() {
     reading = false;
     tokens += longTokens;
     longTokens = 0;
+    path.replyEnded(millis());
     voice::playEnd();
     std::string full = said;  // history gets the whole reply, even before it's all been heard
     for (const TextPiece &p : textQueue) full += p.text;
@@ -696,7 +733,8 @@ GeminiLive::Callbacks callbacks() {
     if (info.state == Talk::Thinking) setState(Talk::After);  // text-only replies end here
   };
   cb.failed = [](const std::string &error, int retry, bool quota, bool badKey) {
-    if (connecting) {  // inside the connect task: the loop reports it once the task ends
+    if (live.overRelay()) path.phoneLost();
+    if (connecting && !live.overRelay()) {  // inside the connect task: the loop reports it once the task ends
       connectError = error.c_str();
       return;
     }
@@ -723,13 +761,36 @@ GeminiLive::Callbacks callbacks() {
       setState(Talk::Error, "Key not accepted. Check it in the app.");
     } else {
       disconnect(error.c_str());
-      setState(Talk::Error, "Connection lost");
+      setState(Talk::Error, error == "Lost the phone" ? "Lost the phone" : "Connection lost");
     }
   };
   return cb;
 }
 
 // ---------- connecting ----------
+
+LiveConfig sessionConfig() {
+  LiveConfig config;
+  config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
+  config.voice = sessionVoice.c_str();
+  config.textOnly = settings.textOnly;
+  config.systemInstruction = systemInstruction(nowText(time(nullptr)), placeName().c_str(), personaSection, memorySection);
+  return config;
+}
+
+// The chat through the iPhone (resume: the Wi-Fi chat's handle when the phone takes it over).
+void beginRelay(const std::string &resume = "") {
+  LiveConfig config = sessionConfig();
+  if (!resume.empty()) config.resumeHandle = resume;
+  awaitingConnect = true;  // cleared when Gemini is ready
+  if (!live.begin(sessionKeyText.c_str(), config, callbacks(), relayTransport)) {
+    awaitingConnect = false;
+    path.phoneLost();
+    return setState(Talk::Error, "Lost the phone");
+  }
+  LOGI("companion", "chat through the iPhone%s", resume.empty() ? "" : " (taking over the Wi-Fi chat)");
+  if (info.state != Talk::Listening && !awaitingSend) setState(Talk::Connecting, "Waking up...");
+}
 
 void connectLoop(void *) {
   String error;
@@ -739,23 +800,25 @@ void connectLoop(void *) {
     error = "";
     ok = net::connect(error);
   }
+  bool claimed = false;  // the session is Wi-Fi's (the phone didn't win first)
   if (ok) {
-    LiveConfig config;
-    config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
-    config.voice = sessionVoice.c_str();
-    config.textOnly = settings.textOnly;
-    config.systemInstruction = systemInstruction(nowText(time(nullptr)), placeName().c_str(),
-                                                 personaSection, memorySection);  // Task 4: the companion's persona
-    ok = live.begin(sessionKeyText.c_str(), config, callbacks());
+    taskENTER_CRITICAL(&raceLock);
+    if (!cancelConnect) claimed = wifiBegan = true;
+    taskEXIT_CRITICAL(&raceLock);
+  }
+  if (ok && claimed) {
+    ok = live.begin(sessionKeyText.c_str(), sessionConfig(), callbacks());
     if (!ok) error = "Can't reach Gemini";
+  } else if (ok) {
+    error = "the phone took the chat";
   } else {
     LOGW("companion", "Wi-Fi: %s", error.c_str());
     error = "No Wi-Fi";
   }
   if (!ok && connectError.isEmpty()) connectError = error;
   if (!ok) LOGW("companion", "connect failed: %s", error.c_str());
-  if (cancelConnect) {  // locked (or stopped) meanwhile: undo it here, the loop restores the rest
-    live.close();
+  if (cancelConnect) {  // locked, stopped or the phone won meanwhile: undo what this task opened
+    if (claimed) live.close();
     net::disconnect();
   }
   connecting = false;
@@ -775,10 +838,12 @@ void connect() {
   sessionVoice = settings.voice;
   saveKeys();
   LOGI("companion", "session on key %d of %u (..%s)", key + 1, static_cast<unsigned>(settings.keys.size()), keyHint(sessionKeyText).c_str());
-  // Bluetooth is off for the session: with it on (and the iPhone connected) TLS left 36 KB of
-  // internal RAM, largest block 12 KB, and a session hung in its sends until the watchdog reset.
-  // (mbedTLS in PSRAM changed that: dev key T keeps it on, for the soak test.)
-  if (!keepBle) ble::stop();
+  // The phone (connected, said hello, holds this key) takes the chat; else Wi-Fi is raced against it
+  // with Bluetooth left on (mbedTLS in PSRAM made that fit; Bluetooth goes off once Wi-Fi has won and
+  // the grace window is over).
+  const bool phone = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText));
+  path.press(millis(), phone);
+  phoneWasReady = phone;
   power::setWakeLock(power::kWakeLockNetwork, true);
   memorySection = memories::store().promptSection();  // the task only reads these copies
   {  // the last ten chats' summaries: what it has talked about lately
@@ -793,6 +858,11 @@ void connect() {
   if (!macroList.all().empty()) personaSection += "\n\n" + macrosSection(macroList);  // its phrases → run_macro
   sessionCompanion = companions::active().id;
   evolvedThisChat = false;
+  connectError = "";
+  if (phone) return beginRelay();
+  LOGI("companion", "no phone yet: racing Wi-Fi against it");
+  wifiBegan = false;
+  cancelConnect = false;
   connecting = true;
   awaitingConnect = true;
   connectError = "";
@@ -1291,7 +1361,8 @@ void notifyChanged() {
 }
 
 // For one BLE command: memories and history of the companion named in `companion` (default: the
-// active one), back to the active one afterwards. Commands only run while no session is open.
+// active one), back to the active one afterwards. Over Wi-Fi commands only run while no session is
+// open (Bluetooth is off); in a chat through the iPhone they run during it too (the loop's own task).
 struct CompanionScope {
   bool switched = false;
   bool known = true;  // false: `companion` names nobody — the command must refuse, not act on the active one
@@ -2094,7 +2165,8 @@ void loop() {
     ble::notify(event);
     LOGI("companion", "told the app: new chats for %s", historyNewsCompanion.c_str());
   }
-  if (!connecting) live.poll();  // the connect task owns the socket until it ends
+  // The connect task owns the WebSocket until it ends; a relay session is the loop's from the start.
+  if (!connecting || live.overRelay()) live.poll();
   // The phone's data when no relay session reads it (a session's own poll does, in order).
   if (!(live.overRelay() && live.connected())) relay::poll();
   voice::poll();
@@ -2136,6 +2208,33 @@ void loop() {
     }
   }
 
+  // The race and the grace window (relay_path.h).
+  // A phone counts only if it holds this chat's key (else it can't relay it).
+  const bool phoneNow = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText));
+  if (phoneNow && !phoneWasReady) {
+    path.phoneReady(millis());
+    if (path.takeDropWifi()) {  // the phone won: the Wi-Fi task stops short of Gemini
+      bool tooLate;
+      taskENTER_CRITICAL(&raceLock);
+      tooLate = wifiBegan;
+      if (!tooLate) cancelConnect = true;
+      taskEXIT_CRITICAL(&raceLock);
+      if (tooLate) {  // Wi-Fi is about to be ready: it keeps the chat (the window may hand it over)
+        path.end();
+        path.press(millis(), false);
+        LOGI("companion", "the phone came back late: Wi-Fi keeps this chat");
+      } else {
+        LOGI("companion", "the phone won the race");
+        beginRelay();
+      }
+    }
+  }
+  phoneWasReady = phoneNow;
+  if (live.connected() && !live.overRelay() && ble::running() && !path.keepBluetooth(millis())) {
+    LOGI("companion", "Wi-Fi chat: Bluetooth off for the rest of it");
+    ble::stop();
+  }
+
   // Push-to-talk: talking can start before the session is ready.
   const bool bootDown = digitalRead(PIN_BTN_BOOT) == LOW || simulatedHold;
   static uint32_t downAt = 0;
@@ -2150,6 +2249,13 @@ void loop() {
     }
     if (info.state == Talk::Connecting || info.state == Talk::Ready || info.state == Talk::After ||
         info.state == Talk::Speaking) {
+      if (live.connected() && !live.overRelay() && relay::phoneReady() && path.takeHandover()) {
+        // The phone arrived in the grace window: the chat moves to it, the conversation resumed.
+        const std::string handle = live.latestHandle();
+        live.close();
+        net::disconnect();
+        beginRelay(handle);
+      }
       startTalking();  // also interrupts a reply
     }
   }

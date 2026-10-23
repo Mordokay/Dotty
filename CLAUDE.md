@@ -1013,6 +1013,26 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   after the last turn ("Software caused connection abort"): open per turn (0.5 s), as the relay
   does. Verdict: go. Open: ADPCM sound quality, and Dotty locking itself (its lock turns BLE off) — a
   relay companion needs Bluetooth while locked (a connection keeps Dotty awake: battery to measure).
+- **Relay through the iPhone** (0.4.0; spec/plan `docs/superpowers/{specs,plans}/2026-10-23-companion-relay*`):
+  a chat goes through the phone over Bluetooth when it's connected, said `relay.hello {version: 1,
+  keys: [last 4]}` (the app, each ready connection) and holds the session's key; else Wi-Fi is
+  **raced** against it from the first press with Bluetooth left on (`relay_path.h`, host-tested):
+  the phone first → the Wi-Fi task is cancelled before it claims the session (`wifiBegan` under
+  `raceLock`; after the claim Wi-Fi keeps the chat), Wi-Fi first → Bluetooth stays on for the grace
+  window (until the first reply ends, at least 15 s), then off; a phone arriving in it takes the chat
+  at the next press with `live.latestHandle()` (the conversation resumes). `GeminiLive` runs over a
+  `LiveTransport` (`WsTransport` or `relay::Transport`, `relay_link.*`): the same Live API JSON as
+  `relay.send` events, the voice as IMA ADPCM (`adpcm.h`, 570 samples a frame with its own start
+  state; the app's `Adpcm.swift` matches byte for byte), back on Data `0x02` JSON pieces
+  (`relay_messages.*`, host-tested; Gemini's messages without audio) and `0x01` ADPCM reply frames,
+  in order; relay audio counts as turn content. The writer / recall / macros go as `relay.fetch` →
+  the phone's `generateContent` (`RelayFetch`, collected even after a cancel). "Lost the phone" ends
+  a relay turn. App: `Features/Relay/RelayService` (app-wide, attached at launch; Gemini WebSocket per
+  chat with the Keychain key matching the hint, 100 ms voice messages, `RelayMessages.stripAudio /
+  pieces`, one ordered outbox, a background task per reply / fetch), "Relay log" under Macros.
+  Swift checks: `tools/relay_swift_check/check.swift`. `ble::notify` retries a short message and
+  takes a ready JSON string; `ble::notifyRaw`, `ble::mtu`. In a relay chat Bluetooth is on, so the
+  app's chat screen updates after every reply.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
