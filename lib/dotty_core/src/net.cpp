@@ -91,7 +91,9 @@ bool join(const String &ssid, const String &password, String &error, const uint8
   // A mesh has several access points with one name: by default the ESP32 joins the first one its
   // scan meets, which was often a far node (-86 dBm where the near one gave -40). Scan every
   // channel and take the strongest.
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  // Given an access point and channel, probe just that channel (the all-channel mode scanned every
+  // channel anyway and took 6.5 s with Bluetooth sharing the radio).
+  WiFi.setScanMethod(bssid ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   if (bssid) WiFi.begin(ssid.c_str(), password.c_str(), channel, bssid);
   else WiFi.begin(ssid.c_str(), password.c_str());
@@ -235,10 +237,17 @@ std::vector<Network> scan() {
     if (name.isEmpty()) continue;  // hidden network
     auto same = std::find_if(found.begin(), found.end(), [&](const Network &n) { return n.ssid == name; });
     if (same != found.end()) {
-      same->rssi = max(same->rssi, static_cast<int>(WiFi.RSSI(i)));
+      if (WiFi.RSSI(i) > same->rssi) {  // a stronger access point of the same network
+        same->rssi = WiFi.RSSI(i);
+        memcpy(same->bssid, WiFi.BSSID(i), sizeof(same->bssid));
+        same->channel = WiFi.channel(i);
+      }
       continue;
     }
-    found.push_back({name, WiFi.RSSI(i), WiFi.encryptionType(i) != WIFI_AUTH_OPEN, findSaved(name) != nullptr});
+    Network n{name, WiFi.RSSI(i), WiFi.encryptionType(i) != WIFI_AUTH_OPEN, findSaved(name) != nullptr};
+    memcpy(n.bssid, WiFi.BSSID(i), sizeof(n.bssid));
+    n.channel = WiFi.channel(i);
+    found.push_back(n);
   }
   WiFi.scanDelete();
   if (wasOff) disconnect();
@@ -281,6 +290,9 @@ bool connect(String &error) {
   std::stable_partition(visible.begin(), visible.end(), [](const Network &n) { return n.ssid == preferredSsid; });
   for (const Network &n : visible) {
     const Saved *s = findSaved(n.ssid);
+    // Straight to the strongest access point the scan found (no second scan), the normal join if not.
+    if (s && n.channel > 0 && join(s->ssid, s->password, error, n.bssid, n.channel, 6000)) return true;
+    if (aborting) return false;
     if (s && join(s->ssid, s->password, error)) return true;
     if (aborting) return false;
   }

@@ -22,6 +22,8 @@ struct Network {
   int rssi = 0;         // dBm, from the last scan
   bool secure = false;  // needs a password
   bool known = false;   // Dotty has its password
+  uint8_t bssid[6] = {};  // its strongest access point (a mesh has several), and that one's channel
+  int channel = 0;
 };
 
 void begin();
