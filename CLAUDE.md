@@ -942,8 +942,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (history, pages, replay, pings), voice + typed turns, the writer's minute, a recall, replay, the
   review — everything worked, but the lows were 22 KB free / largest 9 KB and 24 KB / largest 6 KB,
   the second session started 6 KB lower (38 vs 44 KB), and Wi-Fi's deinit timed out once at the end.
-  Too thin to ship: sessions keep Bluetooth off. Next: Wi-Fi/LWIP buffers in PSRAM
-  (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`), then the same soak.
+  Too thin to ship: sessions keep Bluetooth off. Tried Wi-Fi/LWIP buffers in PSRAM too
+  (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y`): no gain (43 KB at the start, lows 19/6 and 24/6 KB,
+  the same deinit timeout), so it was taken back out.
 - **Recall + summaries** (user, 2026-10-23: "what was I saying yesterday morning?", "when I talked
   about bananas the other day…"): `recall {question, from?, to?, topic?}` (`recall.*`, host-tested):
   the model turns the words into dates (the instruction now carries the date: `nowText`, "Friday 23
