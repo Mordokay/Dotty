@@ -69,6 +69,16 @@ String day(const String &yyyymmdd) {
   return out + "]";
 }
 
+std::string raw(const String &yyyymmdd) {
+  File f = SD_MMC.open(dir() + "/" + yyyymmdd + ".jsonl");
+  std::string out;
+  if (!f) return out;
+  out.reserve(f.size());
+  uint8_t chunk[512];
+  for (int n; (n = f.read(chunk, sizeof(chunk))) > 0;) out.append(reinterpret_cast<const char *>(chunk), n);
+  return out;
+}
+
 bool forget(const String &yyyymmdd) {
   if (yyyymmdd.length()) return SD_MMC.remove(dir() + "/" + yyyymmdd + ".jsonl");
   for (const String &d : days()) SD_MMC.remove(dir() + "/" + d + ".jsonl");

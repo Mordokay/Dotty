@@ -28,6 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
+#include "recall.h"
 #include "script_writer.h"
 #include "piece_buffer.h"
 #include "ui.h"
@@ -130,10 +131,14 @@ bool hasLast = false;
 Replay replay;
 std::string replayShown;  // the replay's text on screen
 int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when talksToday last counted
-// A long answer (write_long): a text model writes it in a task (a second TLS connection), then
-// Live reads it aloud word for word. The reading goes out once the question's turn and the writing
-// are both done; the speaker's stream stays open between them, so it plays as one reply.
-bool writing = false;            // write_long asked, the note not sent yet
+// A long answer (write_long) or a look back (recall): a text model works in a task (a second TLS
+// connection), then Live reads the text aloud word for word / talks about what was found. The
+// follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
+// moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
+enum class Job { Write, Recall };
+Job jobKind = Job::Write;
+std::string jobCallId;           // recall's function call, answered with what was found
+bool writing = false;            // a job asked, its follow-up not sent yet
 bool reading = false;            // the reading turn is under way
 bool readingStarts = false;      // its first text piece is next
 bool questionDone = false;       // the question's own turn (often "Give me a moment") has ended
@@ -244,6 +249,7 @@ String placeName() {
 
 void cancelWriter();
 void startWriter(const std::string &what, int seconds);
+void startRecall(const ToolCall &c);
 
 void disconnect(const char *why) {
   reviewStart = 0;
@@ -411,8 +417,17 @@ int applyMemory(const ToolCall &c) {
       change = "evolved " + c.field + ": " + c.why;
       notifyChanged();
     }
-  } else if (c.name == "write_long") {  // a text model writes it, then Live reads it (see writerLoop)
+  } else if (c.name == "write_long") {  // a text model writes it, then Live reads it (see writerPoll)
     if (!writing && !reading) startWriter(c.text, c.seconds);
+  } else if (c.name == "recall") {  // a text model reads its past chats (see writerPoll)
+    if (!writing && !reading) startRecall(c);
+  } else if (c.name == "summarize") {  // the end-of-chat review's few words about this chat
+    if (reviewStart) {
+      File f = SD_MMC.open(companions::folder(sessionCompanion) + "/summaries.jsonl", FILE_APPEND);
+      if (f) f.println(summaryLine(time(nullptr), c.text).c_str());
+      f.close();
+      change = "summary: " + c.text;
+    }
   } else if (c.name == "forget_memory") {
     const Memory *m = store.find(c.memoryId);
     const std::string text = m ? m->text : "";
@@ -423,7 +438,7 @@ int applyMemory(const ToolCall &c) {
   }
   LOGI("companion", "%s %d: %s %.40s", c.name.c_str(), c.memoryId, note.length() ? note.c_str() : "ignored", change.c_str());
   if (!change.empty()) {
-    if (c.name != "set_name" && c.name != "evolve") memories::save();
+    if (c.name != "set_name" && c.name != "evolve" && c.name != "summarize") memories::save();
     turnMemory += (turnMemory.empty() ? "" : "; ") + change;
   }
   if (note.length()) {
@@ -460,7 +475,8 @@ void writerTask(void *arg) {
   esp_http_client_cleanup(client);
   Written w = err == ESP_OK ? parseWritten(status, body) : Written();
   if (err != ESP_OK) w.error = esp_err_to_name(err);
-  LOGI("writer", "%s in %lu ms: %u characters, %d tokens%s%s", w.ok ? "written" : "failed",
+  LOGI(jobKind == Job::Recall ? "recall" : "writer", "%s in %lu ms: %u characters, %d tokens%s%s",
+       w.ok ? (jobKind == Job::Recall ? w.text.substr(0, 120).c_str() : "written") : "failed",
        static_cast<unsigned long>(millis() - started), static_cast<unsigned>(w.text.size()), w.tokens,
        w.ok ? "" : ": ", w.error.c_str());
   if (job == writerJob) {  // nobody gave up on it meanwhile
@@ -470,41 +486,71 @@ void writerTask(void *arg) {
   vTaskDelete(nullptr);
 }
 
-void startWriter(const std::string &what, int seconds) {
-  writerBody = writerRequest(companions::active(), memorySection, what, seconds);
+void startJob() {
   writerKey = sessionKeyText;
   writing = true;
   written = false;
   questionDone = false;
   const uint32_t job = ++writerJob;
-  LOGI("writer", "%d s: %.100s", seconds, what.c_str());
   if (xTaskCreatePinnedToCore(writerTask, "writer", 12288, reinterpret_cast<void *>(static_cast<uintptr_t>(job)), 1,
                               nullptr, 0) != pdPASS) {
     writtenResult = Written();
     writtenResult.error = "no task";
     written = true;
   }
-  info.writing = true;
+  info.writing = jobKind == Job::Write;
+  info.recalling = jobKind == Job::Recall;
   redraw = true;
+}
+
+void startWriter(const std::string &what, int seconds) {
+  writerBody = writerRequest(companions::active(), memorySection, what, seconds);
+  jobKind = Job::Write;
+  LOGI("writer", "%d s: %.100s", seconds, what.c_str());
+  startJob();
+}
+
+// Those days of this companion's own history, the topic's exchanges (with their neighbours), to
+// the text model with the question.
+void startRecall(const ToolCall &c) {
+  const Profile &who = companions::active();
+  const std::string name = who.awake() ? who.name : "the companion";
+  const int64_t now = time(nullptr);
+  std::vector<std::string> all;
+  const std::vector<std::string> days = recallDays(c.from, c.to, now);
+  for (const std::string &day : days)
+    for (const std::string &e : exchanges(history::raw(day.c_str()), name)) all.push_back(e);
+  const std::vector<std::string> kept = byTopic(all, c.group);
+  writerBody = recallRequest(name, c.text, now, historyBlock(kept));
+  jobKind = Job::Recall;
+  jobCallId = c.id;
+  LOGI("recall", "\"%.80s\": %s..%s (%u days), topic \"%s\": %u of %u exchanges, %u bytes", c.text.c_str(),
+       days.front().c_str(), days.back().c_str(), static_cast<unsigned>(days.size()), c.group.c_str(),
+       static_cast<unsigned>(kept.size()), static_cast<unsigned>(all.size()), static_cast<unsigned>(writerBody.size()));
+  startJob();
 }
 
 void cancelWriter() {
   writerJob++;  // a running task's result is dropped
   writing = reading = questionDone = written = false;
   longTokens = 0;
-  if (info.writing) redraw = true;
-  info.writing = false;
+  if (info.writing || info.recalling) redraw = true;
+  info.writing = info.recalling = false;
 }
 
 // Both done (the text, and the question's own turn): Live reads it, or answers itself if it failed.
 void writerPoll() {
-  if (!writing || !written || !questionDone) return;
+  if (!writing || !written) return;
+  // The question's own turn has ended, or nothing has come for a moment (a recall without words
+  // never ends its turn: the reply to the result is that question's).
+  if (!questionDone && millis() - live.lastMessageAt() < 1500) return;
   writing = questionDone = written = false;
-  info.writing = false;
+  info.writing = info.recalling = false;
   if (writtenResult.tokens) usage::addTokens(writtenResult.tokens, sessionKey);
   if (!live.ready()) return cancelWriter();
   reading = readingStarts = true;
-  live.sendText(writtenResult.ok ? readAloudNote(writtenResult.text) : writerFailedNote());
+  if (jobKind == Job::Recall) live.answerTool(jobCallId, "recall", recallResult(writtenResult));
+  else live.sendText(writtenResult.ok ? readAloudNote(writtenResult.text) : writerFailedNote(), true);
   if (info.state != Talk::Speaking) setState(Talk::Thinking);
   lastTurnAt = millis();
   redraw = true;
@@ -641,7 +687,7 @@ void connectLoop(void *) {
     config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
     config.voice = sessionVoice.c_str();
     config.textOnly = settings.textOnly;
-    config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(),
+    config.systemInstruction = systemInstruction(nowText(time(nullptr)), placeName().c_str(),
                                                  personaSection, memorySection);  // Task 4: the companion's persona
     ok = live.begin(sessionKeyText.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
@@ -677,6 +723,14 @@ void connect() {
   ble::stop();
   power::setWakeLock(power::kWakeLockNetwork, true);
   memorySection = memories::store().promptSection();  // the task only reads these copies
+  {  // the last ten chats' summaries: what it has talked about lately
+    File f = SD_MMC.open(companions::folder(companions::active().id) + "/summaries.jsonl");
+    std::string sums;
+    while (f && f.available()) sums += static_cast<char>(f.read());
+    f.close();
+    const std::string section = summariesSection(sums, 10);
+    if (!section.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + section;
+  }
   personaSection = personaText(companions::active());
   sessionCompanion = companions::active().id;
   evolvedThisChat = false;
@@ -1978,7 +2032,7 @@ void loop() {
          heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
   }
   if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
-  // dev: a typed question (U; G asks for a one-minute guided meditation), and ending the chat now (E:
+  // dev: a typed question (U; G a one-minute guided meditation; V "yesterday morning?", R surfing the other day), and ending the chat now (E:
   // the review runs, which may evolve it).
   // H: the word-for-word test — can Live read a prepared script exactly (a path to real control
   // over length and wording)? The transcript is compared with the script on the Mac (K dumps it).
@@ -1996,6 +2050,8 @@ void loop() {
                                          "slang into everything. I love that about you!"
                       : input.key == 'G' ? "I want you to guide me for 1 minute on a meditation exercise. I will follow "
                                            "your instructions."
+                      : input.key == 'V' ? "What was I saying yesterday morning?"
+                      : input.key == 'R' ? "When I talked about surfing the other day, what was I saying about it?"
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();

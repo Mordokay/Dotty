@@ -53,6 +53,8 @@ std::string reviewPrompt(const Profile &p) {
          "about yourself in the third person (never \"I\"), without the \"- \" marks. If you already "
          "called evolve in this chat, don't call it again.";
   }
+  s += " Then call summarize once with one or two sentences about this chat (what you talked about, what the user "
+       "said or felt), for your future self.";
   s += " Then reply with just: Bye.";
   if (!p.awake()) return s;
   s += "\n\nYour character now:";

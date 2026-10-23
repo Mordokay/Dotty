@@ -49,7 +49,13 @@ void GeminiLive::endTurn() {
   ws_.sendText(liveActivityEnd());
 }
 
-void GeminiLive::sendText(const std::string &text) {
+void GeminiLive::answerTool(const std::string &id, const std::string &name, const std::string &result) {
+  if (!turns_.turn) turns_.start();  // still open (nothing said yet): the reply is that question's
+  lastMessageAt_ = millis();
+  ws_.sendText(liveToolResult(id, name, result));
+}
+
+void GeminiLive::sendText(const std::string &text, bool continueQuestion) {
   JsonDocument doc;
   JsonObject turn = doc["clientContent"]["turns"].add<JsonObject>();
   turn["role"] = "user";
@@ -57,7 +63,7 @@ void GeminiLive::sendText(const std::string &text) {
   doc["clientContent"]["turnComplete"] = true;
   std::string out;
   serializeJson(doc, out);
-  turns_.start();
+  if (!continueQuestion || !turns_.turn) turns_.start();
   lastMessageAt_ = millis();
   ws_.sendText(out);
 }

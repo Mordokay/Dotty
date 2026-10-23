@@ -36,7 +36,11 @@ class GeminiLive {
   void startTurn();
   void sendAudio(const int16_t *pcm, size_t frames);
   void endTurn();
-  void sendText(const std::string &text);  // a typed turn (the end-of-chat memory review)
+  // A typed turn. continueQuestion: a follow-up of the question still open (the writer's reading),
+  // so its reply isn't taken for a new question's leftovers.
+  void sendText(const std::string &text, bool continueQuestion = false);
+  // A tool's late answer with content (recall): opens a question for the reply it brings.
+  void answerTool(const std::string &id, const std::string &name, const std::string &result);  // a typed turn (the end-of-chat memory review)
   void sendRaw(const std::string &frame) { ws_.sendText(frame); }  // dev: anything, even invalid
   void poll();
   void close();

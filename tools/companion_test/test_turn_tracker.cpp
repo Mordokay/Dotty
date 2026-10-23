@@ -15,6 +15,8 @@ int main() {
   o = t.message(false, Names{"remember", "forget_memory"}, false, 0);
   CHECK("memory calls in a question: applied", o.apply.at(0) && o.apply.at(1));
   CHECK("memory calls in a question: answered", o.answer.at(0) && o.answer.at(1));
+  o = t.message(false, Names{"recall"}, false, 0);
+  CHECK("recall in a question: applied, not answered (Dotty answers with what it found)", o.apply.at(0) && !o.answer.at(0));
   o = t.message(false, Names{"set_name"}, false, 0);
   CHECK("set_name in a question: applied and answered", o.apply.at(0) && o.answer.at(0));
   o = t.message(false, Names{}, true, 800);  // its own turn, no speech yet

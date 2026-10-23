@@ -16,6 +16,7 @@ void append(const std::string &you, const std::string &dotty, const std::string 
             const std::string &memory = "");
 std::vector<String> days();       // "2026-10-22", newest first
 String day(const String &yyyymmdd);  // that day's lines as a JSON array text ("[]" if none)
+std::string raw(const String &yyyymmdd);  // that day's file as it is (.jsonl; "" if none)
 bool forget(const String &yyyymmdd);  // "" = every day
 
 }  // namespace history

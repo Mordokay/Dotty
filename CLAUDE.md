@@ -937,6 +937,21 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   commands, a voice turn still answered in 1.2 s, and the writer's second TLS worked on top (HTTP
   200, 147 words, 2.9 s) with 35 KB free, largest 27 KB left. It fits, thinly (the old hang came
   at 36 KB / largest 12 KB): sessions still turn Bluetooth off until a longer soak says otherwise.
+- **Recall + summaries** (user, 2026-10-23: "what was I saying yesterday morning?", "when I talked
+  about bananas the other day…"): `recall {question, from?, to?, topic?}` (`recall.*`, host-tested):
+  the model turns the words into dates (the instruction now carries the date: `nowText`, "Friday 23
+  October 2026, 14:05 (2026-10-23)"); Dotty reads those days of the companion's own history (no
+  dates: the last 30; ≤ 31 days), keeps the exchanges mentioning the topic and their neighbours
+  (none match: all), newest ≤ 60 KB, and Flash-Lite answers from them only (morning < 12:00, "Nothing
+  found" else); that goes back as the tool's result (`liveToolResult`, scheduling WHEN_IDLE) — the
+  first tool not answered "ok" at once (TurnTracker skips it; `GeminiLive::answerTool` opens or
+  continues the question, as `sendText(…, continueQuestion)` does for the writer's reading).
+  Shares the writer's task and hold (note "Thinking back..."); the follow-up also goes out after
+  1.5 s of quiet (a recall without words never ends its turn). Measured on Debug: topic "surfing" →
+  14 of 94 exchanges, found in 2.2 s, told back; "yesterday morning" → the right day (58
+  exchanges), "Nothing found", said honestly. **Summaries**: the review calls `summarize {text}`
+  → `summaries.jsonl` in the companion's folder; the last 10 (dated) join the instruction's memory
+  section. Dev keys V ("yesterday morning?"), R ("surfing the other day").
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

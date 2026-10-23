@@ -33,6 +33,7 @@ std::string liveAudio(const int16_t *pcm, size_t frames);
 struct ToolCall {
   std::string id, name, mood, text, group;
   std::string field, why;  // evolve (its value travels as the text)
+  std::string from, to;    // recall's dates (its question travels as the text, its topic as the group)
   int memoryId = -1;
   int seconds = 0;  // long_reply
   int resultId = -1;  // set by Dotty: the memory remember created, sent back so the model can name it
@@ -40,6 +41,8 @@ struct ToolCall {
 
 // Dotty's answer to function calls: done, and don't start a new reply because of them.
 std::string liveToolsOk(const std::vector<ToolCall> &answered);
+// A tool answered with content the model should talk about (recall): spoken once it's idle.
+std::string liveToolResult(const std::string &id, const std::string &name, const std::string &result);
 
 struct LiveEvent {
   bool setupComplete = false, turnComplete = false, generationComplete = false, interrupted = false, goAway = false;

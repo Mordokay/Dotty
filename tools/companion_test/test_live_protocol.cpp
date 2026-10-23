@@ -45,7 +45,11 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,"));
+  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,"));
+  CHECK("recall: needs the question; dates and topic optional",
+        fns[7]["parameters"]["required"].size() == 1 && fns[7]["parameters"]["required"][0] == "question" &&
+            !fns[7]["parameters"]["properties"]["from"].isNull() && !fns[7]["parameters"]["properties"]["topic"].isNull());
+  CHECK("summarize: needs the text", fns[8]["parameters"]["required"][0] == "text");
   CHECK("write_long: needs what and seconds",
         fns[6]["parameters"]["required"][0] == "what" && fns[6]["parameters"]["required"][1] == "seconds");
   std::string fields;
@@ -106,6 +110,15 @@ int main() {
                              evolved.calls[0].why == "braver");
   const LiveEvent lng = liveParse(R"({"toolCall":{"functionCalls":[{"name":"write_long","args":{"what":"a story","seconds":60},"id":"l1"}]}})");
   CHECK("parse: write_long's what and seconds", lng.calls.size() == 1 && lng.calls[0].text == "a story" && lng.calls[0].seconds == 60);
+  const LiveEvent rec = liveParse(R"({"toolCall":{"functionCalls":[{"name":"recall","args":{"question":"bananas?","from":"2026-10-16","to":"2026-10-23","topic":"bananas"},"id":"r1"}]}})");
+  CHECK("parse: recall", rec.calls.size() == 1 && rec.calls[0].text == "bananas?" && rec.calls[0].from == "2026-10-16" &&
+                             rec.calls[0].to == "2026-10-23" && rec.calls[0].group == "bananas");
+  JsonDocument res;
+  deserializeJson(res, liveToolResult("r1", "recall", "The user loves frozen bananas."));
+  JsonObject r0 = res["toolResponse"]["functionResponses"][0];
+  CHECK("tool result: carries what was found, and is spoken about", std::string(r0["id"] | "") == "r1" &&
+            std::string(r0["response"]["result"] | "") == "The user loves frozen bananas." &&
+            std::string(r0["response"]["scheduling"] | "") == "WHEN_IDLE");
   CHECK("parse: set_name's name", named.calls.size() == 1 && named.calls[0].name == "set_name" && named.calls[0].text == "Luna");
   const LiveEvent said = liveParse(sample("said.json"));
   CHECK_EQ("parse: reply text", said.outputText, std::string("That is absolutely "));
@@ -133,6 +146,7 @@ int main() {
                                             noPlace.compare(noPlace.size() - 24, 24, "The local time is 14:05.") == 0);
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
+  CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);
   CHECK("instruction: no memories, no memory list", noPlace.find("What you remember") == std::string::npos);
   const std::string section = "What you remember about the user:\nPeople: [12] Your sister is called Ana.";

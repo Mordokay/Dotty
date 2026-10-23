@@ -43,6 +43,8 @@ int main() {
   CHECK("review: pinned lines marked", has(review, "- horny (pinned)") && has(review, "- witty\n"));
   CHECK("review: not twice in a chat", has(review, "already called evolve in this chat"));
   CHECK("review: same style as the sheet", has(review, "third person"));
+  CHECK("review: a summary of the chat", has(review, "call summarize"));
+  CHECK("review: asleep ones summarize too", has(reviewPrompt(presetProfile("coach")), "call summarize"));
   CHECK("review: ends with Bye", has(review, "Bye."));
   CHECK("review: asleep, no evolving", !has(reviewPrompt(presetProfile("coach")), "evolve"));
   return failures ? 1 : 0;

@@ -126,6 +126,14 @@ std::string liveSetup(const LiveConfig &config) {
                                             "exercise, an explanation in depth)");
   param(longer, "what", "STRING", true);
   param(longer, "seconds", "INTEGER", true);
+  // Looking back at past chats (recall.h): Dotty answers it with what was found.
+  JsonObject recall = declare("recall", "Look back at your past chats with the user, by date or topic");
+  param(recall, "question", "STRING", true);
+  param(recall, "from", "STRING", false)["description"] = "first day, YYYY-MM-DD";
+  param(recall, "to", "STRING", false)["description"] = "last day, YYYY-MM-DD";
+  param(recall, "topic", "STRING", false)["description"] = "a word or two the chat was about";
+  JsonObject summary = declare("summarize", "At the end of a chat: one or two sentences about it, for your future self");
+  param(summary, "text", "STRING", true);
   return serialize(doc);
 }
 
@@ -156,6 +164,16 @@ std::string liveToolsOk(const std::vector<ToolCall> &answered) {
   return serialize(doc);
 }
 
+std::string liveToolResult(const std::string &id, const std::string &name, const std::string &result) {
+  JsonDocument doc;
+  JsonObject response = doc["toolResponse"]["functionResponses"].add<JsonObject>();
+  response["id"] = id;
+  response["name"] = name;
+  response["response"]["result"] = result;
+  response["response"]["scheduling"] = "WHEN_IDLE";  // it talks about it once it has finished speaking
+  return serialize(doc);
+}
+
 LiveEvent liveParse(const std::string &message) {
   LiveEvent e;
   JsonDocument doc;
@@ -170,11 +188,13 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | "")));  // set_name, evolve, write_long
+    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | (args["question"] | ""))));
     c.field = args["field"] | "";
     c.why = args["why"] | "";
     c.seconds = args["seconds"] | 0;
-    c.group = args["group"] | "";
+    c.group = args["group"] | (args["topic"] | "");  // recall's topic travels as the group
+    c.from = args["from"] | "";
+    c.to = args["to"] | "";
     if (args["id"].is<int>()) c.memoryId = args["id"];
     else if (args["id"].is<float>()) c.memoryId = static_cast<int>(args["id"].as<float>());  // 12.0
     e.calls.push_back(c);
@@ -223,7 +243,12 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "exercise or meditation, a deep explanation, anything over about 30 seconds), don't answer it yourself: call "
       "write_long with what to write (the request, with what matters from the chat) and how many seconds it "
       "should last (at most 60), and say at most a few words like \"Give me a moment\". Dotty then gives you the "
-      "text to read aloud. You are on a "
+      "text to read aloud. You can look back at your past chats: when the user asks about something said before that "
+      "isn't in your memories or recent chats (\"what was I saying yesterday morning?\", \"what did I say about "
+      "bananas the other day?\"), call recall with their question, the days it points to (from and to, YYYY-MM-DD; "
+      "today's date is below; leave them out when unsure) and a topic word if there is one, and say at most a few "
+      "words like \"Let me think back\". Then tell the user what comes back, or honestly that you don't remember. "
+      "You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "
       "Call set_mood with each reply. Let your voice carry your mood: how you sound matters as much as what you say. "

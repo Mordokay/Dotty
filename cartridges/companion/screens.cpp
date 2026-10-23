@@ -196,6 +196,7 @@ void draw(const ScreenInfo &shownInfo) {
   else avatar::draw(epd, (kW - kAvatarSize) / 2, 2, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
   if (info.writing) drawNote("Writing...", small, true);
+  else if (info.recalling) drawNote("Thinking back...", small);
   else if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   drawHistoryIcon();
   if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);

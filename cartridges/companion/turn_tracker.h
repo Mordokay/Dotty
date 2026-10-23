@@ -6,7 +6,8 @@
 // Which of Gemini's messages belong to the question you asked (plain C++, host-tested).
 //  - Function calls are applied only inside a question. set_mood is answered once per question
 //    (each answer made Gemini speak again, a loop that ran by itself for minutes); memory calls
-//    are each answered (see the companion-memories plan, Task 3).
+//    are each answered (see the companion-memories plan, Task 3). recall isn't: Dotty answers it
+//    later with what it found (GeminiLive::answerTool, which opens a question for the reply).
 //  - Asking again mid-reply (an interruption) drops the old reply's leftovers until its turn
 //    ends, so they don't land in the new question (a phantom history entry, the real reply lost).
 //  - Turns nobody asked for are counted as spent tokens; three of them close the session.
@@ -43,6 +44,7 @@ struct TurnTracker {
     }
     for (size_t i = 0; i < toolNames.size() && turn; i++) {
       o.apply[i] = true;
+      if (toolNames[i] == "recall") continue;  // Dotty answers it later, with what it found
       if (toolNames[i] != "set_mood") o.answer[i] = true;
       else if (!moodAnswered_) o.answer[i] = moodAnswered_ = true;
     }
