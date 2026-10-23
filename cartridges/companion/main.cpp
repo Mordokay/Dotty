@@ -66,6 +66,10 @@ using shell::epd;
 
 constexpr uint32_t kHoldMs = 120;                   // BOOT held this long = listen (as in Tape)
 constexpr uint32_t kIdleMs = 3 * 60 * 1000;         // no turn for this long: disconnect
+// Through the iPhone a chat wraps up (review, close) after 20 s of quiet: iOS cuts the phone's idle
+// connection 35-90 s after a reply. The next press resumes the conversation (within 10 minutes).
+constexpr uint32_t kRelayIdleMs = 20 * 1000;
+constexpr uint32_t kResumeKeepMs = 10 * 60 * 1000;
 constexpr uint32_t kAfterMs = 4000;                 // the mood face after a reply
 constexpr uint32_t kFrameMs = 1500;                 // the avatar's animation clock
 constexpr uint32_t kErrorMs = 6000;                 // a connection error shows this long
@@ -276,8 +280,11 @@ void startRecall(const ToolCall &c);
 void startMacro(const Macro &m);
 void loadMacros();
 
+uint32_t resumeKeptAt = 0;  // when a conversation was kept to resume (kResumeKeepMs)
+
 void disconnect(const char *why) {
   reviewStart = 0;
+  if (!live.resumeHandle().empty()) resumeKeptAt = millis();
   path.end();
   cancelWriter();
   early.clear();
@@ -702,6 +709,7 @@ GeminiLive::Callbacks callbacks() {
     if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
       usage::addTokens(tokens, sessionKey);
       LOGI("companion", "memory review done (%d tokens)", tokens);
+      if (live.overRelay()) live.keepResume();  // the next press carries on this conversation
       disconnect("idle");
       reviewStart = 0;
       setState(Talk::Offline, idleStatus());
@@ -733,6 +741,15 @@ GeminiLive::Callbacks callbacks() {
     if (info.state == Talk::Thinking) setState(Talk::After);  // text-only replies end here
   };
   cb.failed = [](const std::string &error, int retry, bool quota, bool badKey) {
+    if (live.overRelay() && reviewStart && !quota && !badKey && ble::connected()) {
+      // The end-of-chat review over a connection the iPhone already dropped: the chat is over
+      // anyway — close quietly and let the next press resume the conversation.
+      LOGI("companion", "the iPhone's connection ended before the review: the next press resumes");
+      live.keepResume();
+      disconnect("closed after the chat");
+      setState(Talk::Offline, idleStatus());
+      return;
+    }
     if (live.overRelay()) path.phoneLost();
     if (connecting && !live.overRelay()) {  // inside the connect task: the loop reports it once the task ends
       connectError = error.c_str();
@@ -837,6 +854,7 @@ void connectLoop(void *) {
 
 void connect() {
   if (connecting || live.connected()) return;
+  if (!live.resumeHandle().empty() && millis() - resumeKeptAt > kResumeKeepMs) live.forgetResume();  // too old
   if (settings.keys.empty()) return setState(Talk::Error, "Key missing. Add it in the app.");
   // One key per session, in turn; a goAway resume stays on the key that holds the conversation.
   const bool resuming = !live.resumeHandle().empty() && sessionKey >= 0 && sessionKey < (int)settings.keys.size();
@@ -2323,7 +2341,8 @@ void loop() {
   // Idle: disconnect (Bluetooth back on), and let Dotty lock as usual.
   // Before closing, a silent review: Gemini goes over the chat and saves what it missed (it once
   // kept "likes popcorn" but not "my name is Peter"). Closed when it's done, or after 20 s.
-  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > kIdleMs) {
+  const uint32_t idleMs = live.overRelay() ? kRelayIdleMs : kIdleMs;
+  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs) {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
       LOGI("companion", "chat over: memory review");

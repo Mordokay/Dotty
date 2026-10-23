@@ -86,6 +86,15 @@ void GeminiLive::poll() {
     }
     return;
   }
+  // iOS cuts a background app's sockets once it's suspended (35-90 s after a reply): over the relay
+  // that's 1006 with nobody talking. Not an error: the next press resumes the conversation.
+  if (overRelay() && !turns_.turn && t_->closeCode() == 1006 && !config_.resumeHandle.empty()) {
+    LOGI("live", "the iPhone dropped the idle connection: the next press resumes");
+    ready_ = false;
+    goAway_ = true;
+    turns_ = TurnTracker();
+    return;
+  }
   const LiveClose why = liveCloseInfo(t_->closeCode(), t_->closeReason());
   ready_ = false;
   turns_ = TurnTracker();

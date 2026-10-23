@@ -82,7 +82,13 @@ final class RelayService {
             fetch(id: message["id"] as? Int ?? 0, model: message["model"] as? String ?? "", body: message["body"] as? String ?? "")
         case "relay.close":
             log("Dotty closed the chat")
-            closeSocket()
+            if outbox.isEmpty {
+                closeSocket()
+            } else {  // the last frames still go out before the app may sleep
+                socket?.cancel(with: .normalClosure, reason: nil)
+                socket = nil
+                endAfterQueue()
+            }
         default:
             break
         }
@@ -189,10 +195,9 @@ final class RelayService {
             }
         }
         pump()
-        if let root = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any],
-           (root["serverContent"] as? [String: Any])?["turnComplete"] as? Bool == true {
-            endAfterQueue()  // the reply is out once the queue empties
-        }
+        // The background task stays until Dotty closes the chat (or iOS's time runs out): ended after
+        // a reply, iOS suspended the app within ~20 s and cut the socket before Dotty's end-of-chat
+        // review could run.
     }
 
     /// Samples per audio frame that fit one write (570 at the usual 290 bytes).
@@ -261,7 +266,7 @@ final class RelayService {
             }
             log(String(format: "fetch %d: %d in %.1f s", id, status, Date().timeIntervalSince(started)))
             reply(["relay": "fetched", "id": id, "status": status, "body": text])
-            endAfterQueue()
+            if socket == nil { endAfterQueue() }  // inside a chat the chat's task carries on
         }
     }
 

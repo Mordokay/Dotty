@@ -57,6 +57,10 @@ class GeminiLive {
   const std::string &resumeHandle() const { return goAway_ ? config_.resumeHandle : kNone; }
   // The latest handle the server gave (the grace-window hand-over moves the chat with it).
   const std::string &latestHandle() const { return config_.resumeHandle; }
+  // Keep this conversation for the next connect (a relay chat closed while idle: the next press resumes).
+  void keepResume() {
+    if (!config_.resumeHandle.empty()) goAway_ = true;
+  }
   // Another companion from now on: never resume this conversation in it.
   void forgetResume() {
     goAway_ = false;
