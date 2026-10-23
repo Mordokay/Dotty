@@ -57,6 +57,9 @@ void notify(JsonDocument &event);
 void notify(const std::string &json);  // JSON already serialized (the relay's events)
 
 bool connected();
+// The current connection's number (0 = none): a new one each time a phone connects, so something
+// tied to one connection (the companion's relay chat) knows when that connection has ended.
+uint32_t connection();
 // Raw bytes on the Event characteristic (the companion's relay voice: the app sets 0x1F-first
 // values aside). false when the stack's buffers are full: try again shortly. Payload ≤ mtu() - 3.
 bool notifyRaw(const uint8_t *data, size_t len);

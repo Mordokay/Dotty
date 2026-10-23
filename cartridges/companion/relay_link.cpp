@@ -144,6 +144,7 @@ bool Transport::open(const std::string &apiKey, const std::string &setupJson, co
   closeCode_ = 0;
   closeReason_.clear();
   open_ = true;
+  connection_ = ble::connection();
   const std::string hint = apiKey.size() >= 4 ? apiKey.substr(apiKey.size() - 4) : apiKey;
   ble::notify(relayOpenEvent(setupJson, hint, resume));
   return true;
@@ -177,7 +178,7 @@ bool Transport::poll(const std::function<void(const std::string &)> &onJson,
   if (!open_) return true;
   bool closed = false;
   drain(&onJson, &onAudio, &closed, &closeCode_, &closeReason_);
-  if (!ble::connected()) {  // the phone went away: the session with it
+  if (ble::connection() != connection_) {  // the phone went away (even if it's back): the session with it
     closed = true;
     closeCode_ = 0;
     closeReason_ = "Lost the phone";
@@ -190,12 +191,12 @@ bool Transport::poll(const std::function<void(const std::string &)> &onJson,
 }
 
 void Transport::close() {
-  if (open_ && ble::connected()) ble::notify(std::string(relayCloseEvent()));
+  if (connected()) ble::notify(std::string(relayCloseEvent()));
   open_ = false;
 }
 
 bool Transport::connected() const {
-  return open_ && ble::connected();
+  return open_ && ble::connection() == connection_;
 }
 
 }  // namespace relay

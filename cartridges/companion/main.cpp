@@ -1361,7 +1361,9 @@ void onTap(uint16_t x, uint16_t y) {
 }
 
 void onLock() {
-  if (live.connected() || connecting) disconnect("locked");
+  // Locking turns Bluetooth off at once: a relay chat is over even though nothing reported it yet.
+  if (live.overRelay() && live.connected() == false && !live.latestHandle().empty()) live.keepResume();
+  if (live.connected() || connecting || live.overRelay()) disconnect("locked");
   if (info.state != Talk::Error) setState(Talk::Offline, idleStatus());
 }
 

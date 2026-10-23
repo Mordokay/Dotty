@@ -47,6 +47,7 @@ class Transport : public LiveTransport {
 
  private:
   bool open_ = false;
+  uint32_t connection_ = 0;  // the BLE connection it was opened on (a reconnect never revives it)
   uint16_t closeCode_ = 0;
   std::string closeReason_;
 };

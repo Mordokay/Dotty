@@ -35,6 +35,7 @@ QueueHandle_t queue = nullptr;
 NimBLECharacteristic *infoChar = nullptr;
 NimBLECharacteristic *eventChar = nullptr;
 volatile bool isConnected = false;
+volatile uint32_t connectionCount = 0;  // each phone connection gets a new number
 volatile uint16_t peerMtu = 23;
 volatile bool pairingActive = false;
 volatile uint32_t passkey = 0;
@@ -50,6 +51,7 @@ struct QueuedCommand {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
     isConnected = true;
+    connectionCount++;
     peerMtu = 23;
     LOGI("ble", "connected %s, interval %.2f ms", info.getAddress().toString().c_str(),
          info.getConnInterval() * 1.25f);
@@ -346,6 +348,10 @@ int poll() {
 
 // Messages longer than one notification go out in pieces: every piece but the last starts
 // with kMoreFollows (0x1E), and the client appends pieces until one doesn't.
+uint32_t connection() {
+  return isConnected ? connectionCount : 0;
+}
+
 bool notifyRaw(const uint8_t *data, size_t len) {
   return isConnected && eventChar && eventChar->notify(data, len);
 }
