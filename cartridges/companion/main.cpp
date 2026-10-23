@@ -28,6 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
+#include "long_reply.h"
 #include "piece_buffer.h"
 #include "ui.h"
 #include "memories.h"
@@ -127,6 +128,8 @@ bool hasLast = false;
 Replay replay;
 std::string replayShown;  // the replay's text on screen
 int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when talksToday last counted
+LongReply longReply;  // a reply asked to last longer than one part: Dotty asks for the rest
+int longTokens = 0;   // the earlier parts' tokens (the exchange is counted once, at its end)
 bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
@@ -391,6 +394,9 @@ int applyMemory(const ToolCall &c) {
       change = "evolved " + c.field + ": " + c.why;
       notifyChanged();
     }
+  } else if (c.name == "long_reply") {  // the reply comes in parts: see cb.turnDone
+    longReply.begin(c.seconds);
+    LOGI("companion", "long reply: %u s asked", static_cast<unsigned>(longReply.targetMs() / 1000));
   } else if (c.name == "forget_memory") {
     const Memory *m = store.find(c.memoryId);
     const std::string text = m ? m->text : "";
@@ -468,6 +474,19 @@ GeminiLive::Callbacks callbacks() {
       setState(Talk::Offline, idleStatus());
       return;
     }
+    // A long reply: this part has arrived, ask for the next one now (it arrives while this part is
+    // still playing, so the speech runs on without a gap).
+    const uint32_t receivedMs = settings.textOnly ? said.size() * 1000 / 15 : replyFrames / 24;  // ~15 characters a second
+    if (longReply.more(receivedMs) && sessionCompanion == companions::active().id) {
+      longTokens += tokens;
+      LOGI("companion", "long reply: part %d after %.1f s", longReply.parts() + 1, receivedMs / 1000.0f);
+      live.sendText(longReply.next(receivedMs));
+      lastTurnAt = millis();
+      return;
+    }
+    tokens += longTokens;
+    longTokens = 0;
+    longReply.end();
     voice::playEnd();
     std::string full = said;  // history gets the whole reply, even before it's all been heard
     for (const TextPiece &p : textQueue) full += p.text;
@@ -625,6 +644,8 @@ void startTalking() {
   reviewStart = 0;  // talking again: the end-of-chat review is dropped (its reply drains away)
   stopReplay();
   beginLast();
+  longReply.end();
+  longTokens = 0;
   turnMemory.clear();
   textQueue.clear();
   replyFrames = 0;
@@ -1797,13 +1818,18 @@ void loop() {
   if (input.key == 'r') simulatedHold = !simulatedHold;
   if (input.key == 't') onTap(10, 10);
   if (input.key == 'X') live.close();
+  if (input.key == 'K') {  // dev: the saved last line's text, piece by piece with its time (read with `d`)
+    for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
+  }
   if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
-  // dev: a typed question (U; G asks for a whole minute of surf talk), and ending the chat now (E:
+  // dev: a typed question (U; G asks for a one-minute guided meditation), and ending the chat now (E:
   // the review runs, which may evolve it).
   const bool longAsk = input.key == 'G';
   if ((input.key == 'U' || longAsk) && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();
     beginLast();
+    longReply.end();
+    longTokens = 0;
     said.clear();  // a turn like startTalking's, without opening a voice activity
     info.said = "";
     turnMood = info.mood = "neutral";
@@ -1811,8 +1837,7 @@ void loop() {
     turnMemory.clear();
     textQueue.clear();
     replyFrames = 0;
-    heard = longAsk ? "Talk to me about surfing for one whole minute, about 150 words: your favourite waves, a "
-                      "wipeout story, tips for a beginner. Don't stop early, I'm listening."
+    heard = longAsk ? "I want you to guide me for 1 minute on a meditation exercise. I will follow your instructions."
                     : "You know what, after all our talks about the sea you've become a real ocean lover yourself. You get "
             "excited about waves now, and you keep slipping surf slang into everything. I love that about you!";
     info.heard = heard.c_str();

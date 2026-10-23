@@ -902,9 +902,19 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   stop it. BLE `companion.replay {action?: play|pause|toggle|stop, loop?}` → {last?: {text,
   seconds, t, mood}, replay: {state, loop, available}} (also in `companion.status`), event
   `companion.replay`. App: `LastLineCard` on the active companion's page (play/pause, loop).
-  Saving a 30 s line takes ~1 s after it has played. **Long replies**: asked for "one whole
-  minute" (also "about 150 words", and with an instruction rule to honour lengths) Gemini Live
-  gave 25-30 s every time — a single spoken reply stays around half a minute.
+  Saving a 30 s line takes ~1 s after it has played. **Long replies** (user, 2026-10-23): asked
+  for "one whole minute" (also "about 150 words", and with a rule to honour lengths) Gemini Live
+  gave 25-30 s every time, so long answers are **stitched** (`long_reply.h`, host-tested): the
+  model calls `long_reply {seconds}` (30-60 s; Dotty keeps a minute of audio) and speaks a first
+  part of ~30 s without wrapping up; when a part has arrived (turnComplete) Dotty sends a "carry on
+  exactly where you stopped… speak about 30 seconds… don't wrap up yet" note, so the next part
+  arrives while this one plays; with ≤ 20 s left the note asks for the last part (≥ 10 s) to end
+  it, and nothing follows a last part (a "last part" asked with 32 s left came out at 11 s, ended,
+  and two more parts ended again). ≤ 4 parts; one history line, tokens counted once; the replay
+  records every part as one line. Rule: "in a long answer, speak in full, flowing sentences" (surf
+  talk came out in fragments). Measured: surf 49 s in 4 parts (25 + 11 + 8 + 5 s before the
+  fixes), the user's "guide me for 1 minute on a meditation" 44 s in 4 parts of 10-15 s (calm
+  speech makes short parts whatever is asked), ~15k tokens. Dev key K logs the saved line's pieces.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

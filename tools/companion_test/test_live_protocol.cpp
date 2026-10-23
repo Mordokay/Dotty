@@ -45,7 +45,8 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the six tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,"));
+  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,long_reply,"));
+  CHECK("long_reply: needs seconds", fns[6]["parameters"]["required"][0] == "seconds");
   std::string fields;
   for (JsonVariant f : fns[5]["parameters"]["properties"]["field"]["enum"].as<JsonArray>()) fields += std::string(f.as<const char *>()) + ",";
   CHECK_EQ("evolve: the five fields", fields, std::string("personality,traits,quirks,speaking,backstory,"));
@@ -102,6 +103,8 @@ int main() {
   const LiveEvent evolved = liveParse(R"({"toolCall":{"functionCalls":[{"name":"evolve","args":{"field":"traits","value":"a\nb","why":"braver"},"id":"e1"}]}})");
   CHECK("parse: evolve", evolved.calls.size() == 1 && evolved.calls[0].field == "traits" && evolved.calls[0].text == "a\nb" &&
                              evolved.calls[0].why == "braver");
+  const LiveEvent lng = liveParse(R"({"toolCall":{"functionCalls":[{"name":"long_reply","args":{"seconds":60},"id":"l1"}]}})");
+  CHECK("parse: long_reply's seconds", lng.calls.size() == 1 && lng.calls[0].seconds == 60);
   CHECK("parse: set_name's name", named.calls.size() == 1 && named.calls[0].name == "set_name" && named.calls[0].text == "Luna");
   const LiveEvent said = liveParse(sample("said.json"));
   CHECK_EQ("parse: reply text", said.outputText, std::string("That is absolutely "));
@@ -128,6 +131,10 @@ int main() {
   CHECK("instruction: no place clause", noPlace.find("user is in") == std::string::npos &&
                                             noPlace.compare(noPlace.size() - 24, 24, "The local time is 14:05.") == 0);
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
+  CHECK("instruction: long answers come in parts", noPlace.find("call long_reply") != std::string::npos &&
+                                                       noPlace.find("without wrapping up") != std::string::npos &&
+                                                       noPlace.find("about 30 seconds") != std::string::npos &&
+                                                       noPlace.find("full, flowing sentences") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);
   CHECK("instruction: no memories, no memory list", noPlace.find("What you remember") == std::string::npos);
   const std::string section = "What you remember about the user:\nPeople: [12] Your sister is called Ana.";
