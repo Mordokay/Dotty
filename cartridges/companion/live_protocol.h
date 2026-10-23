@@ -32,6 +32,7 @@ std::string liveAudio(const int16_t *pcm, size_t frames);
 // update_memory {id, text, group?}, forget_memory {id}.
 struct ToolCall {
   std::string id, name, mood, text, group;
+  std::string field, why;  // evolve (its value travels as the text)
   int memoryId = -1;
   int resultId = -1;  // set by Dotty: the memory remember created, sent back so the model can name it
 };

@@ -115,6 +115,12 @@ std::string liveSetup(const LiveConfig &config) {
   param(forget, "id", "INTEGER", true);
   JsonObject named = declare("set_name", "Save your own name when the user tells you who you are");
   param(named, "name", "STRING", true);
+  // Only in the end-of-chat review, at most once (Dotty ignores the rest): companions change slowly.
+  JsonObject evolve = declare("evolve", "Change one part of your own character after a chat that really changed you");
+  JsonObject field = param(evolve, "field", "STRING", true);
+  for (const char *f : {"personality", "traits", "quirks", "speaking", "backstory"}) field["enum"].add(f);
+  param(evolve, "value", "STRING", true);
+  param(evolve, "why", "STRING", true);
   return serialize(doc);
 }
 
@@ -159,7 +165,9 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | (args["name"] | "");  // set_name's name travels as the text
+    c.text = args["text"] | (args["name"] | (args["value"] | ""));  // set_name's name, evolve's value
+    c.field = args["field"] | "";
+    c.why = args["why"] | "";
     c.group = args["group"] | "";
     if (args["id"].is<int>()) c.memoryId = args["id"];
     else if (args["id"].is<float>()) c.memoryId = static_cast<int>(args["id"].as<float>());  // 12.0

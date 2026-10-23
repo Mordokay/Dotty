@@ -31,5 +31,17 @@ int main() {
   CHECK("asleep: asks, then set_name", has(waking, "set_name"));
   CHECK("asleep: still themselves underneath", has(waking, asleep.personality.c_str()));
   CHECK("asleep: acting too", has(waking, "commit to it"));
+
+  // The end-of-chat review: memories, then maybe one slow change, pinned lines marked.
+  Profile partner = presetProfile("partner");
+  partner.name = "Mia";
+  partner.traits = {"witty", "horny"};
+  partner.pins["traits"] = {"horny"};
+  const std::string review = reviewPrompt(partner);
+  CHECK("review: memories first", has(review, "remember or update_memory"));
+  CHECK("review: evolve, rarely", has(review, "evolve") && has(review, "Most chats change nothing"));
+  CHECK("review: pinned lines marked", has(review, "- horny (pinned)") && has(review, "- witty\n"));
+  CHECK("review: ends with Bye", has(review, "Bye."));
+  CHECK("review: asleep, no evolving", !has(reviewPrompt(presetProfile("coach")), "evolve"));
   return failures ? 1 : 0;
 }

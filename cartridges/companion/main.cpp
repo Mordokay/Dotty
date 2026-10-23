@@ -122,6 +122,7 @@ uint32_t bleBackAt = 0;
 bool toneTest = false, toneScreen = false;
 int toneVariant = 0, toneIndex = 0;  // variant 0 = acting, 1 = plain; index = the scenario
 std::string toneRec;
+bool evolvedThisReview = false;  // one change per chat: companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
@@ -364,6 +365,17 @@ int applyMemory(const ToolCall &c) {
       note = String("Named: ") + screenName(p);
       change = "named: " + p.name;
     }
+  } else if (c.name == "evolve") {  // only in the end-of-chat review, once
+    Profile p = companions::active();
+    const std::string before = fieldText(p, c.field);
+    if (reviewStart && !evolvedThisReview && applyEvolution(p, c.field, c.text) && fieldText(p, c.field) != before &&
+        companions::save(p)) {
+      evolvedThisReview = true;
+      companions::logEvolution(p.id, evolutionLine(time(nullptr), c.field, before, fieldText(p, c.field), c.why));
+      note = "Changed a little";
+      change = "evolved " + c.field + ": " + c.why;
+      notifyChanged();
+    }
   } else if (c.name == "forget_memory") {
     const Memory *m = store.find(c.memoryId);
     const std::string text = m ? m->text : "";
@@ -374,7 +386,7 @@ int applyMemory(const ToolCall &c) {
   }
   LOGI("companion", "%s %d: %s %.40s", c.name.c_str(), c.memoryId, note.length() ? note.c_str() : "ignored", change.c_str());
   if (!change.empty()) {
-    if (c.name != "set_name") memories::save();
+    if (c.name != "set_name" && c.name != "evolve") memories::save();
     turnMemory += (turnMemory.empty() ? "" : "; ") + change;
   }
   if (note.length()) {
@@ -942,6 +954,13 @@ void profileReply(JsonObject o, const Profile &p, bool full) {
   o["backstory"] = p.backstory;
   for (const std::string &t : p.traits) o["traits"].add(t);
   for (const std::string &q : p.quirks) o["quirks"].add(q);
+  JsonObject pins = o["pins"].to<JsonObject>();  // line numbers of the fields as they are
+  for (const char *f : {"personality", "traits", "quirks", "speaking", "backstory"}) {
+    const std::vector<int> lines = pinnedLines(p, f);
+    if (lines.empty()) continue;
+    JsonArray a = pins[f].to<JsonArray>();
+    for (const int i : lines) a.add(i);
+  }
 }
 
 // Long fields and photos come in pieces (BLE commands ≤ 512 bytes), kept aside until complete.
@@ -1065,6 +1084,72 @@ void registerCompanionCommands() {
     reply["ok"] = ok;
     if (!ok) return;
     companions::save(p);
+    if (p.id == companions::active().id) applyCompanion();
+    notifyChanged();
+  });
+  // {id, field, lines: [n…]}: the field's pinned lines (numbers of its lines as they are now).
+  ble::on("companion.pins", [](JsonObjectConst args, JsonObject reply) {
+    const Profile *found = companions::find(args["id"] | "");
+    if (!found) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
+    Profile p = *found;
+    std::vector<int> lines;
+    for (JsonVariantConst i : args["lines"].as<JsonArrayConst>()) lines.push_back(i | -1);
+    if (!setPins(p, args["field"] | "", lines)) {
+      reply["ok"] = false;
+      reply["error"] = "bad field";
+      return;
+    }
+    companions::save(p);
+    if (p.id == companions::active().id) applyCompanion();
+    notifyChanged();
+  });
+  // {id, limit? = 20}: how it has changed, newest first.
+  ble::on("companion.evolution", [](JsonObjectConst args, JsonObject reply) {
+    const std::string id = args["id"] | companions::active().id;
+    if (!companions::find(id)) {
+      reply["ok"] = false;
+      reply["error"] = "unknown companion";
+      return;
+    }
+    const int limit = args["limit"] | 20;
+    JsonArray changes = reply["changes"].to<JsonArray>();
+    for (const Evolution &e : parseEvolutions(companions::evolutionLog(id))) {
+      if (static_cast<int>(changes.size()) >= limit) break;
+      JsonObject o = changes.add<JsonObject>();
+      o["t"] = e.t;
+      o["field"] = e.field;
+      o["before"] = e.before;
+      o["after"] = e.after;
+      o["why"] = e.why;
+      o["undone"] = e.undone;
+    }
+  });
+  // {id, t}: puts that change's `before` back (the whole field) and logs the undo.
+  ble::on("companion.evolution.undo", [](JsonObjectConst args, JsonObject reply) {
+    const std::string id = args["id"] | "";
+    const Profile *found = companions::find(id);
+    const int64_t t = args["t"] | static_cast<int64_t>(0);
+    const Evolution *change = nullptr;
+    const std::vector<Evolution> log = found ? parseEvolutions(companions::evolutionLog(id)) : std::vector<Evolution>();
+    for (const Evolution &e : log)
+      if (e.t == t && !e.undone) change = &e;
+    if (!change) {
+      reply["ok"] = false;
+      reply["error"] = found ? "no such change" : "unknown companion";
+      return;
+    }
+    Profile p = *found;
+    const std::string now = fieldText(p, change->field);
+    if (!setField(p, change->field, change->before) || !companions::save(p)) {
+      reply["ok"] = false;
+      reply["error"] = "couldn't save";
+      return;
+    }
+    companions::logEvolution(id, evolutionLine(time(nullptr), change->field, now, change->before, "undone", t));
     if (p.id == companions::active().id) applyCompanion();
     notifyChanged();
   });
@@ -1524,9 +1609,8 @@ void loop() {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
       LOGI("companion", "chat over: memory review");
-      live.sendText(
-          "(Dotty, not the user: the chat is over.) Go over it: call remember or update_memory for anything worth "
-          "keeping that you haven't saved yet. Then reply with just: Bye.");
+      evolvedThisReview = false;
+      live.sendText(reviewPrompt(companions::active()));  // memories, then maybe one change to itself
     } else if (!reviewStart || millis() - reviewStart > 20000) {
       reviewStart = 0;
       disconnect("idle");
@@ -1557,6 +1641,17 @@ void loop() {
   if (input.key == 'r') simulatedHold = !simulatedHold;
   if (input.key == 't') onTap(10, 10);
   if (input.key == 'X') live.close();
+  // dev: a typed question (U), and ending the chat now (E: the review runs, which may evolve it).
+  if (input.key == 'U' && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
+    startTalking();
+    voice::stopListening();
+    heard = "I took up surfing this week and I'm hooked. I want you to get into it with me, read up on it!";
+    info.heard = heard.c_str();
+    live.sendText(heard);
+    releasedAt = millis();
+    setState(Talk::Thinking);
+  }
+  if (input.key == 'E' && (info.state == Talk::Ready || info.state == Talk::After)) lastTurnAt = millis() - kIdleMs - 1;
   if (input.key == 'm') {
     static const char *moods[] = {"happy", "sad", "surprised", "thinking", "laughing", "love", "neutral"};
     static int i = 0;

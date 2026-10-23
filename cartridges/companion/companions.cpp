@@ -176,4 +176,16 @@ bool remove(const std::string &id) {
   return true;
 }
 
+bool logEvolution(const std::string &id, const std::string &line) {
+  File f = SD_MMC.open(folder(id) + "/evolution.jsonl", FILE_APPEND);
+  if (!f) return false;
+  const bool ok = f.print(line.c_str()) == line.size() && f.print("\n") == 1;
+  f.close();
+  return ok;
+}
+
+std::string evolutionLog(const std::string &id) {
+  return readFile(folder(id) + "/evolution.jsonl");
+}
+
 }  // namespace companions

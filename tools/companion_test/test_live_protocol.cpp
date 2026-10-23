@@ -45,7 +45,10 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the five tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,"));
+  CHECK_EQ("setup: the six tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,"));
+  std::string fields;
+  for (JsonVariant f : fns[5]["parameters"]["properties"]["field"]["enum"].as<JsonArray>()) fields += std::string(f.as<const char *>()) + ",";
+  CHECK_EQ("evolve: the five fields", fields, std::string("personality,traits,quirks,speaking,backstory,"));
   CHECK("set_name: needs name", fns[4]["parameters"]["required"][0] == "name");
   CHECK("setup: every tool non-blocking", allNonBlocking);
   std::string groups;
@@ -96,6 +99,9 @@ int main() {
                                                 many.calls[1].group == "people");
   CHECK("parse: forget_memory's id", many.calls.size() == 3 && many.calls[2].memoryId == 12);
   const LiveEvent named = liveParse(R"({"toolCall":{"functionCalls":[{"name":"set_name","args":{"name":"Luna"},"id":"c9"}]}})");
+  const LiveEvent evolved = liveParse(R"({"toolCall":{"functionCalls":[{"name":"evolve","args":{"field":"traits","value":"a\nb","why":"braver"},"id":"e1"}]}})");
+  CHECK("parse: evolve", evolved.calls.size() == 1 && evolved.calls[0].field == "traits" && evolved.calls[0].text == "a\nb" &&
+                             evolved.calls[0].why == "braver");
   CHECK("parse: set_name's name", named.calls.size() == 1 && named.calls[0].name == "set_name" && named.calls[0].text == "Luna");
   const LiveEvent said = liveParse(sample("said.json"));
   CHECK_EQ("parse: reply text", said.outputText, std::string("That is absolutely "));

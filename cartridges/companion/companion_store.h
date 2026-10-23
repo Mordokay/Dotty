@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,8 @@ struct Profile {
   std::vector<std::string> traits, quirks;
   std::string voice = "Zephyr", avatar = "robot";  // avatar: one of the 10 ids, or "photo"
   int64_t created = 0;
+  // Lines that never change by themselves (evolution puts them back), per field: the user's pins.
+  std::map<std::string, std::vector<std::string>> pins;
   bool awake() const { return !name.empty(); }  // named = woken up
 };
 
@@ -30,6 +33,27 @@ std::string cutField(const std::string &text, int maxPoints);  // trimmed, at a 
 // name, personality, speaking, backstory, voice, avatar, traits, quirks (lists = one per line).
 // An unknown field, voice or avatar → false and nothing changes.
 bool setField(Profile &p, const std::string &field, const std::string &value);
+
+// Evolution (spec: companion roles, "Evolution"): a field as lines (lists one per item, prose
+// split on line breaks); "" for anything but the five character fields.
+std::string fieldText(const Profile &p, const std::string &field);
+// The end-of-chat review's change: the whole new field, one line per item/sentence. Pinned lines
+// it dropped go back at their old place; over the limit, the last unpinned lines give way.
+// false = not one of personality, traits, quirks, speaking, backstory.
+bool applyEvolution(Profile &p, const std::string &field, const std::string &value);
+// Pins over BLE go as line numbers of the field as it is now (a pinned sentence can be longer than
+// a 512-byte command); the profile keeps their text. setPins replaces that field's pins.
+std::vector<int> pinnedLines(const Profile &p, const std::string &field);
+bool setPins(Profile &p, const std::string &field, const std::vector<int> &lines);  // false: not a character field
+// One line of evolution.jsonl: {t, field, before, after, why[, undo]} (undo = the t it undid).
+std::string evolutionLine(int64_t t, const std::string &field, const std::string &before, const std::string &after,
+                          const std::string &why, int64_t undoOf = 0);
+struct Evolution {
+  int64_t t = 0;
+  std::string field, before, after, why;
+  bool undone = false;
+};
+std::vector<Evolution> parseEvolutions(const std::string &jsonl);  // newest first, undo lines hidden
 
 class CompanionList {
  public:

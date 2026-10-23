@@ -1,6 +1,7 @@
 // uses: cartridges/companion/companion_store.cpp cartridges/companion/memory_store.cpp
 // The companions: each one's profile (fields, limits, presets) and the list (ids, the 8 cap, the
 // active one when one goes, moving piece 2a's data to Debug).
+#include <algorithm>
 #include <string>
 
 #include "check.h"
@@ -74,6 +75,49 @@ int main() {
   CompanionList one;
   one.create("debug");
   CHECK("remove: never the last one", !one.remove("debug", active, "debug") && one.has("debug"));
+
+  // Evolution: pinned lines never change by themselves.
+  Profile e = presetProfile("partner");
+  e.traits = {"affectionate", "supportive", "witty", "thoughtful", "teaser", "horny"};
+  e.pins["traits"] = {"affectionate", "horny"};
+  Profile er;
+  CHECK("pins: round trip", parseProfile(profileJson(e), er) && er.pins["traits"] == e.pins["traits"]);
+  Profile ev = e;
+  CHECK("evolve: applied", applyEvolution(ev, "traits", "supportive\nwitty\nbrave\nthoughtful\nteaser"));
+  // Pinned lines dropped by the evolution go back at their old place; over 6, the last unpinned one gives way.
+  CHECK("evolve: pinned lines put back",
+        ev.traits == (std::vector<std::string>{"affectionate", "supportive", "witty", "brave", "thoughtful", "horny"}));
+  CHECK("evolve: the new one is there", std::find(ev.traits.begin(), ev.traits.end(), "brave") != ev.traits.end());
+  Profile prose = presetProfile("friend");
+  prose.backstory = "Grew up by the sea.\nWorked in a bakery.";
+  prose.pins["backstory"] = {"Grew up by the sea."};
+  CHECK("evolve: prose keeps its pinned line",
+        applyEvolution(prose, "backstory", "Worked in a bakery.\nNow runs every morning.") &&
+            prose.backstory == "Grew up by the sea.\nWorked in a bakery.\nNow runs every morning.");
+  CHECK("evolve: unknown field refused", !applyEvolution(prose, "name", "Bob") && !applyEvolution(prose, "voice", "Kore"));
+  CHECK_EQ("evolve: the log line",
+           evolutionLine(1790000000, "traits", "a\nb", "a\nc", "she got braver"),
+           std::string(R"({"t":1790000000,"field":"traits","before":"a\nb","after":"a\nc","why":"she got braver"})"));
+  // The log, newest first; an undo hides itself and marks the change it undid.
+  const std::string log = evolutionLine(100, "traits", "a", "b", "x") + "\n" + "not json\n" +
+                          evolutionLine(200, "backstory", "c", "d", "y") + "\n" +
+                          evolutionLine(300, "traits", "b", "a", "undone", 100) + "\n";
+  const std::vector<Evolution> evs = parseEvolutions(log);
+  CHECK("log: two changes, newest first", evs.size() == 2 && evs[0].t == 200 && evs[1].t == 100);
+  CHECK("log: the undone one is marked", evs.size() == 2 && !evs[0].undone && evs[1].undone);
+  CHECK("log: fields read back", evs.size() == 2 && evs[1].field == "traits" && evs[1].before == "a" &&
+                                     evs[1].after == "b" && evs[1].why == "x");
+  // Pins travel as line numbers (a pinned sentence can be longer than a BLE command), kept as text.
+  Profile pn = presetProfile("friend");
+  pn.backstory = "Grew up by the sea.\nWorked in a bakery.\nRuns.";
+  CHECK("pins: by line number", setPins(pn, "backstory", {0, 2, 9}) &&
+                                    pn.pins["backstory"] == (std::vector<std::string>{"Grew up by the sea.", "Runs."}));
+  CHECK("pins: read back as numbers", pinnedLines(pn, "backstory") == (std::vector<int>{0, 2}));
+  pn.backstory = "Runs.\nGrew up by the sea.";
+  CHECK("pins: follow their line when it moves", pinnedLines(pn, "backstory") == (std::vector<int>{0, 1}));
+  CHECK("pins: unknown field refused", !setPins(pn, "voice", {0}));
+  CHECK("pins: none clears", setPins(pn, "backstory", {}) && pinnedLines(pn, "backstory").empty());
+  CHECK_EQ("lines: a list", fieldText(e, "traits"), std::string("affectionate\nsupportive\nwitty\nthoughtful\nteaser\nhorny"));
 
   // Stepping through the companions (Dotty's settings row): never a division by zero.
   CHECK_EQ("step: next", stepCompanion({"a", "b", "c"}, "b", 1), std::string("c"));

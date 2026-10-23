@@ -22,5 +22,8 @@ bool save(const Profile &p);  // replaces the profile with that id (the active o
 bool create(const std::string &type, std::string &id);  // false when full
 bool remove(const std::string &id);  // not the last one; the active one hands over to the next
 String folder(const std::string &id);
+// evolution.jsonl in the companion's folder: how it has changed (one JSON line per change or undo).
+bool logEvolution(const std::string &id, const std::string &line);
+std::string evolutionLog(const std::string &id);
 
 }  // namespace companions

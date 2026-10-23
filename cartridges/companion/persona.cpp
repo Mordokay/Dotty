@@ -1,5 +1,7 @@
 #include "persona.h"
 
+#include <algorithm>
+
 namespace {
 
 std::string join(const std::vector<std::string> &items, const char *sep) {
@@ -37,4 +39,37 @@ std::string personaText(const Profile &p) {
          " Speak softly and hesitantly, a little lost and sad, not cheerful at all. Ask the user who you are. When they "
          "tell you your name, call set_name with it, react with relief and joy, and become yourself again." +
          kActing;
+}
+
+std::string reviewPrompt(const Profile &p) {
+  std::string s =
+      "(Dotty, not the user: the chat is over.) Go over it: call remember or update_memory for anything worth keeping "
+      "that you haven't saved yet.";
+  if (p.awake()) {
+    s += " Then ask yourself whether this chat really changed you: a new interest, a habit you picked up, a trait that "
+         "grew or softened, something new in your story. Most chats change nothing: then don't call evolve. If one did, "
+         "call evolve once, with the whole new field (one line per item or sentence), changing just a line or two and "
+         "keeping every line marked (pinned) exactly. Plain, everyday words, like a character sheet.";
+  }
+  s += " Then reply with just: Bye.";
+  if (!p.awake()) return s;
+  s += "\n\nYour character now:";
+  const char *fields[][2] = {{"personality", "Personality"}, {"traits", "Traits"}, {"quirks", "Quirks"},
+                             {"speaking", "Way of speaking (speaking)"}, {"backstory", "Backstory"}};
+  for (const auto &f : fields) {
+    s += std::string("\n") + f[1] + ":";
+    const auto pins = p.pins.find(f[0]);
+    std::string text = fieldText(p, f[0]);
+    size_t start = 0;
+    while (start < text.size()) {
+      size_t nl = text.find('\n', start);
+      if (nl == std::string::npos) nl = text.size();
+      const std::string line = text.substr(start, nl - start);
+      const bool pinned = pins != p.pins.end() &&
+                          std::find(pins->second.begin(), pins->second.end(), line) != pins->second.end();
+      if (!line.empty()) s += "\n- " + line + (pinned ? " (pinned)" : "");
+      start = nl + 1;
+    }
+  }
+  return s;
 }
