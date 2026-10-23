@@ -148,6 +148,10 @@ Written writtenResult;
 std::string writerBody;          // the request, built on the loop for the task
 String writerKey;
 int longTokens = 0;              // the question's tokens (the exchange is counted once, at its end)
+bool keepBle = false;  // dev T: Bluetooth stays on during sessions (the soak test)
+// The session's lowest internal RAM (sampled every 250 ms while connected), logged when it closes.
+size_t lowFree = SIZE_MAX, lowLargest = SIZE_MAX;
+uint32_t lastHeapSample = 0;
 bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
@@ -264,6 +268,10 @@ void disconnect(const char *why) {
     LOGI("companion", "connect cancelled (%s)", why);
     return;
   }
+  if (lowFree != SIZE_MAX)
+    LOGI("companion", "session low: internal %u KB free, largest %u KB (Bluetooth %s)", lowFree / 1024, lowLargest / 1024,
+         keepBle ? "on" : "off");
+  lowFree = lowLargest = SIZE_MAX;
   live.close();
   net::disconnect();
   power::setWakeLock(power::kWakeLockNetwork, false);
@@ -720,7 +728,8 @@ void connect() {
   LOGI("companion", "session on key %d of %u (..%s)", key + 1, static_cast<unsigned>(settings.keys.size()), keyHint(sessionKeyText).c_str());
   // Bluetooth is off for the session: with it on (and the iPhone connected) TLS left 36 KB of
   // internal RAM, largest block 12 KB, and a session hung in its sends until the watchdog reset.
-  ble::stop();
+  // (mbedTLS in PSRAM changed that: dev key T keeps it on, for the soak test.)
+  if (!keepBle) ble::stop();
   power::setWakeLock(power::kWakeLockNetwork, true);
   memorySection = memories::store().promptSection();  // the task only reads these copies
   {  // the last ten chats' summaries: what it has talked about lately
@@ -1876,6 +1885,11 @@ void loop() {
     if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
     return;
   }
+  if (live.connected() && millis() - lastHeapSample > 250) {
+    lastHeapSample = millis();
+    lowFree = min(lowFree, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    lowLargest = min(lowLargest, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  }
   if (!connecting) live.poll();  // the connect task owns the socket until it ends
   voice::poll();
   pollReplay();
@@ -2026,6 +2040,10 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == 'T') {
+    keepBle = !keepBle;
+    LOGI("companion", "Bluetooth during sessions: %s", keepBle ? "kept on (soak test)" : "off (normal)");
+  }
   if (input.key == 'O' && live.ready()) {  // dev: Bluetooth on during a session (does it fit now?)
     ble::start();
     LOGI("measure", "Bluetooth on in a session: internal %u KB free, largest %u KB",

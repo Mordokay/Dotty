@@ -937,6 +937,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   commands, a voice turn still answered in 1.2 s, and the writer's second TLS worked on top (HTTP
   200, 147 words, 2.9 s) with 35 KB free, largest 27 KB left. It fits, thinly (the old hang came
   at 36 KB / largest 12 KB): sessions still turn Bluetooth off until a longer soak says otherwise.
+  **Soak** (dev key T keeps Bluetooth on in sessions; each session logs "session low: internal N KB
+  free, largest M KB", sampled every 250 ms): two sessions with the iPhone app connected and in use
+  (history, pages, replay, pings), voice + typed turns, the writer's minute, a recall, replay, the
+  review — everything worked, but the lows were 22 KB free / largest 9 KB and 24 KB / largest 6 KB,
+  the second session started 6 KB lower (38 vs 44 KB), and Wi-Fi's deinit timed out once at the end.
+  Too thin to ship: sessions keep Bluetooth off. Next: Wi-Fi/LWIP buffers in PSRAM
+  (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`), then the same soak.
 - **Recall + summaries** (user, 2026-10-23: "what was I saying yesterday morning?", "when I talked
   about bananas the other day…"): `recall {question, from?, to?, topic?}` (`recall.*`, host-tested):
   the model turns the words into dates (the instruction now carries the date: `nowText`, "Friday 23
