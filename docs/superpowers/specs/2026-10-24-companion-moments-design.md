@@ -29,6 +29,8 @@ Dotty is locked, even with no phone or internet nearby, because each line is rec
 - General rule: heavy lifting runs on the iPhone when it's there, but Dotty works on its own without
   any phone or app.
 - Privacy: personal data to Google is fine; never passwords, bank or card data.
+- Several things due at the same minute (a reminder, and later a notification and a Slack message) are
+  **one voice line covering every topic**: the companion says everything it has to say in one go.
 
 ## What a moment is
 
@@ -86,6 +88,7 @@ A moment = when + what + how, owned by one companion.
   and timers ignore them.
 - **Busy**: a moment due during a chat (recording or a reply playing) waits until the reply ends; while
   Dotty is listening (BOOT held) it waits until the reply to that has ended.
+- Several due at the same minute play as one group (next section).
 - **Without a recording** (preparation failed): beeps + the text on screen (`line`, or `what` if no line
   was written).
 - **Missed while off** (another cartridge or powered off): at start, a moment due within the last hour
@@ -94,6 +97,35 @@ A moment = when + what + how, owned by one companion.
 - Every fired, done or missed moment sends `companion.moments` when the phone is connected and adds a
   line to the companion's history (`{you: "", dotty: line, moment: kind}`), so the app's chat and recall
   see it.
+
+## Several things at once
+
+- **A group** = a companion's moments due at the same minute. It fires once: one set of attention
+  beeps, one line that covers every topic in a natural order (the most pressing first), one screen.
+  Moments of different companions at the same minute play one companion after the other, in the
+  order they were made, with the beeps only before the first.
+- **Strongest kind wins**: a group with an alarm in it rings like an alarm (repeats, snooze applies to
+  the whole group); otherwise it plays once and invites a reply like a reminder. Timers are never
+  grouped (they keep their own countdown and sound); a moment due in the timer's minute plays right
+  after the timer has been stopped.
+- **The combined line** is written by the writer from every topic of the group (each moment's `what`,
+  style and kind) and is up to **150 words for the first topic + 100 for each extra one, at most 300**
+  (the length proven in 0.4.1's chunked reading). The style is the first moment's unless the topics
+  ask otherwise (an alarm's "excited" over a calm reminder: the writer is told both).
+- **Recordings**: a one-off moment that is part of a group gets no line of its own, only the group's
+  (`moments/group-<minute>.wav` + `.json`, deleted after it plays). A repeating moment keeps its own
+  recording for its other days. When a group changes (a moment joins, is edited, deleted or moved), its
+  combined line is marked not ready and recorded again at the next chance (the same rules as any line:
+  in a chat after the reply, through the phone when connected, at phone wakes, else over Wi-Fi). A
+  group left with one moment goes back to that moment's own line (recorded if it has none).
+- **Not ready at its minute**: the members' own recordings, if any, play one after the other after a
+  single set of beeps (0.7 s apart), then the text of any without one. Nothing is dropped.
+- **Spontaneous lines** are planned at least 30 minutes away from other moments; one that ends up in a
+  group (a moment added later) simply joins it as one more topic.
+- **Later sources** (piece 4): urgent items found by a phone wake don't get a minute of their own. They
+  play at the next minute, joining whatever is due then; if a moment is due within the next 5 minutes
+  they wait for it and join its group (they are already up to 20 minutes late; one line is better than
+  two close together). Their line is written at the wake, with the group's other topics.
 
 ## Making the lines
 
@@ -237,6 +269,7 @@ Local epoch times, every command ≤ 512 bytes.
 | Card missing | moments unavailable (`{ok: false, error: "unavailable"}`, like memories); a running timer still works |
 | Dotty off at the time | ≤ 1 h late: fires; older: missed |
 | Clock changes (core.time, SNTP) | the scheduler works from local epoch, so moments follow the new time; a jump past a moment counts like being off |
+| A group changes too late to record again | the members' own recordings in a row, then the text of the rest |
 | Sung style sounds poor | the jingle + spoken rhyme fallback |
 
 ## Out of scope
@@ -250,14 +283,18 @@ something other than time; sharing a moment between companions.
 - **Host** (`tools/companion_test/`): `moment_store` (load / save, 50 per companion, ids, broken file);
   `moment_schedule` (next due across companions, repeats incl. chosen days, quiet windows and
   `quietMode`, the ≤ 1 h late rule, alarm repeats for 10 minutes, snooze count to 3, clock jumps);
-  `timer_beeps` (ticks, 60 / 30 s, the last 10 s with pitch and volume, none during a chat);
+  grouping (same minute, per
+  companion, strongest kind, the word budget 150 + 100 each ≤ 300, a group changing marks it not ready,
+  a group of one going back to its own line, the fallback order, urgent items joining a moment ≤ 5 min
+  away); `timer_beeps` (ticks, 60 / 30 s, the last 10 s with pitch and volume, none during a chat);
   `phone_wake` job choice (no job due = no wake, the 20-minute interval, the 30 s / 3 min limits,
   Wi-Fi fallback per job); the spontaneous plan's JSON parsing and its checks (hours, quiet windows,
   2 h apart); the new tools' parsing and replies.
 - **Device**: "remind me in 2 minutes" then lock → fires with beeps and its line; a sung reminder (the
   singing check); an alarm through 3 snoozes and giving up into "Missed alarm"; an app-made reminder
   recorded through the phone, and one recorded over Wi-Fi with the phone away; a spontaneous day with
-  the allowed hours squeezed into the next hour; a 1-minute timer (the last 10 s, the ringing); a timer
+  the allowed hours squeezed into the next hour; a reminder and an alarm at the same minute (one
+  line covering both, ringing as an alarm), then one deleted (back to a single line); a 1-minute timer (the last 10 s, the ringing); a timer
   ending mid-chat; Dotty switched to another cartridge across a moment (late vs missed); overnight
   `battery.tsv` with phone wakes vs plain locked nights.
 - **App**: build; the user's pass on the Moments screen.
