@@ -7,7 +7,7 @@
 
 #include "live_protocol.h"
 #include "turn_tracker.h"
-#include "ws_client.h"
+#include "live_transport.h"
 
 // One conversation with Gemini Live over the WebSocket: connect + setup, push-to-talk turns,
 // the reply's audio and text as they arrive, set_mood, token usage (TurnTracker decides which
@@ -31,8 +31,12 @@ class GeminiLive {
     std::function<void(const std::string &error, int retryDelaySeconds, bool quota, bool badKey)> failed;
   };
 
-  // `config.resumeHandle` (from resumeHandle()) carries on an earlier session's conversation.
-  bool begin(const std::string &apiKey, const LiveConfig &config, Callbacks callbacks);
+  // `config.resumeHandle` (from resumeHandle() / latestHandle()) carries on an earlier session's
+  // conversation. The transport: its own WebSocket (Wi-Fi), or the iPhone (relay_link.h).
+  bool begin(const std::string &apiKey, const LiveConfig &config, Callbacks callbacks, LiveTransport &transport);
+  bool begin(const std::string &apiKey, const LiveConfig &config, Callbacks callbacks) {
+    return begin(apiKey, config, std::move(callbacks), ws_);
+  }
   void startTurn();
   void sendAudio(const int16_t *pcm, size_t frames);
   void endTurn();
@@ -41,15 +45,18 @@ class GeminiLive {
   void sendText(const std::string &text, bool continueQuestion = false);
   // A tool's late answer with content (recall): opens a question for the reply it brings.
   void answerTool(const std::string &id, const std::string &name, const std::string &result);  // a typed turn (the end-of-chat memory review)
-  void sendRaw(const std::string &frame) { ws_.sendText(frame); }  // dev: anything, even invalid
+  void sendRaw(const std::string &frame) { t_->sendText(frame); }  // dev: anything, even invalid
   void poll();
   void close();
-  bool ready() const { return ready_ && ws_.connected(); }
-  bool connected() const { return ws_.connected(); }
+  bool ready() const { return ready_ && t_->connected(); }
+  bool connected() const { return t_->connected(); }
+  bool overRelay() const { return t_ != &ws_; }
   bool inTurn() const { return turns_.turn; }
   uint32_t lastMessageAt() const { return lastMessageAt_; }  // millis(): silence = a dead link
   // The handle to resume this conversation with, once the server asked to move (goAway).
   const std::string &resumeHandle() const { return goAway_ ? config_.resumeHandle : kNone; }
+  // The latest handle the server gave (the grace-window hand-over moves the chat with it).
+  const std::string &latestHandle() const { return config_.resumeHandle; }
   // Another companion from now on: never resume this conversation in it.
   void forgetResume() {
     goAway_ = false;
@@ -59,8 +66,10 @@ class GeminiLive {
  private:
   bool open();
   void onMessage(const std::string &message);
+  void onAudio(const int16_t *pcm, size_t frames);  // the relay's reply audio (decoded)
 
-  WsClient ws_;
+  WsTransport ws_;
+  LiveTransport *t_ = &ws_;
   std::string key_;
   LiveConfig config_;
   Callbacks cb_;

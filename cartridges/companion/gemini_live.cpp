@@ -4,12 +4,8 @@
 
 #include "log.h"
 
-namespace {
-constexpr const char *kHost = "generativelanguage.googleapis.com";
-constexpr const char *kPath = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=";
-}  // namespace
-
-bool GeminiLive::begin(const std::string &apiKey, const LiveConfig &config, Callbacks callbacks) {
+bool GeminiLive::begin(const std::string &apiKey, const LiveConfig &config, Callbacks callbacks, LiveTransport &transport) {
+  t_ = &transport;
   key_ = apiKey;
   config_ = config;
   cb_ = std::move(callbacks);
@@ -21,38 +17,38 @@ bool GeminiLive::open() {
   goAway_ = false;
   turns_ = TurnTracker();
   String error;
-  const std::string path = std::string(kPath) + key_;
   const uint32_t start = millis();
-  if (!ws_.connect(kHost, path.c_str(), error)) {
+  if (!t_->open(key_, liveSetup(config_), config_.resumeHandle, error)) {
     LOGW("live", "connect: %s", error.c_str());
     if (cb_.failed) cb_.failed(error.c_str(), -1, false, false);
     return false;
   }
   lastMessageAt_ = millis();
-  LOGI("live", "connected in %lu ms%s", millis() - start, config_.resumeHandle.empty() ? "" : " (resuming)");
-  ws_.sendText(liveSetup(config_));
+  LOGI("live", "connected in %lu ms%s%s", millis() - start, overRelay() ? " through the iPhone" : "",
+       config_.resumeHandle.empty() ? "" : " (resuming)");
   return true;
 }
 
 void GeminiLive::startTurn() {
   turns_.start();
   lastMessageAt_ = millis();
-  ws_.sendText(liveActivityStart());
+  t_->sendText(liveActivityStart());
 }
 
 void GeminiLive::sendAudio(const int16_t *pcm, size_t frames) {
-  ws_.sendText(liveAudio(pcm, frames));
+  t_->sendVoice(pcm, frames);
 }
 
 void GeminiLive::endTurn() {
   lastMessageAt_ = millis();  // the reply's silence counts from here
-  ws_.sendText(liveActivityEnd());
+  t_->flushVoice();
+  t_->sendText(liveActivityEnd());
 }
 
 void GeminiLive::answerTool(const std::string &id, const std::string &name, const std::string &result) {
   if (!turns_.turn) turns_.start();  // still open (nothing said yet): the reply is that question's
   lastMessageAt_ = millis();
-  ws_.sendText(liveToolResult(id, name, result));
+  t_->sendText(liveToolResult(id, name, result));
 }
 
 void GeminiLive::sendText(const std::string &text, bool continueQuestion) {
@@ -65,35 +61,36 @@ void GeminiLive::sendText(const std::string &text, bool continueQuestion) {
   serializeJson(doc, out);
   if (!continueQuestion || !turns_.turn) turns_.start();
   lastMessageAt_ = millis();
-  ws_.sendText(out);
+  t_->sendText(out);
 }
 
 void GeminiLive::poll() {
-  if (!ws_.connected()) return;
-  const bool alive = ws_.poll([this](const std::string &m) { onMessage(m); });
+  if (!t_->connected()) return;
+  const bool alive = t_->poll([this](const std::string &m) { onMessage(m); },
+                              [this](const int16_t *pcm, size_t frames) { onAudio(pcm, frames); });
   // poll() returns true when a message handler closed the socket (runaway guard): nothing to
   // report. false = the server closed it: its reason (quota, bad key) must reach `failed` (an
   // early return here once skipped it, and a quota refusal showed as a plain failed connect).
-  if (alive && !ws_.connected()) return;
+  if (alive && !t_->connected()) return;
   if (alive) {
     // The server is ending this connection: close after the reply; the next press opens a new
     // one with the resumption handle (reconnecting here froze the screen for seconds).
     if (goAway_ && !turns_.turn) {
       LOGI("live", "goAway: closing, the next press resumes");
-      ws_.close();
+      t_->close();
       ready_ = false;
     }
     return;
   }
-  const LiveClose why = liveCloseInfo(ws_.closeCode(), ws_.closeReason());
+  const LiveClose why = liveCloseInfo(t_->closeCode(), t_->closeReason());
   ready_ = false;
   turns_ = TurnTracker();
-  LOGW("live", "closed %u: %s", ws_.closeCode(), why.message.c_str());
+  LOGW("live", "closed %u: %s", t_->closeCode(), why.message.c_str());
   if (cb_.failed) cb_.failed(why.message.empty() ? "connection lost" : why.message, why.retryDelaySeconds, why.quota, why.badKey);
 }
 
 void GeminiLive::close() {
-  ws_.close();
+  t_->close();
   ready_ = false;
   turns_ = TurnTracker();
 }
@@ -130,8 +127,8 @@ void GeminiLive::onMessage(const std::string &message) {
     if (o.answer[i]) answered.push_back(c);
   }
   if (!answered.empty()) {
-    ws_.sendText(liveToolsOk(answered));
-    if (!ws_.connected()) return;  // the send failed and dropped the connection
+    t_->sendText(liveToolsOk(answered));
+    if (!t_->connected()) return;  // the send failed and dropped the connection
   }
   if (o.deliver) {
     if (!e.outputText.empty() && cb_.said) cb_.said(e.outputText);
@@ -149,4 +146,12 @@ void GeminiLive::onMessage(const std::string &message) {
     return;
   }
   if (o.done && cb_.turnDone) cb_.turnDone(o.tokens);
+}
+
+// The relay hands the reply audio over decoded, in order with the JSON: it's the content of the turn
+// it arrives in, like inline audio over the WebSocket.
+void GeminiLive::onAudio(const int16_t *pcm, size_t frames) {
+  lastMessageAt_ = millis();
+  const TurnTracker::Out o = turns_.message(true, {}, false, 0);
+  if (o.deliver && cb_.audio) cb_.audio(pcm, frames);
 }
