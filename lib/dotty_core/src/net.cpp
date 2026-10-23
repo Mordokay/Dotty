@@ -93,7 +93,8 @@ bool join(const String &ssid, const String &password, String &error) {
     return false;
   }
   if (WiFi.status() == WL_CONNECTED) {
-    LOGI("wifi", "joined '%s', %s, %d dBm", ssid.c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    LOGI("wifi", "joined '%s' in %lu ms, %s, %d dBm", ssid.c_str(), static_cast<unsigned long>(millis() - start),
+         WiFi.localIP().toString().c_str(), WiFi.RSSI());
     lastJoinedRssi = WiFi.RSSI();
     if (ssid != lastJoinedSsid) {
       lastJoinedSsid = ssid;
@@ -245,7 +246,9 @@ bool connect(String &error) {
     error = "no Wi-Fi set up";
     return false;
   }
+  const uint32_t scanStart = millis();
   std::vector<Network> visible = scan();  // strongest first
+  LOGI("wifi", "scan: %lu ms, %u networks", static_cast<unsigned long>(millis() - scanStart), static_cast<unsigned>(visible.size()));
   if (aborting) {
     error = "stopped";
     return false;

@@ -180,6 +180,9 @@ relay::Transport relayTransport;
 portMUX_TYPE raceLock = portMUX_INITIALIZER_UNLOCKED;
 volatile bool wifiBegan = false;
 bool phoneWasReady = false;
+std::string resumeRetryHandle;  // a hand-over's resume, retried while Google still holds the old session
+int resumeRetries = 0;
+uint32_t resumeRetryAt = 0;
 
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
@@ -743,6 +746,15 @@ GeminiLive::Callbacks callbacks() {
     if (info.state == Talk::Thinking) setState(Talk::After);  // text-only replies end here
   };
   cb.failed = [](const std::string &error, int retry, bool quota, bool badKey) {
+    // Taking a Wi-Fi chat over: Google hadn't let go of the session yet ("already connected to an
+    // existing client") — try the same resume again shortly (up to 3 times).
+    if (live.overRelay() && error.find("already connected") != std::string::npos && !resumeRetryHandle.empty() &&
+        resumeRetries < 3) {
+      resumeRetries++;
+      resumeRetryAt = millis() + 1000;
+      LOGI("companion", "Google still holds the Wi-Fi session: resuming again in 1 s (%d)", resumeRetries);
+      return;
+    }
     if (live.overRelay() && reviewStart && !quota && !badKey && ble::connected()) {
       // The end-of-chat review over a connection the iPhone already dropped: the chat is over
       // anyway — close quietly and let the next press resume the conversation.
@@ -814,6 +826,8 @@ void beginRelay(const std::string &resume = "") {
 // The phone arrived in a Wi-Fi chat's grace window: the chat moves to it, the conversation resumed.
 void handOver() {
   const std::string handle = live.latestHandle();
+  resumeRetryHandle = handle;
+  resumeRetries = 0;
   live.close();
   net::disconnect();
   power::setWakeLock(power::kWakeLockNetwork, false);
@@ -2239,6 +2253,12 @@ void loop() {
       setState(Talk::Error, "Connection lost");
     }
   }
+
+  if (resumeRetryAt && millis() > resumeRetryAt) {  // a hand-over's resume, again
+    resumeRetryAt = 0;
+    if (relay::phoneReady()) beginRelay(resumeRetryHandle);
+  }
+  if (live.ready() && live.overRelay()) resumeRetryHandle.clear();  // resumed: done
 
   // The race and the grace window (relay_path.h).
   // A phone counts only if it holds this chat's key (else it can't relay it).
