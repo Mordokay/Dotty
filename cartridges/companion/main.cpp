@@ -28,6 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
+#include "macro_store.h"
 #include "recall.h"
 #include "script_writer.h"
 #include "piece_buffer.h"
@@ -135,6 +136,7 @@ int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when
 // connection), then Live reads the text aloud word for word / talks about what was found. The
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
 // moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
+MacroList macroList;  // the user's macros (data/macros.json), shared by every companion
 enum class Job { Write, Recall };
 Job jobKind = Job::Write;
 std::string jobCallId;           // recall's function call, answered with what was found
@@ -254,6 +256,8 @@ String placeName() {
 void cancelWriter();
 void startWriter(const std::string &what, int seconds);
 void startRecall(const ToolCall &c);
+void startMacro(const Macro &m);
+void loadMacros();
 
 void disconnect(const char *why) {
   reviewStart = 0;
@@ -427,6 +431,10 @@ int applyMemory(const ToolCall &c) {
     }
   } else if (c.name == "write_long") {  // a text model writes it, then Live reads it (see writerPoll)
     if (!writing && !reading) startWriter(c.text, c.seconds);
+  } else if (c.name == "run_macro") {  // a prepared prompt through the writer, then read aloud
+    const Macro *m = macroList.find(c.memoryId);
+    if (m && !writing && !reading) startMacro(*m);
+    if (m) change = "macro: " + m->name;
   } else if (c.name == "recall") {  // a text model reads its past chats (see writerPoll)
     if (!writing && !reading) startRecall(c);
   } else if (c.name == "summarize") {  // the end-of-chat review's few words about this chat
@@ -518,6 +526,13 @@ void startWriter(const std::string &what, int seconds) {
   startJob();
 }
 
+void startMacro(const Macro &m) {
+  writerBody = macroRequest(companions::active(), memorySection, m);
+  jobKind = Job::Write;
+  LOGI("writer", "macro %d \"%s\"", m.id, m.name.c_str());
+  startJob();
+}
+
 // Those days of this companion's own history, the topic's exchanges (with their neighbours), to
 // the text model with the question.
 void startRecall(const ToolCall &c) {
@@ -549,9 +564,12 @@ void cancelWriter() {
 // Both done (the text, and the question's own turn): Live reads it, or answers itself if it failed.
 void writerPoll() {
   if (!writing || !written) return;
-  // The question's own turn has ended, or nothing has come for a moment (a recall without words
-  // never ends its turn: the reply to the result is that question's).
-  if (!questionDone && millis() - live.lastMessageAt() < 1500) return;
+  // The question's own turn has ended; or it has said nothing at all and nothing has come for a
+  // moment (a recall without words never ends its turn: the reply to the result is that question's).
+  // Once it has started speaking ("Ooh, you're pushing my buttons"), wait for that turn to end: a
+  // reading sent before it ended was taken for a turn nobody asked for, and dropped.
+  const bool spoke = firstAudioAt || !said.empty() || !textQueue.empty();
+  if (!questionDone && (spoke || millis() - live.lastMessageAt() < 1500)) return;
   writing = questionDone = written = false;
   info.writing = info.recalling = false;
   if (writtenResult.tokens) usage::addTokens(writtenResult.tokens, sessionKey);
@@ -741,6 +759,7 @@ void connect() {
     if (!section.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + section;
   }
   personaSection = personaText(companions::active());
+  if (!macroList.all().empty()) personaSection += "\n\n" + macrosSection(macroList);  // its phrases → run_macro
   sessionCompanion = companions::active().id;
   evolvedThisChat = false;
   connecting = true;
@@ -1307,6 +1326,103 @@ bool writePhoto(const std::string &id, const std::string &big, const std::string
   return ok;
 }
 
+// ---------- macros (data/macros.json) ----------
+
+String macrosPath() {
+  return storage::myDataDir() + "/macros.json";
+}
+
+void loadMacros() {
+  File f = SD_MMC.open(macrosPath());
+  std::string json;
+  while (f && f.available()) json += static_cast<char>(f.read());
+  f.close();
+  if (!macroList.load(json)) {  // the first time (or a broken file): the preset
+    macroList = MacroList::withPresets();
+    const std::string out = macroList.save();
+    writeCard(macrosPath(), reinterpret_cast<const uint8_t *>(out.data()), out.size(), nullptr, 0);
+  }
+  LOGI("companion", "%u macros", static_cast<unsigned>(macroList.all().size()));
+}
+
+bool saveMacros() {
+  const std::string out = macroList.save();
+  return writeCard(macrosPath(), reinterpret_cast<const uint8_t *>(out.data()), out.size(), nullptr, 0);
+}
+
+void notifyMacros() {
+  JsonDocument event;
+  event["event"] = "companion.macros";
+  ble::notify(event);
+}
+
+void registerMacroCommands() {
+  ble::on("companion.macros", [](JsonObjectConst, JsonObject reply) {
+    JsonArray list = reply["macros"].to<JsonArray>();
+    for (const Macro &m : macroList.all()) {
+      JsonObject o = list.add<JsonObject>();
+      o["id"] = m.id;
+      o["name"] = m.name;
+      o["triggers"] = m.triggers;
+      o["prompt"] = m.prompt;
+    }
+    reply["max"] = MacroList::kMax;
+  });
+  // {id?, name, triggers, prompt?}: a new one (no id) or a change; a long prompt follows in pieces
+  // (companion.macro.prompt). Applies from the next session.
+  ble::on("companion.macro.save", [](JsonObjectConst args, JsonObject reply) {
+    const int id = args["id"] | 0;
+    const std::string name = args["name"] | "", triggers = args["triggers"] | "";
+    const std::string prompt = args["prompt"] | (id ? (macroList.find(id) ? macroList.find(id)->prompt : "") : "...");
+    int saved = id;
+    if (id) {
+      if (!macroList.update(id, name, triggers, prompt)) saved = -1;
+    } else {
+      saved = macroList.add(name, triggers, prompt);
+    }
+    if (saved < 0) {
+      reply["ok"] = false;
+      reply["error"] = id && !macroList.find(id) ? "unknown macro" : macroList.all().size() >= MacroList::kMax ? "full" : "needs a phrase and a prompt";
+      return;
+    }
+    saveMacros();
+    reply["id"] = saved;
+    notifyMacros();
+  });
+  // {id, offset, total, text}: a prompt in pieces (commands ≤ 512 bytes), set when the last arrives.
+  ble::on("companion.macro.prompt", [](JsonObjectConst args, JsonObject reply) {
+    const int id = args["id"] | 0;
+    if (!macroList.find(id)) {
+      reply["ok"] = false;
+      reply["error"] = "unknown macro";
+      return;
+    }
+    const std::string key = "macro/" + std::to_string(id);
+    PieceBuffer &b = pieces[key];
+    const size_t offset = args["offset"] | 0;
+    if ((offset == 0 && !b.begin(args["total"] | 0, 8192)) || !b.add(offset, args["text"] | "")) {
+      pieces.erase(key);
+      reply["ok"] = false;
+      reply["error"] = "out of order";
+      return;
+    }
+    if (!b.complete()) return;
+    const bool ok = macroList.setPrompt(id, b.data());
+    pieces.erase(key);
+    reply["ok"] = ok && saveMacros();
+    if (ok) notifyMacros();
+  });
+  ble::on("companion.macro.delete", [](JsonObjectConst args, JsonObject reply) {
+    if (!macroList.remove(args["id"] | 0)) {
+      reply["ok"] = false;
+      reply["error"] = "unknown macro";
+      return;
+    }
+    saveMacros();
+    notifyMacros();
+  });
+}
+
 // The last line and the replay, for the app: {last?: {text, seconds, t, mood}, replay: {state, loop}}.
 void replyReplay(JsonObject reply) {
   if (hasLast) {
@@ -1335,6 +1451,7 @@ void notifyReplay() {
 }
 
 void registerCompanionCommands() {
+  registerMacroCommands();
   ble::on("companion.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["companions"].to<JsonArray>();
     for (const std::string &id : companions::list().order()) {
@@ -1857,6 +1974,7 @@ void setup() {
   loadSettings();
   applyCompanion();
   loadLast();
+  loadMacros();
   for (const char *old : {"00", "01", "02", "10", "11", "12"})  // the acting demo's recordings (gone in 0.3.0)
     SD_MMC.remove(storage::myDataDir() + "/act_" + old + ".wav");
   registerCommands();
@@ -2070,6 +2188,7 @@ void loop() {
                                            "your instructions."
                       : input.key == 'V' ? "What was I saying yesterday morning?"
                       : input.key == 'R' ? "When I talked about surfing the other day, what was I saying about it?"
+                      : input.key == 'D' ? "Talk dirty to me."
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();

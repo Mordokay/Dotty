@@ -134,6 +134,8 @@ std::string liveSetup(const LiveConfig &config) {
   param(recall, "topic", "STRING", false)["description"] = "a word or two the chat was about";
   JsonObject summary = declare("summarize", "At the end of a chat: one or two sentences about it, for your future self");
   param(summary, "text", "STRING", true);
+  JsonObject macro = declare("run_macro", "Run one of the user's macros (listed in your instructions) by its number");
+  param(macro, "id", "INTEGER", true);
   return serialize(doc);
 }
 

@@ -133,4 +133,30 @@ enum CompanionDesign {
         ]
         return (prompt, schema)
     }
+
+    /// ✨ for a macro's prompt: improve what's written (or write one from the name and phrases). The
+    /// prompt goes to a text model that writes ~150 words for the companion to read aloud.
+    static func macro(name: String, triggers: String, current: String) -> (prompt: String, schema: [String: Any]) {
+        var prompt = """
+            You improve a prompt for a text model. That model writes about 150 words (one minute read aloud) for a \
+            desk companion to say to the user, in the companion's own voice and character, which it is given \
+            separately. Write the prompt in plain, direct English, in the second person to the companion, the way \
+            the user would ask ("Tell me...", "Guide me..."): the tone, what to include and in what order, how to \
+            pace it (pauses written as ...), how to end. Keep the user's intent and their own words where they \
+            work; make vague parts concrete. It must stay within Google's content rules: romantic, flirty, teasing \
+            or suggestive is fine, never sexually explicit (no sexual acts, nudity or body parts). At most 1800 \
+            characters. Only the prompt.
+            """
+        prompt += "\n\nMacro name: \(name.isEmpty ? "(none yet)" : name)"
+        prompt += "\nThe user starts it by saying: \(triggers.split(separator: "\n").joined(separator: " / "))"
+        if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            prompt += "\n\nThere is no prompt yet: write one that fits the name and the phrases."
+        } else {
+            prompt += "\n\nThe prompt now:\n\(current)\n\nRewrite it better."
+        }
+        let schema: [String: Any] = [
+            "type": "OBJECT", "properties": ["value": ["type": "STRING"]], "required": ["value"],
+        ]
+        return (prompt, schema)
+    }
 }

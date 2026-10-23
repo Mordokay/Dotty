@@ -967,6 +967,23 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   exchanges), "Nothing found", said honestly. **Summaries**: the review calls `summarize {text}`
   → `summaries.jsonl` in the companion's folder; the last 10 (dated) join the instruction's memory
   section. Dev keys V ("yesterday morning?"), R ("surfing the other day").
+- **Macros** (user, 2026-10-23; `macro_store.*`, host-tested): up to 12, shared by every companion,
+  `data/macros.json` {next, macros[{id, name, triggers (one phrase a line, ≤ 300), prompt ≤ 2000}]};
+  the instruction lists them ("1: talk dirty to me / flirt with me / …") and the model calls
+  `run_macro {id}`; Dotty runs the prompt through the writer (~150 words in the active companion's
+  voice, with its memories) and Live reads it — the writer's path. Presets on first boot: Talk
+  dirty to me (flirty, teasing, suggestive, never explicit — Google's Prohibited Use Policy bans
+  sexually explicit content for gratification and scans API use, so no safety-setting changes),
+  Bedtime story, Meditation, Pep talk (no "good morning": said in passing). BLE
+  `companion.macros` → {macros, max}, `companion.macro.save {id?, name, triggers, prompt?}` → {id}
+  (a long prompt then in 240-byte pieces: `companion.macro.prompt {id, offset, total, text}`),
+  `companion.macro.delete {id}`; event `companion.macros`. App: `MacrosView` (wand next to the gear)
+  + `MacroEditor` with ✨ Suggest (`CompanionDesign.macro`: improves the prompt from the name,
+  phrases and what's written; stays within the content rules). Measured: "Talk dirty to me" → run_macro,
+  written in 3.4 s (1,183 characters), read in full, saved line 57.9 s, ~14k tokens. A follow-up
+  sent while the question's own spoken turn was still open was dropped as unasked: `writerPoll`
+  waits for that turn to end once anything was said (the 1.5 s quiet fallback is only for a
+  question with no words). Dev key D ("Talk dirty to me.").
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

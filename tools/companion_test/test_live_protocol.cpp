@@ -45,7 +45,8 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,"));
+  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"));
+  CHECK("run_macro: needs its number", fns[9]["parameters"]["required"][0] == "id");
   CHECK("recall: needs the question; dates and topic optional",
         fns[7]["parameters"]["required"].size() == 1 && fns[7]["parameters"]["required"][0] == "question" &&
             !fns[7]["parameters"]["properties"]["from"].isNull() && !fns[7]["parameters"]["properties"]["topic"].isNull());
@@ -119,6 +120,8 @@ int main() {
   CHECK("tool result: carries what was found, and is spoken about", std::string(r0["id"] | "") == "r1" &&
             std::string(r0["response"]["result"] | "") == "The user loves frozen bananas." &&
             std::string(r0["response"]["scheduling"] | "") == "WHEN_IDLE");
+  const LiveEvent mac = liveParse(R"({"toolCall":{"functionCalls":[{"name":"run_macro","args":{"id":2},"id":"m1"}]}})");
+  CHECK("parse: run_macro's number", mac.calls.size() == 1 && mac.calls[0].memoryId == 2);
   CHECK("parse: set_name's name", named.calls.size() == 1 && named.calls[0].name == "set_name" && named.calls[0].text == "Luna");
   const LiveEvent said = liveParse(sample("said.json"));
   CHECK_EQ("parse: reply text", said.outputText, std::string("That is absolutely "));
