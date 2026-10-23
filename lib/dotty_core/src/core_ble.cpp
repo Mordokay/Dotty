@@ -356,11 +356,16 @@ size_t mtu() {
 
 void notify(JsonDocument &event) {
   if (!isConnected || !eventChar) return;
-  String json;
+  std::string json;
   serializeJson(event, json);
+  notify(json);
+}
+
+void notify(const std::string &json) {
+  if (!isConnected || !eventChar) return;
   const size_t room = peerMtu > 3 ? peerMtu - 3 : 20;
-  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(json.c_str());
-  size_t left = json.length();
+  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(json.data());
+  size_t left = json.size();
   if (left <= room) {  // retried like the pieces below: right after a burst the buffers are full
     bool sent = false;
     for (int tries = 0; tries < 50 && !(sent = eventChar->notify(bytes, left)); tries++) delay(5);

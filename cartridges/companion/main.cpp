@@ -31,6 +31,7 @@
 #include "job_slot.h"
 #include "macro_store.h"
 #include "recall.h"
+#include "relay_link.h"
 #include "script_writer.h"
 #include "piece_buffer.h"
 #include "ui.h"
@@ -2052,6 +2053,7 @@ void setup() {
   for (const char *old : {"00", "01", "02", "10", "11", "12"})  // the acting demo's recordings (gone in 0.3.0)
     SD_MMC.remove(storage::myDataDir() + "/act_" + old + ".wav");
   registerCommands();
+  relay::begin();  // the phone's relay.hello, its data (a chat through the iPhone)
   setState(Talk::Offline, idleStatus());
   shell::showApp();
 }
@@ -2093,6 +2095,8 @@ void loop() {
     LOGI("companion", "told the app: new chats for %s", historyNewsCompanion.c_str());
   }
   if (!connecting) live.poll();  // the connect task owns the socket until it ends
+  // The phone's data when no relay session reads it (a session's own poll does, in order).
+  if (!(live.overRelay() && live.connected())) relay::poll();
   voice::poll();
   pollReplay();
 

@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 
 #include <functional>
+#include <string>
 
 // The "Dotty Core" BLE service, identical in the launcher and every cartridge.
 //
@@ -53,6 +54,7 @@ int poll();
 
 // Sends a JSON event to the connected app (no-op when nothing is connected).
 void notify(JsonDocument &event);
+void notify(const std::string &json);  // JSON already serialized (the relay's events)
 
 bool connected();
 // Raw bytes on the Event characteristic (the companion's relay voice: the app sets 0x1F-first
