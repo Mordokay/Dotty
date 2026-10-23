@@ -225,6 +225,7 @@ private struct MemoryEditor: View {
                     }
                 }
             }
+            .keyboardDismissing()
             .navigationTitle(memory == nil ? "New memory" : "Memory")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

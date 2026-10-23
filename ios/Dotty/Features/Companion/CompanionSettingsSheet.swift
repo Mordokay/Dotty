@@ -42,6 +42,7 @@ struct CompanionSettingsSheet: View {
                     .padding(.horizontal, Spacing.l)
                     .padding(.vertical, Spacing.l)
                 }
+                .keyboardDismissing()
             }
             .navigationTitle("Companion settings")
             .navigationBarTitleDisplayMode(.inline)

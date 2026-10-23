@@ -192,6 +192,7 @@ struct CompanionPage: View {
             .padding(.horizontal, Spacing.l)
             .padding(.bottom, Spacing.xxl * 2)
         }
+        .keyboardDismissing()
         .task(id: summary) { await load() }
         .confirmationDialog("Delete \(displayName)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }
@@ -614,6 +615,7 @@ struct NewCompanionPage: View {
             .padding(.horizontal, Spacing.l)
             .padding(.bottom, Spacing.xxl * 2)
         }
+        .keyboardDismissing()
     }
 
     private func design() async {

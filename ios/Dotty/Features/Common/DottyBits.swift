@@ -172,3 +172,32 @@ extension DottyLink {
         return connection != .connected
     }
 }
+
+/// Ways to put the keyboard away on a screen of text fields (multi-line fields keep Return for new
+/// lines): a Done button above the keyboard, dragging the page down, or tapping somewhere empty.
+struct KeyboardDismissing: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { hideKeyboard() }.fontWeight(.semibold)
+                }
+            }
+            // Only the empty background: a tap that also reached text fields would close the keyboard
+            // the moment a field opened it.
+            .background {
+                Color.clear.contentShape(Rectangle()).onTapGesture { hideKeyboard() }
+            }
+    }
+}
+
+/// Puts the keyboard away, whichever field has it.
+@MainActor func hideKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
+extension View {
+    func keyboardDismissing() -> some View { modifier(KeyboardDismissing()) }
+}
