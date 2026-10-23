@@ -26,6 +26,11 @@ std::vector<Saved> networks;
 String preferredSsid;
 String lastJoinedSsid;
 int lastJoinedRssi = 0;
+// The access point last joined (a mesh has several with one name): connect() goes straight to it
+// first. Scanning every channel, then joining (which scans again), took 8.8 s + 6.5 s with Bluetooth
+// sharing the radio; a direct join skips both.
+uint8_t lastBssid[6] = {};
+int lastChannel = 0;
 
 void load() {
   networks.clear();
@@ -41,6 +46,7 @@ void load() {
   preferredSsid = prefs.getString("preferred", "");
   lastJoinedSsid = prefs.getString("last", "");
   lastJoinedRssi = prefs.getInt("lastRssi", 0);
+  lastChannel = prefs.getBytes("lastBssid", lastBssid, sizeof(lastBssid)) == sizeof(lastBssid) ? prefs.getInt("lastChannel", 0) : 0;
   prefs.end();
 }
 
@@ -78,23 +84,26 @@ const Saved *findSaved(const String &ssid) {
 // scan and every 100 ms of a join. Reset at the start of each connect().
 volatile bool aborting = false;
 
-bool join(const String &ssid, const String &password, String &error) {
+// bssid + channel: straight to that access point (no scan); timeoutMs: how long to wait for it.
+bool join(const String &ssid, const String &password, String &error, const uint8_t *bssid = nullptr, int channel = 0,
+          uint32_t timeoutMs = kConnectTimeoutMs) {
   WiFi.mode(WIFI_STA);
   // A mesh has several access points with one name: by default the ESP32 joins the first one its
   // scan meets, which was often a far node (-86 dBm where the near one gave -40). Scan every
   // channel and take the strongest.
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(ssid.c_str(), password.c_str());
+  if (bssid) WiFi.begin(ssid.c_str(), password.c_str(), channel, bssid);
+  else WiFi.begin(ssid.c_str(), password.c_str());
   const uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs && !aborting) delay(100);
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs && !aborting) delay(100);
   if (aborting && WiFi.status() != WL_CONNECTED) {
     error = "stopped";
     return false;
   }
   if (WiFi.status() == WL_CONNECTED) {
-    LOGI("wifi", "joined '%s' in %lu ms, %s, %d dBm", ssid.c_str(), static_cast<unsigned long>(millis() - start),
-         WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    LOGI("wifi", "joined '%s' in %lu ms%s, %s, %d dBm", ssid.c_str(), static_cast<unsigned long>(millis() - start),
+         bssid ? " (straight to its access point)" : "", WiFi.localIP().toString().c_str(), WiFi.RSSI());
     lastJoinedRssi = WiFi.RSSI();
     if (ssid != lastJoinedSsid) {
       lastJoinedSsid = ssid;
@@ -103,6 +112,13 @@ bool join(const String &ssid, const String &password, String &error) {
     Preferences prefs;  // the signal changes every time; one small NVS write per join
     prefs.begin("wifi", false);
     prefs.putInt("lastRssi", lastJoinedRssi);
+    const uint8_t *joined = WiFi.BSSID();
+    if (joined && (memcmp(joined, lastBssid, sizeof(lastBssid)) != 0 || WiFi.channel() != lastChannel)) {
+      memcpy(lastBssid, joined, sizeof(lastBssid));
+      lastChannel = WiFi.channel();
+      prefs.putBytes("lastBssid", lastBssid, sizeof(lastBssid));
+      prefs.putInt("lastChannel", lastChannel);
+    }
     prefs.end();
     return true;
   }
@@ -245,6 +261,14 @@ bool connect(String &error) {
   if (networks.empty()) {
     error = "no Wi-Fi set up";
     return false;
+  }
+  // Straight to the access point joined last time (when it's the network to use): no scan at all.
+  const Saved *last = findSaved(lastJoinedSsid);
+  if (last && lastChannel > 0 && (preferredSsid.isEmpty() || preferredSsid == lastJoinedSsid)) {
+    if (join(last->ssid, last->password, error, lastBssid, lastChannel, 6000)) return true;
+    if (aborting) return false;
+    LOGI("wifi", "its last access point didn't answer (%s): scanning", error.c_str());
+    error = "";
   }
   const uint32_t scanStart = millis();
   std::vector<Network> visible = scan();  // strongest first
