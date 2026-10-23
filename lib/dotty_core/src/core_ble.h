@@ -78,6 +78,8 @@ bool takePairingResult(bool &success);
 // Bluetooth off/on around light sleep (the controller can't sleep on this board).
 void stop();
 void start();
+// Advertise less often (~250 ms) while Wi-Fi is joining, leaving the shared radio to its scan.
+void advertiseSlowly(bool slow);
 bool running();
 
 }  // namespace ble

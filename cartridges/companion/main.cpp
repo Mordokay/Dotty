@@ -284,6 +284,7 @@ uint32_t resumeKeptAt = 0;  // when a conversation was kept to resume (kResumeKe
 
 void disconnect(const char *why) {
   reviewStart = 0;
+  ble::advertiseSlowly(false);
   if (!live.resumeHandle().empty()) resumeKeptAt = millis();
   path.end();
   cancelWriter();
@@ -658,6 +659,7 @@ void writerPoll() {
 GeminiLive::Callbacks callbacks() {
   GeminiLive::Callbacks cb;
   cb.ready = [] {
+    ble::advertiseSlowly(false);
     LOGI("companion", "ready; heap %u KB internal (largest %u)", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
          heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
     lastTurnAt = millis();
@@ -888,6 +890,7 @@ void connect() {
   connectError = "";
   if (phone) return beginRelay();
   LOGI("companion", "no phone yet: racing Wi-Fi against it");
+  ble::advertiseSlowly(true);  // the Wi-Fi scan gets most of the radio; the phone still finds Dotty
   wifiBegan = false;
   cancelConnect = false;
   connecting = true;
@@ -2254,6 +2257,7 @@ void loop() {
         LOGI("companion", "the phone came back late: Wi-Fi keeps this chat");
       } else {
         LOGI("companion", "the phone won the race");
+        ble::advertiseSlowly(false);
         net::abortConnect();  // the Wi-Fi join stops: its radio and memory are the relay's again
         beginRelay();
       }

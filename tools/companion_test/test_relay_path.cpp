@@ -46,6 +46,16 @@ int main() {
   CHECK("phone in the window: taken at the next press, once", p.takeHandover() && p.way() == RelayPath::Relay && !p.takeHandover());
   p.end();
 
+  // The phone back in the window while a reply still plays: the window waits for the hand-over
+  // (it ran out under a playing reply on the device, and Bluetooth went off with the phone on it).
+  p.press(0, false);
+  p.wifiReady(7000);
+  p.replyEnded(7000 + 10000);
+  p.phoneReady(7000 + 13000);
+  CHECK("waiting hand-over: Bluetooth stays on past the window", p.keepBluetooth(7000 + 40000));
+  CHECK("waiting hand-over: taken", p.takeHandover());
+  p.end();
+
   p.press(0, false);
   p.wifiReady(7000);
   p.replyEnded(8000);

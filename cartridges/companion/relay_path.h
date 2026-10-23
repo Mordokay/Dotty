@@ -43,7 +43,7 @@ class RelayPath {
   // Bluetooth on: racing, in a relay chat, or in a Wi-Fi chat's grace window (and outside a chat).
   bool keepBluetooth(uint32_t now) const {
     if (way_ != Wifi) return true;
-    if (!replyEnded_) return true;
+    if (!replyEnded_ || handover_) return true;  // a phone waiting to take the chat keeps its link
     const uint32_t minEnd = wifiReadyAt_ + kGraceMs;
     return now <= (replyEndAt_ > minEnd ? replyEndAt_ : minEnd);
   }

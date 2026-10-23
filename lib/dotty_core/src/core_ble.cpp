@@ -299,6 +299,18 @@ void start() {
   LOGI("ble", "advertising as %s", deviceName.c_str());
 }
 
+void advertiseSlowly(bool slow) {
+  if (!isRunning) return;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  const bool was = adv->isAdvertising();
+  if (was) adv->stop();
+  // 0.625 ms units: ~250 ms while Wi-Fi joins (the default 30-60 ms took radio time from its
+  // all-channel scan: a join took 15 s instead of 4-6), else back to the default (0 = the stack's).
+  adv->setMinInterval(slow ? 400 : 0);
+  adv->setMaxInterval(slow ? 400 : 0);
+  if (was && !isConnected) adv->start();
+}
+
 void stop() {
   if (!isRunning) return;
   NimBLEDevice::deinit(true);
