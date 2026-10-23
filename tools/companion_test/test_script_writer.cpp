@@ -12,7 +12,8 @@ static bool has(const std::string &s, const std::string &part) {
 
 int main() {
   CHECK_EQ("words: a minute is ~150 (read at ~2.5 words a second)", writerWords(60), 150);
-  CHECK_EQ("words: capped at a minute (Dotty keeps a minute of audio)", writerWords(600), 150);
+  CHECK_EQ("words: up to two minutes, 300 (read in chunks)", writerWords(120), 300);
+  CHECK_EQ("words: capped at two minutes", writerWords(600), 300);
   CHECK_EQ("words: at least 30 s worth", writerWords(5), 75);
 
   Profile mia = presetProfile("partner");
@@ -38,6 +39,29 @@ int main() {
   CHECK("answer: no text = failed", !parseWritten(200, R"({"candidates":[]})").ok);
   CHECK("answer: not JSON = failed", !parseWritten(200, "<html>").ok);
 
+  // Read in chunks of about 100 words, cut at sentence ends: a reading never runs a minute ahead of
+  // the speaker (Dotty buffers a minute of reply audio).
+  std::string story;
+  for (int i = 0; i < 30; i++) story += "Sentence number " + std::to_string(i) + " has exactly seven words. ";
+  const std::vector<std::string> chunks = readingChunks(story, 100);
+  CHECK("chunks: 210 words in 100-word chunks = 3", chunks.size() == 3);
+  bool sentences = true, sized = true;
+  std::string joined;
+  for (const std::string &c : chunks) {
+    sentences &= c.back() == '.';
+    int words = 0;
+    for (size_t i = 0; i < c.size(); i++) words += c[i] != ' ' && (i == 0 || c[i - 1] == ' ');
+    sized &= words <= 100;
+    joined += (joined.empty() ? "" : " ") + c;
+  }
+  CHECK("chunks: each ends a sentence, ≤ 100 words", sentences && sized);
+  CHECK("chunks: nothing lost", joined + " " == story);
+  CHECK("chunks: a short text is one", readingChunks("Just this. And that.", 100).size() == 1);
+  CHECK("chunks: one huge sentence is still cut", readingChunks(std::string(800, 'w') + " " + std::string(5, 'x'), 100).size() >= 1);
+  const std::string more = continueReadingNote("Then the boat came home.");
+  CHECK("continue note: carry on exactly, no recap", more.find("Carry on reading") != std::string::npos &&
+                                                         more.find("word for word") != std::string::npos &&
+                                                         more.find("Then the boat came home.") != std::string::npos);
   const std::string note = readAloudNote("Breathe in.");
   CHECK("read note: exactly, word for word", has(note, "Read the text below aloud exactly, word for word"));
   CHECK("read note: no tools, nothing else", has(note, "don't call any tool") && has(note, "say nothing else"));

@@ -168,5 +168,5 @@ std::string macrosSection(const MacroList &macros) {
 }
 
 std::string macroRequest(const Profile &p, const std::string &memories, const Macro &m) {
-  return writerRequest(p, memories, m.prompt, 60);
+  return writerRequest(p, memories, m.prompt, 120);  // ~300 words, read in chunks
 }

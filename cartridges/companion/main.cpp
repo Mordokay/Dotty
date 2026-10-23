@@ -28,6 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
+#include "adpcm_recorder.h"
 #include "job_slot.h"
 #include "macro_store.h"
 #include "recall.h"
@@ -58,7 +59,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.4.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.4.1");
 
 namespace {
 
@@ -130,9 +131,11 @@ uint32_t noteUntil = 0;        // "Remembered"… shows until then
 uint32_t bleBackAt = 0;
 // The last thing said, for replay (per companion: last.wav + last.json in its folder). The reply's
 // audio is copied as it arrives (up to a minute, like the voice backlog) and saved once it has played.
-constexpr size_t kLastMaxFrames = 60 * 24000;
-int16_t *lastRec = nullptr;  // PSRAM, only while a reply is being kept
-size_t lastRecFrames = 0;
+// Two minutes (a 300-word reading), kept as ADPCM (~1.4 MB) and written to the card as a WAV by a
+// task once heard (a 2-minute file took seconds: the loop shouldn't stop for it).
+constexpr size_t kLastMaxFrames = 120 * 24000;
+AdpcmRecorder lastRec;
+bool recording = false;  // this reply is being kept
 LastLine lastPending;  // this reply's text pieces
 LastLine lastLine;     // the active companion's saved one
 bool hasLast = false;
@@ -154,6 +157,8 @@ std::string jobCallId;           // recall's function call, answered with what w
 bool writing = false;            // a job asked, its follow-up not sent yet
 bool reading = false;            // the reading turn is under way
 bool readingStarts = false;      // its first text piece is next
+std::vector<std::string> readingRest;  // a long reading's chunks still to send (script_writer.h readingChunks)
+bool readingChunkDone = false;   // the last chunk has arrived: the next goes out once most of it has played
 bool questionDone = false;       // the question's own turn (often "Give me a moment") has ended
 bool written = false;            // the job's result has been taken (writtenResult is ready)
 Written writtenResult;
@@ -618,6 +623,8 @@ void cancelWriter() {
   jobs.cancel();  // a running task's result is dropped
   jobPending = false;
   writing = reading = questionDone = written = false;
+  readingRest.clear();
+  readingChunkDone = false;
   longTokens = 0;
   if (info.writing || info.recalling) redraw = true;
   info.writing = info.recalling = false;
@@ -637,6 +644,19 @@ void writerPoll() {
       jobs.finish(relayFetch.job, w);
     }
   }
+  // A long reading's next chunk, once most of the last has played (< 10 s left ahead of the speaker).
+  if (reading && readingChunkDone && !readingRest.empty() && live.ready()) {
+    const size_t played = voice::playedFrames();
+    const uint32_t aheadMs = replyFrames > played ? (replyFrames - played) / 24 : 0;
+    if (aheadMs < 10000) {
+      readingChunkDone = false;
+      readingStarts = true;  // a space between the chunks' text
+      LOGI("writer", "next chunk (%u left, %lu ms ahead)", static_cast<unsigned>(readingRest.size() - 1), static_cast<unsigned long>(aheadMs));
+      live.sendText(continueReadingNote(readingRest.front()), true);
+      readingRest.erase(readingRest.begin());
+      lastTurnAt = millis();
+    }
+  }
   if (!writing) return;
   if (jobPending && !jobs.busy()) launchJob();
   if (!written && jobs.take(writtenResult)) written = true;
@@ -653,7 +673,15 @@ void writerPoll() {
   if (!live.ready()) return cancelWriter();
   reading = readingStarts = true;
   if (jobKind == Job::Recall) live.answerTool(jobCallId, "recall", recallResult(writtenResult));
-  else live.sendText(writtenResult.ok ? readAloudNote(writtenResult.text) : writerFailedNote(), true);
+  else if (!writtenResult.ok) live.sendText(writerFailedNote(), true);
+  else {  // read in chunks of ~100 words (a 300-word text is two minutes; Dotty buffers one)
+    std::vector<std::string> chunks = readingChunks(writtenResult.text, 100);
+    if (chunks.empty()) chunks.push_back(writtenResult.text);
+    readingRest.assign(chunks.begin() + 1, chunks.end());
+    readingChunkDone = false;
+    LOGI("writer", "reading %u chunks", static_cast<unsigned>(chunks.size()));
+    live.sendText(readAloudNote(chunks.front()), true);
+  }
   if (info.state != Talk::Speaking) setState(Talk::Thinking);
   lastTurnAt = millis();
   redraw = true;
@@ -699,11 +727,7 @@ GeminiLive::Callbacks callbacks() {
     if (!voice::playing()) beginReply();
     voice::play(pcm, frames);
     replyFrames += frames;
-    if (lastRec && lastRecFrames < kLastMaxFrames) {  // kept for replay (the first minute)
-      const size_t n = min(frames, kLastMaxFrames - lastRecFrames);
-      memcpy(lastRec + lastRecFrames, pcm, n * 2);
-      lastRecFrames += n;
-    }
+    if (recording) lastRec.add(pcm, frames);  // kept for replay (the first two minutes)
   };
   cb.mood = [](const std::string &m) {
     turnMood = m.c_str();
@@ -725,6 +749,12 @@ GeminiLive::Callbacks callbacks() {
     if (writing) {  // the question's turn ("Give me a moment"): the reading follows (writerPoll)
       questionDone = true;
       longTokens += tokens;
+      lastTurnAt = millis();
+      return;
+    }
+    if (reading && !readingRest.empty()) {  // a chunk has arrived: the next goes out in writerPoll
+      longTokens += tokens;
+      readingChunkDone = true;
       lastTurnAt = millis();
       return;
     }
@@ -1137,19 +1167,16 @@ String lastPath(const std::string &id, const char *ext) {
   return companions::folder(id) + "/last." + ext;
 }
 
-// A new reply: keep its audio (a minute at most) and its text pieces.
+// A new reply: keep its audio (two minutes at most) and its text pieces.
 void beginLast() {
   lastPending = LastLine();
-  lastRecFrames = 0;
-  if (settings.textOnly) return;
-  if (!lastRec) lastRec = static_cast<int16_t *>(heap_caps_malloc(kLastMaxFrames * 2, MALLOC_CAP_SPIRAM));
-  if (!lastRec) LOGW("companion", "no memory to keep the reply for replay");
+  lastRec.reset(kLastMaxFrames);
+  recording = !settings.textOnly;
 }
 
 void freeLast() {
-  if (lastRec) heap_caps_free(lastRec);
-  lastRec = nullptr;
-  lastRecFrames = 0;
+  lastRec.reset(0);
+  recording = false;
 }
 
 void loadLast() {
@@ -1182,29 +1209,74 @@ bool writeCard(const String &path, const uint8_t *head, size_t headLen, const ui
   return ok;
 }
 
+// A heard reply on its way to the card (a task writes it: two minutes are ~6 MB of WAV).
+struct LastSave {
+  AdpcmRecorder audio;
+  LastLine line;
+  std::string companion;
+  String wav, json;
+  uint32_t startedAt = 0;
+  volatile bool done = false;
+  bool ok = false;
+};
+LastSave *lastSave = nullptr;
+
+void lastSaveTask(void *arg) {
+  LastSave *job = static_cast<LastSave *>(arg);
+  uint8_t header[44];
+  wavHeader(header, job->audio.samples() * 2, 24000);
+  File f = SD_MMC.open(job->wav + ".part", FILE_WRITE);
+  bool ok = static_cast<bool>(f) && f.write(header, sizeof(header)) == sizeof(header);
+  job->audio.decode([&](const int16_t *pcm, size_t n) {
+    if (ok) ok = f.write(reinterpret_cast<const uint8_t *>(pcm), n * 2) == n * 2;
+  });
+  f.close();
+  if (ok) {
+    SD_MMC.remove(job->wav);
+    ok = SD_MMC.rename(job->wav + ".part", job->wav);
+  }
+  const std::string json = lastLineJson(job->line);
+  ok = ok && writeCard(job->json, reinterpret_cast<const uint8_t *>(json.data()), json.size(), nullptr, 0);
+  job->ok = ok;
+  job->done = true;  // the loop takes it from here (lastSavePoll)
+  vTaskDelete(nullptr);
+}
+
 // The reply has been heard: onto the card, as the companion's last line.
 void saveLast() {
-  if (!lastRec || settings.textOnly || lastRecFrames < 24000 / 2) return freeLast();  // nothing worth replaying
-  const uint32_t started = millis();
+  if (!recording || settings.textOnly || lastRec.samples() < 24000 / 2 || lastSave) return freeLast();  // nothing to keep (or one still saving)
   lastPending.ms = UINT32_MAX;
-  lastPending.cut(lastRecFrames / 24);
+  lastPending.cut(lastRec.samples() / 24);
   lastPending.mood = turnMood.c_str();
   lastPending.t = time(nullptr);
-  uint8_t header[44];
-  wavHeader(header, lastRecFrames * 2, 24000);
-  const std::string json = lastLineJson(lastPending);
-  const bool ok = writeCard(lastPath(sessionCompanion, "wav"), header, sizeof(header),
-                            reinterpret_cast<const uint8_t *>(lastRec), lastRecFrames * 2) &&
-                  writeCard(lastPath(sessionCompanion, "json"), reinterpret_cast<const uint8_t *>(json.data()),
-                            json.size(), nullptr, 0);
-  LOGI("companion", "last line %s: %.1f s in %lu ms", ok ? "saved" : "NOT saved", lastRecFrames / 24000.0f,
-       static_cast<unsigned long>(millis() - started));
-  freeLast();
-  if (ok && sessionCompanion == companions::active().id) {
-    lastLine = lastPending;
+  LastSave *job = new LastSave();
+  job->audio = std::move(lastRec);
+  job->line = lastPending;
+  job->companion = sessionCompanion;
+  job->wav = lastPath(sessionCompanion, "wav");
+  job->json = lastPath(sessionCompanion, "json");
+  job->startedAt = millis();
+  lastRec = AdpcmRecorder();
+  recording = false;
+  lastSave = job;
+  if (xTaskCreatePinnedToCore(lastSaveTask, "last-save", 8192, job, 1, nullptr, 0) != pdPASS) {
+    LOGW("companion", "last line NOT saved: no task");
+    delete job;
+    lastSave = nullptr;
+  }
+}
+
+void lastSavePoll() {
+  if (!lastSave || !lastSave->done) return;
+  LOGI("companion", "last line %s: %.1f s in %lu ms", lastSave->ok ? "saved" : "NOT saved", lastSave->audio.samples() / 24000.0f,
+       static_cast<unsigned long>(millis() - lastSave->startedAt));
+  if (lastSave->ok && lastSave->companion == companions::active().id) {
+    lastLine = lastSave->line;
     hasLast = true;
     redraw = true;
   }
+  delete lastSave;
+  lastSave = nullptr;
 }
 
 bool canReplay() {
@@ -2221,6 +2293,7 @@ void loop() {
   if (!(live.overRelay() && live.connected())) relay::poll();
   voice::poll();
   pollReplay();
+  lastSavePoll();
 
   // The background connect finished (the screen may already be listening).
   if (awaitingConnect && !connecting && !live.connected() && !resumeRetryAt) {

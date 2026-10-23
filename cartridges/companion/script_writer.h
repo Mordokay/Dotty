@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "companion_store.h"
 
@@ -12,7 +13,7 @@
 
 constexpr const char *kWriterModel = "gemini-flash-lite-latest";  // 138 words in 2.7 s on the device
 
-int writerWords(int seconds);  // ~2.5 words a second, 30-60 s (Dotty keeps a minute of audio)
+int writerWords(int seconds);  // ~2.5 words a second, 30-120 s (read in chunks: readingChunks)
 // The generateContent body: the companion's character and memories, the length, what to write.
 std::string writerRequest(const Profile &p, const std::string &memories, const std::string &what, int seconds);
 
@@ -25,4 +26,9 @@ Written parseWritten(int httpStatus, const std::string &body);
 
 // What Dotty tells Live (as a typed turn; the user never sees it).
 std::string readAloudNote(const std::string &text);
+// A long text in chunks of at most maxWords, cut at sentence ends (a sentence longer than that is cut
+// between words): Live reads one chunk a turn, the next sent when Dotty has played most of the last,
+// so a reading never runs more than a minute ahead of the speaker (Dotty buffers a minute of audio).
+std::vector<std::string> readingChunks(const std::string &text, int maxWords);
+std::string continueReadingNote(const std::string &text);  // the next chunk: carry on, word for word
 std::string writerFailedNote();

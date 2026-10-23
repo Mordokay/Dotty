@@ -1,6 +1,6 @@
 // uses: cartridges/companion/macro_store.cpp cartridges/companion/script_writer.cpp cartridges/companion/companion_store.cpp
 // Macros (the user, 2026-10-23): phrases that make the companion run a prepared prompt through the
-// text model (~150 words, in its own voice) and read the result aloud. Shared by all companions.
+// text model (~300 words, in its own voice) and read the result aloud. Shared by all companions.
 #include <ArduinoJson.h>
 
 #include "check.h"
@@ -64,7 +64,7 @@ int main() {
   deserializeJson(doc, macroRequest(mia, "", presets.all()[0]));
   const std::string sys = doc["systemInstruction"]["parts"][0]["text"] | "";
   const std::string user = doc["contents"][0]["parts"][0]["text"] | "";
-  CHECK("request: in Mia's voice, ~150 words", has(sys, "Mia") && has(sys, "About 150 words"));
+  CHECK("request: in Mia's voice, ~300 words (two minutes)", has(sys, "Mia") && has(sys, "About 300 words"));
   CHECK("request: the macro's prompt", user == presets.all()[0].prompt);
   return failures ? 1 : 0;
 }

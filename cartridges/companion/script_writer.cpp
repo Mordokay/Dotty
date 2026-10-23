@@ -18,7 +18,7 @@ std::string join(const std::vector<std::string> &items, const char *sep) {
 }  // namespace
 
 int writerWords(int seconds) {
-  const int s = seconds < 30 ? 30 : seconds > 60 ? 60 : seconds;
+  const int s = seconds < 30 ? 30 : seconds > 120 ? 120 : seconds;
   return s * 5 / 2;
 }
 
@@ -67,6 +67,48 @@ std::string readAloudNote(const std::string &text) {
   return "(Dotty, not the user: here is the text you asked to have written.) Read the text below aloud exactly, word "
          "for word, as yourself, with the feeling it calls for. Don't add, skip or change anything, don't call any "
          "tool, and say nothing else.\n\n" + text;
+}
+
+std::vector<std::string> readingChunks(const std::string &text, int maxWords) {
+  // Words, then sentences (a word ending . ! or ? ends one), then chunks of whole sentences.
+  std::vector<std::vector<std::string>> sentences(1);
+  std::string word;
+  for (const char c : text + " ") {
+    if (c != ' ' && c != '\n' && c != '\t') {
+      word += c;
+      continue;
+    }
+    if (word.empty()) continue;
+    sentences.back().push_back(word);
+    const char last = word.back();
+    if (last == '.' || last == '!' || last == '?') sentences.emplace_back();
+    word.clear();
+  }
+  std::vector<std::string> chunks;
+  std::string chunk;
+  int words = 0;
+  auto flush = [&] {
+    if (!chunk.empty()) chunks.push_back(chunk);
+    chunk.clear();
+    words = 0;
+  };
+  for (const std::vector<std::string> &s : sentences) {
+    if (s.empty()) continue;
+    if (words + static_cast<int>(s.size()) > maxWords) flush();
+    for (const std::string &w : s) {
+      if (words == maxWords) flush();  // one sentence longer than a chunk: cut between words
+      chunk += (chunk.empty() ? "" : " ") + w;
+      words++;
+    }
+  }
+  flush();
+  return chunks;
+}
+
+std::string continueReadingNote(const std::string &text) {
+  return "(Dotty, not the user: the text goes on.) Carry on reading aloud, exactly, word for word, in the same voice "
+         "and mood, as if you had never stopped: no greeting, no recap, don't call any tool, and say nothing else.\n\n" +
+         text;
 }
 
 std::string writerFailedNote() {

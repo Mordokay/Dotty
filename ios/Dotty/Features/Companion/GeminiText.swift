@@ -138,7 +138,7 @@ enum CompanionDesign {
     /// prompt goes to a text model that writes ~150 words for the companion to read aloud.
     static func macro(name: String, triggers: String, current: String) -> (prompt: String, schema: [String: Any]) {
         var prompt = """
-            You improve a prompt for a text model. That model writes about 150 words (one minute read aloud) for a \
+            You improve a prompt for a text model. That model writes about 300 words (two minutes read aloud) for a \
             desk companion to say to the user, in the companion's own voice and character, which it is given \
             separately. Write the prompt in plain, direct English, in the second person to the companion, the way \
             the user would ask ("Tell me...", "Guide me..."): the tone, what to include and in what order, how to \

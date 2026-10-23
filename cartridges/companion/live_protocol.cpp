@@ -244,7 +244,7 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "sentences; longer only when asked. When the user asks for something long or in depth (a story, a guided "
       "exercise or meditation, a deep explanation, anything over about 30 seconds), don't answer it yourself: call "
       "write_long with what to write (the request, with what matters from the chat) and how many seconds it "
-      "should last (at most 60), and say at most a few words like \"Give me a moment\". Dotty then gives you the "
+      "should last (at most 120), and say at most a few words like \"Give me a moment\". Dotty then gives you the "
       "text to read aloud. You can look back at your past chats: when the user asks about something said before that "
       "isn't in your memories or recent chats (\"what was I saying yesterday morning?\", \"what did I say about "
       "bananas the other day?\"), call recall with their question, the days it points to (from and to, YYYY-MM-DD; "
