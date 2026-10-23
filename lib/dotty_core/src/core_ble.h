@@ -55,6 +55,10 @@ int poll();
 void notify(JsonDocument &event);
 
 bool connected();
+// Raw bytes on the Event characteristic (the companion's relay voice: the app sets 0x1F-first
+// values aside). false when the stack's buffers are full: try again shortly. Payload ≤ mtu() - 3.
+bool notifyRaw(const uint8_t *data, size_t len);
+size_t mtu();
 
 // "Dotty-SP01": the name the iPhone lists.
 const String &name();

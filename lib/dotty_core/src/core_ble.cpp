@@ -346,6 +346,14 @@ int poll() {
 
 // Messages longer than one notification go out in pieces: every piece but the last starts
 // with kMoreFollows (0x1E), and the client appends pieces until one doesn't.
+bool notifyRaw(const uint8_t *data, size_t len) {
+  return isConnected && eventChar && eventChar->notify(data, len);
+}
+
+size_t mtu() {
+  return peerMtu;
+}
+
 void notify(JsonDocument &event) {
   if (!isConnected || !eventChar) return;
   String json;
@@ -353,8 +361,10 @@ void notify(JsonDocument &event) {
   const size_t room = peerMtu > 3 ? peerMtu - 3 : 20;
   const uint8_t *bytes = reinterpret_cast<const uint8_t *>(json.c_str());
   size_t left = json.length();
-  if (left <= room) {
-    eventChar->notify(bytes, left);
+  if (left <= room) {  // retried like the pieces below: right after a burst the buffers are full
+    bool sent = false;
+    for (int tries = 0; tries < 50 && !(sent = eventChar->notify(bytes, left)); tries++) delay(5);
+    if (!sent) LOGW("ble", "notify dropped (%u bytes)", static_cast<unsigned>(left));
     return;
   }
   uint8_t piece[517];

@@ -43,6 +43,12 @@ final class DottyLink: NSObject {
     @ObservationIgnored private var infoCharacteristic: CBCharacteristic?
     @ObservationIgnored private var commandCharacteristic: CBCharacteristic?
     @ObservationIgnored private var eventCharacteristic: CBCharacteristic?
+    // The companion's relay (Features/Relay): raw values from Dotty (0x1F first: its voice), every
+    // relay.* event, and fast writes to the Data characteristic.
+    @ObservationIgnored private var dataCharacteristic: CBCharacteristic?
+    @ObservationIgnored var onRelayRaw: ((Data) -> Void)?
+    @ObservationIgnored var onRelayEvent: ((DottyMessage) -> Void)?
+    @ObservationIgnored private var writeReady: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var wantsScan = false
     /// Pieces of a long event (firmware: each piece but the last starts with 0x1E).
@@ -269,6 +275,10 @@ final class DottyLink: NSObject {
         if let command = message.command, let waiter = replyWaiters.first(where: { $0.command == command }) {
             finishWaiter(id: waiter.id, with: .success(message))
         } else {
+            if let event = message.event, event.hasPrefix("relay.") {
+                onRelayEvent?(message)
+                return  // the relay's traffic: not an app event
+            }
             lastEvent = message
             eventCount += 1
         }
@@ -346,6 +356,9 @@ extension DottyLink: @preconcurrency CBCentralManagerDelegate {
         infoCharacteristic = nil
         commandCharacteristic = nil
         eventCharacteristic = nil
+        dataCharacteristic = nil
+        writeReady?.resume()  // a relay write waiting for room: it sees the link gone and stops
+        writeReady = nil
         subscribed = false
         pendingEvent = Data()
         failAllReplies(DottyError.notConnected)
@@ -374,6 +387,7 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
             case DottyUUID.info: infoCharacteristic = characteristic
             case DottyUUID.command: commandCharacteristic = characteristic
             case DottyUUID.event: eventCharacteristic = characteristic
+            case DottyUUID.data: dataCharacteristic = characteristic
             default: break
             }
         }
@@ -405,6 +419,10 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
             }
             becameReadyIfComplete()
         case DottyUUID.event:
+            if value.first == 0x1F {  // a raw relay value, not JSON
+                onRelayRaw?(value)
+                return
+            }
             if value.first == 0x1E {
                 pendingEvent.append(value.dropFirst())
             } else {
@@ -415,6 +433,25 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
             break
         }
     }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        writeReady?.resume()
+        writeReady = nil
+    }
+
+    /// Bytes to Dotty's Data characteristic as fast as CoreBluetooth takes them: writes sent while
+    /// its queue is full are dropped silently, so each waits for canSendWriteWithoutResponse.
+    func writeStream(_ data: Data) async -> Bool {
+        guard let peripheral, let dataCharacteristic, connection == .connected else { return false }
+        while !peripheral.canSendWriteWithoutResponse {
+            await withCheckedContinuation { writeReady = $0 }
+            if connection != .connected || self.dataCharacteristic == nil { return false }  // released by a disconnect
+        }
+        peripheral.writeValue(data, for: dataCharacteristic, type: .withoutResponse)
+        return true
+    }
+
+    var maxWriteLength: Int { peripheral?.maximumWriteValueLength(for: .withoutResponse) ?? 20 }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         // A refused write (e.g. pairing cancelled) fails the oldest waiting command.
