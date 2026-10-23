@@ -20,6 +20,7 @@ struct ScreenInfo {
   int page = -1;         // a long reply's page after it ends (-1 = the last one)
   // The last line's replay: buttons under the gear (▶/‖, then loop) when there is one.
   bool replayable = false, replaying = false, replayPaused = false, replayLoop = false;
+  bool writing = false;  // a long answer is being written: "Writing..." under the avatar
   int replayProgress = 0;  // 0..1000 while a replay plays or is paused (the bar under the avatar)
 };
 

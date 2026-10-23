@@ -121,9 +121,10 @@ std::string liveSetup(const LiveConfig &config) {
   for (const char *f : {"personality", "traits", "quirks", "speaking", "backstory"}) field["enum"].add(f);
   param(evolve, "value", "STRING", true);
   param(evolve, "why", "STRING", true);
-  // A reply longer than one part (~25-30 s): Dotty asks for the rest, part by part (long_reply.h).
-  JsonObject longer = declare("long_reply", "Before a long answer the user asked for (a length in time, a long story, a "
-                                            "guided exercise): how many seconds it should last");
+  // A long answer: a text model writes it, then Dotty hands it back to be read aloud (script_writer.h).
+  JsonObject longer = declare("write_long", "Have a long answer written for you to read aloud (a story, a guided "
+                                            "exercise, an explanation in depth)");
+  param(longer, "what", "STRING", true);
   param(longer, "seconds", "INTEGER", true);
   return serialize(doc);
 }
@@ -169,7 +170,7 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | (args["name"] | (args["value"] | ""));  // set_name's name, evolve's value
+    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | "")));  // set_name, evolve, write_long
     c.field = args["field"] | "";
     c.why = args["why"] | "";
     c.seconds = args["seconds"] | 0;
@@ -218,11 +219,11 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
                               const std::string &memorySection) {
   std::string s =
       persona + "\n\nTalk like a person in conversation: usually one or two short "
-      "sentences; longer only when asked. When the user asks for something long (a length in time like a minute, a "
-      "long story, a guided exercise or meditation), call long_reply with the seconds it should last, then speak "
-      "a first part of about 30 seconds and stop at the end of a sentence without wrapping up or saying goodbye: "
-      "Dotty asks you "
-      "to carry on, and only the last part ends it. In a long answer, speak in full, flowing sentences. You are on a "
+      "sentences; longer only when asked. When the user asks for something long or in depth (a story, a guided "
+      "exercise or meditation, a deep explanation, anything over about 30 seconds), don't answer it yourself: call "
+      "write_long with what to write (the request, with what matters from the chat) and how many seconds it "
+      "should last (at most 60), and say at most a few words like \"Give me a moment\". Dotty then gives you the "
+      "text to read aloud. You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "
       "Call set_mood with each reply. Let your voice carry your mood: how you sound matters as much as what you say. "

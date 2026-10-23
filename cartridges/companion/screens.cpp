@@ -61,14 +61,20 @@ void drawReplayButtons(bool playing, bool loop) {
 }
 
 // A memory change: a bookmark and the word, under the avatar (beside it in text-only mode).
-void drawNote(const String &note, bool small) {
+// pencil = a long answer being written (else the memory bookmark).
+void drawNote(const String &note, bool small, bool pencil = false) {
   epd.setFont(nullptr);  // the small built-in font: 6 px a character
   const int16_t w = 10 + 4 + 6 * note.length();
   const int16_t x = small ? kW - 6 - w : (kW - w) / 2, y = small ? 82 : 116;
   epd.fillRoundRect(x - 4, y - 2, w + 8, 16, 4, kWhite);  // a white strip over the avatar's edge
   epd.drawRoundRect(x - 4, y - 2, w + 8, 16, 4, kBlack);
-  epd.fillRect(x, y, 10, 12, kBlack);
-  epd.fillTriangle(x, y + 12, x + 9, y + 12, x + 5, y + 7, kWhite);
+  if (pencil) {
+    for (int d = -1; d <= 1; d++) epd.drawLine(x + 2 + d, y + 9, x + 9 + d, y + 2, kBlack);  // the body
+    epd.fillTriangle(x, y + 12, x + 1, y + 8, x + 4, y + 11, kBlack);                      // the tip
+  } else {
+    epd.fillRect(x, y, 10, 12, kBlack);
+    epd.fillTriangle(x, y + 12, x + 9, y + 12, x + 5, y + 7, kWhite);
+  }
   epd.setTextColor(kBlack);
   epd.setCursor(x + 14, y + 3);
   epd.print(note);
@@ -189,7 +195,8 @@ void draw(const ScreenInfo &shownInfo) {
   if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
   else avatar::draw(epd, (kW - kAvatarSize) / 2, 2, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
-  if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
+  if (info.writing) drawNote("Writing...", small, true);
+  else if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   drawHistoryIcon();
   if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);
   if ((shownInfo.replaying || shownInfo.replayPaused) && !small) {  // how far the replay is, like a song's bar

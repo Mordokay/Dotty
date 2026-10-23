@@ -904,17 +904,19 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `companion.replay`. App: `LastLineCard` on the active companion's page (play/pause, loop).
   Saving a 30 s line takes ~1 s after it has played. **Long replies** (user, 2026-10-23): asked
   for "one whole minute" (also "about 150 words", and with a rule to honour lengths) Gemini Live
-  gave 25-30 s every time, so long answers are **stitched** (`long_reply.h`, host-tested): the
-  model calls `long_reply {seconds}` (30-60 s; Dotty keeps a minute of audio) and speaks a first
-  part of ~30 s without wrapping up; when a part has arrived (turnComplete) Dotty sends a "carry on
-  exactly where you stopped… speak about 30 seconds… don't wrap up yet" note, so the next part
-  arrives while this one plays; with ≤ 20 s left the note asks for the last part (≥ 10 s) to end
-  it, and nothing follows a last part (a "last part" asked with 32 s left came out at 11 s, ended,
-  and two more parts ended again). ≤ 4 parts; one history line, tokens counted once; the replay
-  records every part as one line. Rule: "in a long answer, speak in full, flowing sentences" (surf
-  talk came out in fragments). Measured: surf 49 s in 4 parts (25 + 11 + 8 + 5 s before the
-  fixes), the user's "guide me for 1 minute on a meditation" 44 s in 4 parts of 10-15 s (calm
-  speech makes short parts whatever is asked), ~15k tokens. Dev key K logs the saved line's pieces.
+  gave 25-30 s every time. Stitching parts ("carry on where you stopped", 2026-10-23, removed) made
+  the minute but each part shrank to 10-15 s and every "last part" ended the speech again. Now a
+  **writer** (`script_writer.*`, host-tested): for anything long or in depth the model calls
+  `write_long {what, seconds}` (≤ 60 s; Dotty keeps a minute of audio) and says at most "Give me a
+  moment"; a task (core 0, 12 KB) asks `gemini-flash-lite-latest` (generateContent, a second TLS
+  connection — fits only with mbedTLS in PSRAM, below) for ~2.5 words a second in the companion's
+  voice (its character and memories, first person, spoken sentences); once the question's own turn
+  and the text are both done, Dotty sends "read the text below aloud exactly, word for word" and Live
+  reads it (the speaker stream stays open between, so it's one reply, one history line, one replay
+  line). A failed write → "answer the request yourself". Screen: a pencil note "Writing..." over
+  the avatar's edge. Measured: the user's "guide me for 1 minute on a meditation" → written in
+  3.3 s (824 characters), read in one turn, saved line 49.9 s, ~10.9k tokens for the exchange.
+  Dev key K logs the saved line's pieces.
   **Word-for-word reading** (dev key H, 2026-10-23): Live told "read the text below aloud exactly"
   read a 157-word meditation script in **one turn of 57.6 s**, transcript identical word for word
   (difflib ratio 1.000), ~6k tokens — reading isn't held to the ~30 s its own replies keep to. Live
@@ -926,7 +928,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   mbedTLS's buffers in PSRAM (pioarduino `custom_sdkconfig = CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`,
   `# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set`; first build 3 min 42 s, rollback still on):
   106 KB free, largest 53 KB during a session, the request worked (HTTP 200, 2.7 s, 138 words,
-  −6 KB internal) and the chat carried on normally.
+  −6 KB internal) and the chat carried on normally. **Adopted for `[env:companion]`** (only; the
+  first build rebuilds the core, ~4 min; the generated `sdkconfig.*`, `managed_components/`,
+  `.dummy/` are gitignored). Other cartridges keep the prebuilt core: the launcher (HTTPS with BLE
+  up, see 0.9.25) is the next candidate; never Rescue (fixed 768 KB slot, the safety net).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

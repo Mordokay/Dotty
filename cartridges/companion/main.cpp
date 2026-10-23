@@ -28,7 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
-#include "long_reply.h"
+#include "script_writer.h"
 #include "piece_buffer.h"
 #include "ui.h"
 #include "memories.h"
@@ -130,8 +130,19 @@ bool hasLast = false;
 Replay replay;
 std::string replayShown;  // the replay's text on screen
 int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when talksToday last counted
-LongReply longReply;  // a reply asked to last longer than one part: Dotty asks for the rest
-int longTokens = 0;   // the earlier parts' tokens (the exchange is counted once, at its end)
+// A long answer (write_long): a text model writes it in a task (a second TLS connection), then
+// Live reads it aloud word for word. The reading goes out once the question's turn and the writing
+// are both done; the speaker's stream stays open between them, so it plays as one reply.
+bool writing = false;            // write_long asked, the note not sent yet
+bool reading = false;            // the reading turn is under way
+bool readingStarts = false;      // its first text piece is next
+bool questionDone = false;       // the question's own turn (often "Give me a moment") has ended
+volatile bool written = false;   // the task has finished (writtenResult is ready)
+volatile uint32_t writerJob = 0; // a job's number: BOOT or a disconnect makes a running one stale
+Written writtenResult;
+std::string writerBody;          // the request, built on the loop for the task
+String writerKey;
+int longTokens = 0;              // the question's tokens (the exchange is counted once, at its end)
 bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
@@ -231,8 +242,12 @@ String placeName() {
   return name;
 }
 
+void cancelWriter();
+void startWriter(const std::string &what, int seconds);
+
 void disconnect(const char *why) {
   reviewStart = 0;
+  cancelWriter();
   early.clear();
   earlyAt = 0;
   turnSent = awaitingSend = awaitingConnect = false;
@@ -396,9 +411,8 @@ int applyMemory(const ToolCall &c) {
       change = "evolved " + c.field + ": " + c.why;
       notifyChanged();
     }
-  } else if (c.name == "long_reply") {  // the reply comes in parts: see cb.turnDone
-    longReply.begin(c.seconds);
-    LOGI("companion", "long reply: %u s asked", static_cast<unsigned>(longReply.targetMs() / 1000));
+  } else if (c.name == "write_long") {  // a text model writes it, then Live reads it (see writerLoop)
+    if (!writing && !reading) startWriter(c.text, c.seconds);
   } else if (c.name == "forget_memory") {
     const Memory *m = store.find(c.memoryId);
     const std::string text = m ? m->text : "";
@@ -420,6 +434,82 @@ int applyMemory(const ToolCall &c) {
   return id;
 }
 
+// ---------- the writer (write_long) ----------
+
+void writerTask(void *arg) {
+  const uint32_t job = reinterpret_cast<uintptr_t>(arg);
+  const String url = String("https://generativelanguage.googleapis.com/v1beta/models/") + kWriterModel +
+                     ":generateContent?key=" + writerKey;
+  std::string body;
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.method = HTTP_METHOD_POST;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.timeout_ms = 25000;
+  config.event_handler = [](esp_http_client_event_t *e) {
+    if (e->event_id == HTTP_EVENT_ON_DATA) static_cast<std::string *>(e->user_data)->append(static_cast<const char *>(e->data), e->data_len);
+    return ESP_OK;
+  };
+  config.user_data = &body;
+  const uint32_t started = millis();
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  esp_http_client_set_header(client, "Content-Type", "application/json");
+  esp_http_client_set_post_field(client, writerBody.c_str(), writerBody.size());
+  const esp_err_t err = esp_http_client_perform(client);
+  const int status = esp_http_client_get_status_code(client);
+  esp_http_client_cleanup(client);
+  Written w = err == ESP_OK ? parseWritten(status, body) : Written();
+  if (err != ESP_OK) w.error = esp_err_to_name(err);
+  LOGI("writer", "%s in %lu ms: %u characters, %d tokens%s%s", w.ok ? "written" : "failed",
+       static_cast<unsigned long>(millis() - started), static_cast<unsigned>(w.text.size()), w.tokens,
+       w.ok ? "" : ": ", w.error.c_str());
+  if (job == writerJob) {  // nobody gave up on it meanwhile
+    writtenResult = w;
+    written = true;
+  }
+  vTaskDelete(nullptr);
+}
+
+void startWriter(const std::string &what, int seconds) {
+  writerBody = writerRequest(companions::active(), memorySection, what, seconds);
+  writerKey = sessionKeyText;
+  writing = true;
+  written = false;
+  questionDone = false;
+  const uint32_t job = ++writerJob;
+  LOGI("writer", "%d s: %.100s", seconds, what.c_str());
+  if (xTaskCreatePinnedToCore(writerTask, "writer", 12288, reinterpret_cast<void *>(static_cast<uintptr_t>(job)), 1,
+                              nullptr, 0) != pdPASS) {
+    writtenResult = Written();
+    writtenResult.error = "no task";
+    written = true;
+  }
+  info.writing = true;
+  redraw = true;
+}
+
+void cancelWriter() {
+  writerJob++;  // a running task's result is dropped
+  writing = reading = questionDone = written = false;
+  longTokens = 0;
+  if (info.writing) redraw = true;
+  info.writing = false;
+}
+
+// Both done (the text, and the question's own turn): Live reads it, or answers itself if it failed.
+void writerPoll() {
+  if (!writing || !written || !questionDone) return;
+  writing = questionDone = written = false;
+  info.writing = false;
+  if (writtenResult.tokens) usage::addTokens(writtenResult.tokens, sessionKey);
+  if (!live.ready()) return cancelWriter();
+  reading = readingStarts = true;
+  live.sendText(writtenResult.ok ? readAloudNote(writtenResult.text) : writerFailedNote());
+  if (info.state != Talk::Speaking) setState(Talk::Thinking);
+  lastTurnAt = millis();
+  redraw = true;
+}
+
 // ---------- Gemini callbacks (run inside live.poll(), on the main loop) ----------
 
 GeminiLive::Callbacks callbacks() {
@@ -439,8 +529,12 @@ GeminiLive::Callbacks callbacks() {
     info.heard = heard.c_str();
     redraw = true;
   };
-  cb.said = [](const std::string &t) {
+  cb.said = [](const std::string &piece) {
     if (info.state != Talk::Thinking && info.state != Talk::Speaking) return;  // an interrupted reply
+    // The reading's first words follow the question's own ("Give me a moment."): a space between.
+    std::string t = piece;
+    if (readingStarts && !said.empty() && !t.empty() && t[0] != ' ') t = " " + t;
+    readingStarts = false;
     if (settings.textOnly) {
       showText(t);
       beginReply();
@@ -476,19 +570,15 @@ GeminiLive::Callbacks callbacks() {
       setState(Talk::Offline, idleStatus());
       return;
     }
-    // A long reply: this part has arrived, ask for the next one now (it arrives while this part is
-    // still playing, so the speech runs on without a gap).
-    const uint32_t receivedMs = settings.textOnly ? said.size() * 1000 / 15 : replyFrames / 24;  // ~15 characters a second
-    if (longReply.more(receivedMs) && sessionCompanion == companions::active().id) {
+    if (writing) {  // the question's turn ("Give me a moment"): the reading follows (writerPoll)
+      questionDone = true;
       longTokens += tokens;
-      LOGI("companion", "long reply: part %d after %.1f s", longReply.parts() + 1, receivedMs / 1000.0f);
-      live.sendText(longReply.next(receivedMs));
       lastTurnAt = millis();
       return;
     }
+    reading = false;
     tokens += longTokens;
     longTokens = 0;
-    longReply.end();
     voice::playEnd();
     std::string full = said;  // history gets the whole reply, even before it's all been heard
     for (const TextPiece &p : textQueue) full += p.text;
@@ -646,8 +736,7 @@ void startTalking() {
   reviewStart = 0;  // talking again: the end-of-chat review is dropped (its reply drains away)
   stopReplay();
   beginLast();
-  longReply.end();
-  longTokens = 0;
+  cancelWriter();
   turnMemory.clear();
   textQueue.clear();
   replyFrames = 0;
@@ -1814,12 +1903,14 @@ void loop() {
     disconnect("no reply");
     setState(Talk::Error, "Connection lost");
   }
-  if (info.state == Talk::Thinking && !awaitingSend && millis() - releasedAt > 20000) setState(Talk::Ready, "No reply. Try again?");
+  writerPoll();
+  if (info.state == Talk::Thinking && !awaitingSend && !writing && !reading && millis() - releasedAt > 20000)
+    setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
     lastTextAt = millis();  // at most a redraw a second: a partial refresh takes 0.6 s
     releaseText(!voice::playing());
   }
-  if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn()) {
+  if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn() && !writing && !reading) {
     LOGI("companion", "spoken; longest loop pause %lu ms", static_cast<unsigned long>(longestPause));
     saveLast();
     longestPause = 0;
@@ -1904,8 +1995,7 @@ void loop() {
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();
     beginLast();
-    longReply.end();
-    longTokens = 0;
+    cancelWriter();
     said.clear();  // a turn like startTalking's, without opening a voice activity
     info.said = "";
     turnMood = info.mood = "neutral";
@@ -1916,7 +2006,7 @@ void loop() {
     heard = *typed ? typed
                    : std::string("(Dotty, not the user: a reading test.) Read the text below aloud exactly, word for "
                                  "word, in a calm, slow voice. Don't add, skip or change anything, don't call "
-                                 "long_reply, and say nothing else.\n\n") + kScript;
+                                 "write_long, and say nothing else.\n\n") + kScript;
     info.heard = heard.c_str();
     live.sendText(heard);
     releasedAt = millis();
