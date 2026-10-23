@@ -227,6 +227,11 @@ struct CompanionPage: View {
                                  subtitle: "Things \(displayName) remembers about you", systemImage: "bookmark") { chevron }
                     }
                     .buttonStyle(.plain)
+                    NavigationLink { CompanionDayView(day: CompanionHistoryView.today, companion: summary.id) } label: {
+                        LightRow(title: "Today's chat", subtitle: "Updates a moment after each chat on Dotty",
+                                 systemImage: "bubble.left.and.bubble.right") { chevron }
+                    }
+                    .buttonStyle(.plain)
                     NavigationLink { CompanionHistoryView(companion: summary.id) } label: {
                         LightRow(title: "Past chats", subtitle: "What you said and what \(displayName) answered",
                                  systemImage: "clock.arrow.circlepath") { chevron }

@@ -984,6 +984,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   sent while the question's own spoken turn was still open was dropped as unasked: `writerPoll`
   waits for that turn to end once anything was said (the 1.5 s quiet fallback is only for a
   question with no words). Dev key D ("Talk dirty to me.").
+- **Near-live chat in the app** (2026-10-23): Bluetooth is off during a chat, so each finished
+  exchange sets `historyNews`; once BLE is back and the app connected, Dotty notifies
+  `companion.history {companion, day}` once. The app's day view (`CompanionDayView`) and day list
+  reload on it and on reconnecting (an event sent before the phone re-subscribes is lost), scroll
+  to the newest exchange, and a "Today's chat" row on each companion page opens today. Measured: chat
+  closed at 65.6 s, iPhone back at 67.3 s, the app reading the history at 67.7 s. The day view's
+  times now subtract the UTC offset (Dotty's epochs are local).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

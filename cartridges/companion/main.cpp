@@ -131,7 +131,11 @@ LastLine lastLine;     // the active companion's saved one
 bool hasLast = false;
 Replay replay;
 std::string replayShown;  // the replay's text on screen
-int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when talksToday last counted
+int historyTurns = 0, countedTurns = -1;
+// New exchanges since the app last heard: told (companion.history) once Bluetooth is back and the
+// app has reconnected, so an open chat screen reloads (near-live: Bluetooth is off during a chat).
+bool historyNews = false;
+std::string historyNewsCompanion;  // turns appended to history, and when talksToday last counted
 // A long answer (write_long) or a look back (recall): a text model works in a task (a second TLS
 // connection), then Live reads the text aloud word for word / talks about what was found. The
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
@@ -657,6 +661,8 @@ GeminiLive::Callbacks callbacks() {
     const uint32_t ms = firstAudioAt ? firstAudioAt - releasedAt : millis() - releasedAt;
     history::append(heard, full, turnMood.c_str(), ms, tokens, turnMemory);
     historyTurns++;  // the lock screen counts its talks again
+    historyNews = true;
+    historyNewsCompanion = sessionCompanion;
     usage::addTurn(tokens, sessionKey);
     LOGI("companion", "turn: %u ms to first audio, %d tokens; heard \"%s\"; said \"%s\"", static_cast<unsigned>(ms),
          tokens, heard.c_str(), full.c_str());
@@ -2007,6 +2013,16 @@ void loop() {
     lastHeapSample = millis();
     lowFree = min(lowFree, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     lowLargest = min(lowLargest, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  }
+  if (historyNews && ble::connected()) {  // the app is back: its chat screen reloads
+    historyNews = false;
+    JsonDocument event;
+    event["event"] = "companion.history";
+    event["companion"] = historyNewsCompanion;
+    std::string day = dayFile(time(nullptr));
+    event["day"] = day.substr(0, 10);
+    ble::notify(event);
+    LOGI("companion", "told the app: new chats for %s", historyNewsCompanion.c_str());
   }
   if (!connecting) live.poll();  // the connect task owns the socket until it ends
   voice::poll();

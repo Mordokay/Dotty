@@ -43,8 +43,19 @@ struct CompanionHistoryView: View {
         .navigationTitle("")
         .task { await load() }
         .onChange(of: link.eventCount) { _, _ in
-            if link.lastEvent?.event == "companion.changed" { Task { await load() } }
+            let event = link.lastEvent?.event
+            if event == "companion.changed" || event == "companion.history" { Task { await load() } }
         }
+        .onChange(of: link.connection) { _, state in
+            if state == .connected { Task { await load() } }
+        }
+    }
+
+    /// Today as Dotty names its day files ("2026-10-23", local time).
+    static var today: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
     }
 
     /// "Today", "Yesterday" or "Mon 20 Oct" for "2026-10-20".
@@ -87,6 +98,7 @@ struct CompanionDayView: View {
 
     var body: some View {
         LightField {
+            ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.m) {
                     PageHeader(title: CompanionHistoryView.title(day), subtitle: turns.count == 1 ? "1 chat" : "\(turns.count) chats")
@@ -99,24 +111,42 @@ struct CompanionDayView: View {
                         if !turn.you.isEmpty { bubble(turn.you, mine: true) }
                         if !turn.dotty.isEmpty { bubble(turn.dotty, mine: false) }
                     }
+                    if isToday {
+                        Text("New chats on Dotty appear here a moment after they end.")
+                            .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                            .frame(maxWidth: .infinity)
+                    }
                     Button("Forget this day", role: .destructive) { confirmForget = true }
                         .buttonStyle(.quiet())
                         .frame(maxWidth: .infinity)
                         .padding(.top, Spacing.l)
                         .needsDotty(link)
+                        .id("end")
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)
             }
+            .onChange(of: turns.count) { old, new in  // something new: show it
+                if new > old && (old > 0 || isToday) { withAnimation { reader.scrollTo("end", anchor: .bottom) } }
+            }
+            }
         }
         .navigationTitle("")
         .task { await load() }
+        .onChange(of: link.eventCount) { _, _ in  // a chat on Dotty just ended (near-live)
+            guard let event = link.lastEvent, event.event == "companion.history" else { return }
+            if (event["day"] as? String) == day { Task { await load() } }
+        }
+        .onChange(of: link.connection) { _, state in
+            if state == .connected { Task { await load() } }
+        }
         .confirmationDialog("Forget this day's chats?", isPresented: $confirmForget, titleVisibility: .visible) {
             Button("Forget", role: .destructive) { Task { await forget() } }
         }
     }
 
     private var scope: [String: Any] { companion.map { ["companion": $0] } ?? [:] }
+    private var isToday: Bool { day == CompanionHistoryView.today }
 
     private func bubble(_ text: String, mine: Bool) -> some View {
         HStack {
@@ -138,7 +168,8 @@ struct CompanionDayView: View {
             let r = try await link.send("companion.history", ["day": day].merging(scope) { a, _ in a })
             let list = r["turns"] as? [[String: Any]] ?? []
             turns = list.enumerated().map { i, t in
-                Turn(id: i, time: Date(timeIntervalSince1970: TimeInterval(t["t"] as? Int ?? 0)),
+                // Dotty's clock is local: its epoch seconds are local time.
+                Turn(id: i, time: Date(timeIntervalSince1970: TimeInterval((t["t"] as? Int ?? 0) - TimeZone.current.secondsFromGMT())),
                      you: t["you"] as? String ?? "", dotty: t["dotty"] as? String ?? "")
             }
             error = nil
