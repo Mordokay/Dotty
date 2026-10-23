@@ -1007,8 +1007,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   of the user's turns: reply audio 0.93-1.23 s after release (one 3.0 s), every turn complete, no
   Wi-Fi on Dotty; the user: "way faster with bluetooth" (no 5-8 s Wi-Fi join + TLS per chat). Bug
   found: relay mode must keep the "listening without a session → connect" rule out (it switched
-  BLE off mid-turn). Open: the background / locked-iPhone case, the sound quality of ADPCM, and Dotty
-  locking itself (its lock turns BLE off) — a relay companion needs Bluetooth while locked.
+  BLE off mid-turn). **Locked iPhone, in a pocket: works** — 5 turns all "[background]" in the app's
+  log: Gemini opened from the locked phone in 0.53 s, reply audio 817-1108 ms after release (phone
+  side; Dotty hears it ~0.1 s later), every reply complete. iOS tore the idle WebSocket down ~67 s
+  after the last turn ("Software caused connection abort"): open per turn (0.5 s), as the relay
+  does. Verdict: go. Open: ADPCM sound quality, and Dotty locking itself (its lock turns BLE off) — a
+  relay companion needs Bluetooth while locked (a connection keeps Dotty awake: battery to measure).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
