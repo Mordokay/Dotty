@@ -1606,6 +1606,14 @@ void loop() {
     companions::save(p);
     applyCompanion();
   }
+  if (input.key == 'I') {  // dev: every companion's profile into the log (read with `d`)
+    for (const std::string &id : companions::list().order()) {
+      const Profile *p = companions::find(id);
+      if (!p) continue;
+      const std::string json = profileJson(*p);
+      for (size_t at = 0; at < json.size(); at += 80) LOGI("profile", "%s", json.substr(at, 80).c_str());  // the log cuts long lines
+    }
+  }
   if (input.key == 'S') {  // dev: the next companion
     switchCompanion(stepCompanion(companions::list().order(), companions::active().id, 1));
     LOGI("companion", "now %s (%s)", companions::active().id.c_str(), companions::active().awake() ? "awake" : "asleep");

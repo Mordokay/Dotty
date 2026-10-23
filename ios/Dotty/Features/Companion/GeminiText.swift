@@ -58,12 +58,21 @@ enum CompanionDesign {
         VoicesView.voices.map { "\($0.name) (\($0.style))" }.joined(separator: ", ")
     }
 
+    /// Character-sheet style, tested on the Partner (2026-10-23): the first version wrote like a fantasy
+    /// novel ("Sprouted amidst the rich soil…", traits "earth-kissed, radiant") and replaced the user's
+    /// own traits; the backstory drifted into "installed as software" until the opening said character.
     static let rules = """
-        You design characters for Dotty, a small desk companion people talk to by voice. Write in English, in the \
-        third person ("A cheerful little dragon who…", never "I am…"), and call the person it lives with "the user". \
-        Don't give it a name: it gets one when it first wakes up. Limits: personality up to 600 characters; up to 6 \
-        traits of up to 40 characters; up to 6 quirks of up to 60 characters; way of speaking up to 300 characters \
-        (how it talks, and how it shows its feelings in its voice); backstory up to 600 characters.
+        You help write the character sheet of a character (a person, animal or creature) who is the user's companion: \
+        they talk every day. Write like a clear character sheet, not a novel: plain, concrete, everyday English; no \
+        metaphors, no poetic or flowery language, no fantasy imagery. Third person, and call the person it lives with \
+        "the user". The user's own words matter most: keep the facts and choices they wrote (romantic or adult ones \
+        included) unless they contradict each other. Traits are plain words or short phrases for how it behaves \
+        ("teasing", "patient", "blunt"). Quirks are concrete habits ("calls the user 'trouble'"). Way of speaking says \
+        how it talks (sentence length, slang, how often it asks back) and how its feelings show in its voice. Backstory \
+        is a few plain facts of the character's own life as they would tell it (where they grew up, what they did, how \
+        they met the user); never about software, AI or devices. Don't give it a name: it gets one when it first wakes \
+        up. Limits: personality up to 600 characters; up to 6 traits of up to 40 characters; up to 6 quirks of up to 60 \
+        characters; way of speaking up to 300 characters; backstory up to 600 characters.
         """
 
     static func everything(_ description: String) -> (prompt: String, schema: [String: Any]) {
@@ -105,8 +114,10 @@ enum CompanionDesign {
         if mine.isEmpty {
             prompt += "\nWrite its \(label), fitting everything above."
         } else {
-            prompt += "\nIts \(label) now:\n\(mine)\n\nRewrite its \(label) so it fits everything above: keep what works, " +
-                "make it fresher and more vivid, and don't repeat what the other fields already say."
+            prompt += "\nIts \(label) now:\n\(mine)\n\nRewrite its \(label) so it fits everything above. Keep the user's own " +
+                "words exactly, never softening or toning them down; change only what is vague, clashes, or is written in " +
+                "flowery language (rewrite that in plain words). For a list, keep the items that are fine word for word and " +
+                "replace at most two. Don't repeat what the other fields already say."
         }
         let list = field == "traits" || field == "quirks"
         let schema: [String: Any] = [
