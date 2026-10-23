@@ -915,6 +915,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   talk came out in fragments). Measured: surf 49 s in 4 parts (25 + 11 + 8 + 5 s before the
   fixes), the user's "guide me for 1 minute on a meditation" 44 s in 4 parts of 10-15 s (calm
   speech makes short parts whatever is asked), ~15k tokens. Dev key K logs the saved line's pieces.
+  **Word-for-word reading** (dev key H, 2026-10-23): Live told "read the text below aloud exactly"
+  read a 157-word meditation script in **one turn of 57.6 s**, transcript identical word for word
+  (difflib ratio 1.000), ~6k tokens — reading isn't held to the ~30 s its own replies keep to. Live
+  is speech-to-speech: we never pass the words it says, only instructions; a script it reads is the
+  one way to control length and wording.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

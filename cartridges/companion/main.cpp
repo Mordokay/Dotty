@@ -1824,8 +1824,24 @@ void loop() {
   if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
   // dev: a typed question (U; G asks for a one-minute guided meditation), and ending the chat now (E:
   // the review runs, which may evolve it).
-  const bool longAsk = input.key == 'G';
-  if ((input.key == 'U' || longAsk) && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
+  // H: the word-for-word test — can Live read a prepared script exactly (a path to real control
+  // over length and wording)? The transcript is compared with the script on the Mac (K dumps it).
+  static const char *kScript =
+      "Find a comfortable position and let your shoulders drop. Close your eyes, or rest them on a spot in front "
+      "of you. Take a slow breath in through your nose, filling your chest and then your belly. Hold it gently for "
+      "a moment. Now let it go through your mouth, slowly, as if you were blowing on a candle without putting it "
+      "out. Again, breathe in, and feel the air cool at the tip of your nose. Breathe out, and feel your body grow "
+      "a little heavier. Notice where you are touching the chair or the floor, and let that support you. If a "
+      "thought comes, that is fine. Notice it, and let it drift past like a cloud. Bring your attention back to "
+      "your breath. In, and out. One more time, a little deeper. In, and out. When you are ready, wiggle your "
+      "fingers, open your eyes, and come back to the room, calm and clear.";
+  const char *typed = input.key == 'U' ? "You know what, after all our talks about the sea you've become a real ocean "
+                                         "lover yourself. You get excited about waves now, and you keep slipping surf "
+                                         "slang into everything. I love that about you!"
+                      : input.key == 'G' ? "I want you to guide me for 1 minute on a meditation exercise. I will follow "
+                                           "your instructions."
+                      : input.key == 'H' ? "" : nullptr;
+  if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();
     beginLast();
     longReply.end();
@@ -1837,9 +1853,10 @@ void loop() {
     turnMemory.clear();
     textQueue.clear();
     replyFrames = 0;
-    heard = longAsk ? "I want you to guide me for 1 minute on a meditation exercise. I will follow your instructions."
-                    : "You know what, after all our talks about the sea you've become a real ocean lover yourself. You get "
-            "excited about waves now, and you keep slipping surf slang into everything. I love that about you!";
+    heard = *typed ? typed
+                   : std::string("(Dotty, not the user: a reading test.) Read the text below aloud exactly, word for "
+                                 "word, in a calm, slow voice. Don't add, skip or change anything, don't call "
+                                 "long_reply, and say nothing else.\n\n") + kScript;
     info.heard = heard.c_str();
     live.sendText(heard);
     releasedAt = millis();
