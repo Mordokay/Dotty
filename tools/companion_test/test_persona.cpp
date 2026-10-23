@@ -41,6 +41,8 @@ int main() {
   CHECK("review: memories first", has(review, "remember or update_memory"));
   CHECK("review: evolve, rarely", has(review, "evolve") && has(review, "Most chats change nothing"));
   CHECK("review: pinned lines marked", has(review, "- horny (pinned)") && has(review, "- witty\n"));
+  CHECK("review: not twice in a chat", has(review, "already called evolve in this chat"));
+  CHECK("review: same style as the sheet", has(review, "third person"));
   CHECK("review: ends with Bye", has(review, "Bye."));
   CHECK("review: asleep, no evolving", !has(reviewPrompt(presetProfile("coach")), "evolve"));
   return failures ? 1 : 0;

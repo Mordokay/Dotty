@@ -122,7 +122,7 @@ uint32_t bleBackAt = 0;
 bool toneTest = false, toneScreen = false;
 int toneVariant = 0, toneIndex = 0;  // variant 0 = acting, 1 = plain; index = the scenario
 std::string toneRec;
-bool evolvedThisReview = false;  // one change per chat: companions evolve slowly
+bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
@@ -365,12 +365,12 @@ int applyMemory(const ToolCall &c) {
       note = String("Named: ") + screenName(p);
       change = "named: " + p.name;
     }
-  } else if (c.name == "evolve") {  // only in the end-of-chat review, once
+  } else if (c.name == "evolve") {  // once a chat: mid-chat when told it changed, or in the review
     Profile p = companions::active();
     const std::string before = fieldText(p, c.field);
-    if (reviewStart && !evolvedThisReview && applyEvolution(p, c.field, c.text) && fieldText(p, c.field) != before &&
+    if (!evolvedThisChat && applyEvolution(p, c.field, c.text) && fieldText(p, c.field) != before &&
         companions::save(p)) {
-      evolvedThisReview = true;
+      evolvedThisChat = true;
       companions::logEvolution(p.id, evolutionLine(time(nullptr), c.field, before, fieldText(p, c.field), c.why));
       note = "Changed a little";
       change = "evolved " + c.field + ": " + c.why;
@@ -556,6 +556,7 @@ void connect() {
   memorySection = memories::store().promptSection();  // the task only reads these copies
   personaSection = personaText(companions::active());
   sessionCompanion = companions::active().id;
+  evolvedThisChat = false;
   connecting = true;
   awaitingConnect = true;
   connectError = "";
@@ -1609,7 +1610,6 @@ void loop() {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
       LOGI("companion", "chat over: memory review");
-      evolvedThisReview = false;
       live.sendText(reviewPrompt(companions::active()));  // memories, then maybe one change to itself
     } else if (!reviewStart || millis() - reviewStart > 20000) {
       reviewStart = 0;
@@ -1643,9 +1643,15 @@ void loop() {
   if (input.key == 'X') live.close();
   // dev: a typed question (U), and ending the chat now (E: the review runs, which may evolve it).
   if (input.key == 'U' && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
-    startTalking();
-    voice::stopListening();
-    heard = "I took up surfing this week and I'm hooked. I want you to get into it with me, read up on it!";
+    said.clear();  // a turn like startTalking's, without opening a voice activity
+    info.said = "";
+    turnMood = info.mood = "neutral";
+    firstAudioAt = 0;
+    turnMemory.clear();
+    textQueue.clear();
+    replyFrames = 0;
+    heard = "You know what, after all our talks about the sea you've become a real ocean lover yourself. You get "
+            "excited about waves now, and you keep slipping surf slang into everything. I love that about you!";
     info.heard = heard.c_str();
     live.sendText(heard);
     releasedAt = millis();

@@ -49,7 +49,9 @@ std::string reviewPrompt(const Profile &p) {
     s += " Then ask yourself whether this chat really changed you: a new interest, a habit you picked up, a trait that "
          "grew or softened, something new in your story. Most chats change nothing: then don't call evolve. If one did, "
          "call evolve once, with the whole new field (one line per item or sentence), changing just a line or two and "
-         "keeping every line marked (pinned) exactly. Plain, everyday words, like a character sheet.";
+         "keeping every line marked (pinned) exactly. Write the lines like the ones below: plain, everyday words, "
+         "about yourself in the third person (never \"I\"), without the \"- \" marks. If you already "
+         "called evolve in this chat, don't call it again.";
   }
   s += " Then reply with just: Bye.";
   if (!p.awake()) return s;

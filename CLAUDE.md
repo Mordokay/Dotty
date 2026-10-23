@@ -890,7 +890,23 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   keys, Speak, volume, today), `AvatarPhotoEditor` (circle crop, dithered 128/48), the **Gemini
   co-designer** (`GeminiText`, `gemini-flash-lite-latest`: ~2-9 s, where 3.8 Flash took 20-60 s
   thinking) with ✨ Suggest per field. Dev keys S (next companion), W (forget its name), P (test
-  photo / back), Z ("Zoë 🌙" / Luna), V and Y (acting demo).
+  photo / back), Z ("Zoë 🌙" / Luna), V and Y (acting demo), I (every profile into the log), U (a
+  typed turn: "you've become an ocean lover…"), E (end the chat now: the review runs).
+- **Evolution** (user, 2026-10-23: companions aren't set in stone; before any release): `evolve
+  {field, value, why}` (personality, traits, quirks, speaking, backstory; the whole new field, a line
+  per item/sentence) lands **once per chat** — the model calls it mid-chat when told it changed (the
+  first device run: called during the turn, so "review only" ignored it), else in the end-of-chat
+  review (`reviewPrompt`: memories first, "most chats change nothing", the fields listed with
+  "(pinned)" marks, third person). `applyEvolution` (host-tested) strips "- " marks and "(pinned)",
+  puts back pinned lines it dropped at their old place, and over a limit drops the last unpinned
+  lines. **Pins per line**: the profile keeps `pins: {field: [line text]}`; over BLE they're line
+  numbers (`companion.pins {id, field, lines}`, `companion.get` → `pins: {field: [n]}`) since a pinned
+  sentence can pass 512 bytes. Log: `evolution.jsonl` per companion ({t, field, before, after, why},
+  an undo adds `undo: t`), `companion.evolution {id, limit = 20}` (newest first, `undone`),
+  `companion.evolution.undo {id, t}` (puts `before` back). App: every character field is edited line
+  by line (`LinesField`: pin at the left, ✕, "Add line"; prose split into sentences), Suggest keeps
+  pinned lines, and "How {name} has changed" (`EvolutionView`: why, − / + lines, Undo). Device run:
+  Debug's way of speaking became surf slang (left for the user to try Undo).
 - Google refuses a new session within ~40 s of the previous one ("exceeded your current quota"),
   even after a proper close: the 1-minute wait handles it. Bluetooth comes back 1 s after a
   session's Wi-Fi is off (one BT-controller interrupt-watchdog crash, in ROM

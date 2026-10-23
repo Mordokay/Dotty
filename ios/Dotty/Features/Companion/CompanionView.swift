@@ -151,9 +151,54 @@ struct CompanionPage: View {
         let image: CGImage
     }
 
+    /// The character fields, each edited line by line; a pinned line never changes by itself
+    /// (Dotty puts it back when the companion evolves).
+    static let characterFields = ["personality", "traits", "quirks", "speaking", "backstory"]
+
+    struct Line: Identifiable, Equatable {
+        var id = UUID()
+        var text: String
+        var pinned = false
+    }
+
     struct Profile: Equatable {
-        var name = "", personality = "", speaking = "", backstory = "", traits = "", quirks = ""
-        var voice = "Zephyr", avatar = "robot"
+        var name = "", voice = "Zephyr", avatar = "robot"
+        var lines: [String: [Line]] = [:]
+
+        /// What Dotty stores: the non-empty lines, one per line.
+        func text(_ field: String) -> String {
+            (lines[field] ?? []).map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+
+        /// The pinned lines as numbers of the lines in text(field).
+        func pins(_ field: String) -> [Int] {
+            let kept = (lines[field] ?? []).filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            return kept.indices.filter { kept[$0].pinned }
+        }
+    }
+
+    /// Dotty's lines, prose split into sentences so each can be pinned (a pinned line pins all of its sentences).
+    static func lines(_ text: String, prose: Bool, pinned: Set<Int>) -> [Line] {
+        let dotty = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return dotty.enumerated().flatMap { i, line in
+            (prose ? sentences(line) : [line]).map { Line(text: $0, pinned: pinned.contains(i)) }
+        }
+    }
+
+    /// "One thing. Another!" → two sentences: a split after . ! ? followed by a space and a capital.
+    static func sentences(_ text: String) -> [String] {
+        var out: [String] = [], current = ""
+        let chars = Array(text)
+        for (i, ch) in chars.enumerated() {
+            current.append(ch)
+            if ".!?".contains(ch), i + 2 < chars.count, chars[i + 1] == " ", chars[i + 2].isUppercase {
+                out.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            }
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty { out.append(current.trimmingCharacters(in: .whitespaces)) }
+        return out
     }
 
     static let avatars: [(id: String, name: String)] = [
@@ -178,6 +223,13 @@ struct CompanionPage: View {
                     NavigationLink { CompanionHistoryView(companion: summary.id) } label: {
                         LightRow(title: "Past chats", subtitle: "What you said and what \(displayName) answered",
                                  systemImage: "clock.arrow.circlepath") { chevron }
+                    }
+                    .buttonStyle(.plain)
+                    NavigationLink {
+                        EvolutionView(companion: summary.id, name: displayName) { Task { await load() } }
+                    } label: {
+                        LightRow(title: "How \(displayName) has changed", subtitle: "Small changes after chats, with undo",
+                                 systemImage: "leaf") { chevron }
                     }
                     .buttonStyle(.plain)
                 }
@@ -350,16 +402,18 @@ struct CompanionPage: View {
             VStack(alignment: .leading, spacing: Spacing.m) {
                 CharacterField(title: "Name", text: $profile.name, limit: 24, lines: 1,
                                hint: summary.awake ? nil : "Usually given when they first wake up on Dotty")
-                CharacterField(title: "Personality", text: $profile.personality, limit: 600, lines: 4,
-                               suggest: { await suggest("personality", "personality") })
-                CharacterField(title: "Traits (one per line)", text: $profile.traits, limit: 6 * 41, lines: 3,
-                               suggest: { await suggest("traits", "set of traits") })
-                CharacterField(title: "Quirks (one per line)", text: $profile.quirks, limit: 6 * 61, lines: 3,
-                               suggest: { await suggest("quirks", "set of quirks") })
-                CharacterField(title: "Way of speaking", text: $profile.speaking, limit: 300, lines: 3,
-                               suggest: { await suggest("speaking", "way of speaking") })
-                CharacterField(title: "Backstory", text: $profile.backstory, limit: 600, lines: 4,
-                               suggest: { await suggest("backstory", "backstory") })
+                LinesField(title: "Personality", lines: lines("personality"), list: false, limit: 600,
+                           suggest: { await suggest("personality", "personality") })
+                LinesField(title: "Traits", lines: lines("traits"), list: true, limit: 40,
+                           suggest: { await suggest("traits", "set of traits") })
+                LinesField(title: "Quirks", lines: lines("quirks"), list: true, limit: 60,
+                           suggest: { await suggest("quirks", "set of quirks") })
+                LinesField(title: "Way of speaking", lines: lines("speaking"), list: false, limit: 300,
+                           suggest: { await suggest("speaking", "way of speaking") })
+                LinesField(title: "Backstory", lines: lines("backstory"), list: false, limit: 600,
+                           suggest: { await suggest("backstory", "backstory") })
+                Text("\(Image(systemName: "pin.fill")) Pinned lines never change by themselves. The rest can change slowly as you talk.")
+                    .font(.lpCaption).foregroundStyle(Color.inkFaint)
                 if profile != saved {
                     HStack {
                         Button("Undo") { profile = saved }.buttonStyle(.quiet())
@@ -373,22 +427,32 @@ struct CompanionPage: View {
         }
     }
 
-    /// ✨ Suggest: Gemini writes this field again, keeping the rest of the character in mind.
+    private func lines(_ field: String) -> Binding<[Line]> {
+        Binding(get: { profile.lines[field] ?? [] }, set: { profile.lines[field] = $0 })
+    }
+
+    /// ✨ Suggest: Gemini writes this field again, keeping the rest of the character in mind and the
+    /// pinned lines as they are (put back at their place if it drops them anyway).
     private func suggest(_ field: String, _ label: String) async {
-        let current = ["personality": profile.personality, "traits": profile.traits, "quirks": profile.quirks,
-                       "speaking": profile.speaking, "backstory": profile.backstory]
+        var current: [String: String] = [:]
+        for f in Self.characterFields { current[f] = profile.text(f) }
+        let old = profile.lines[field] ?? []
+        let keep = old.filter(\.pinned).map(\.text)
         let (prompt, schema) = CompanionDesign.field(field, label: label, description: "", current: current,
-                                                     name: profile.name, voice: profile.voice, avatar: profile.avatar)
+                                                     name: profile.name, voice: profile.voice, avatar: profile.avatar,
+                                                     keep: keep)
         do {
             let answer = try await GeminiText.generate(prompt, schema: schema)
             let value = (answer["value"] as? [String])?.joined(separator: "\n") ?? answer["value"] as? String ?? ""
-            switch field {
-            case "personality": profile.personality = value
-            case "traits": profile.traits = value
-            case "quirks": profile.quirks = value
-            case "speaking": profile.speaking = value
-            default: profile.backstory = value
+            var fresh = Self.lines(value, prose: field != "traits" && field != "quirks", pinned: [])
+            for (i, line) in old.enumerated() where line.pinned {
+                if let at = fresh.firstIndex(where: { $0.text == line.text }) {
+                    fresh[at].pinned = true
+                } else {
+                    fresh.insert(line, at: min(i, fresh.count))
+                }
             }
+            profile.lines[field] = fresh
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -403,11 +467,11 @@ struct CompanionPage: View {
             let c = r["companion"] as? [String: Any] ?? [:]
             var p = Profile()
             p.name = c["name"] as? String ?? ""
-            p.personality = c["personality"] as? String ?? ""
-            p.speaking = c["speaking"] as? String ?? ""
-            p.backstory = c["backstory"] as? String ?? ""
-            p.traits = (c["traits"] as? [String] ?? []).joined(separator: "\n")
-            p.quirks = (c["quirks"] as? [String] ?? []).joined(separator: "\n")
+            let pins = c["pins"] as? [String: [Int]] ?? [:]
+            for field in Self.characterFields {
+                let text = (c[field] as? [String])?.joined(separator: "\n") ?? c[field] as? String ?? ""
+                p.lines[field] = Self.lines(text, prose: !(c[field] is [String]), pinned: Set(pins[field] ?? []))
+            }
             p.voice = c["voice"] as? String ?? "Zephyr"
             p.avatar = c["avatar"] as? String ?? "robot"
             profile = p
@@ -429,18 +493,18 @@ struct CompanionPage: View {
         }
     }
 
-    /// Changed fields only; a long one goes in pieces (a command carries at most 512 bytes).
+    /// Changed fields only; a long one goes in pieces (a command carries at most 512 bytes). A field's
+    /// pins go after its text, as numbers of its lines (Dotty keeps their text).
     private func save() async {
         saving = true
         defer { saving = false }
-        let pairs: [(String, String, String)] = [
-            ("name", profile.name, saved.name), ("personality", profile.personality, saved.personality),
-            ("traits", profile.traits, saved.traits), ("quirks", profile.quirks, saved.quirks),
-            ("speaking", profile.speaking, saved.speaking), ("backstory", profile.backstory, saved.backstory),
-        ]
         do {
-            for (field, value, old) in pairs where value != old {
-                try await CompanionPage.sendField(link, id: summary.id, field: field, value: value)
+            if profile.name != saved.name {
+                try await CompanionPage.sendField(link, id: summary.id, field: "name", value: profile.name)
+            }
+            for field in Self.characterFields where profile.lines[field] != saved.lines[field] {
+                try await CompanionPage.sendField(link, id: summary.id, field: field, value: profile.text(field))
+                try await link.send("companion.pins", ["id": summary.id, "field": field, "lines": profile.pins(field)])
             }
             await load()
             onChanged()
@@ -522,6 +586,81 @@ struct CharacterField: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.glassStrong))
                 .onChange(of: text) { _, v in if v.count > limit { text = String(v.prefix(limit)) } }
             if let hint { Text(hint).font(.lpCaption).foregroundStyle(Color.inkFaint) }
+        }
+    }
+}
+
+/// A character field line by line: a pin at the left of each line (pinned = never changes by itself),
+/// ✕ to delete one, "Add line" below. Lists hold up to 6 items of `limit` characters; prose fields
+/// `limit` characters in all.
+struct LinesField: View {
+    let title: String
+    @Binding var lines: [CompanionPage.Line]
+    let list: Bool
+    let limit: Int
+    var suggest: (() async -> Void)? = nil
+    @State private var suggesting = false
+
+    private var used: Int { lines.map { $0.text.count }.reduce(0, +) + max(0, lines.count - 1) }
+    private var canAdd: Bool { list ? lines.count < 6 : used < limit }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.lpLabel).foregroundStyle(Color.inkMuted)
+                Spacer()
+                if let suggest {
+                    if suggesting {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Button {
+                            suggesting = true
+                            Task {
+                                await suggest()
+                                suggesting = false
+                            }
+                        } label: { Label("Suggest", systemImage: "sparkles").font(.lpCaption) }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(DottyLight.firefly.color)
+                    }
+                }
+                Text(list ? "\(lines.count)/6" : "\(used)/\(limit)").font(.lpCaption)
+                    .foregroundStyle(!list && used > limit ? DottyLight.ember.color : Color.inkFaint)
+            }
+            ForEach($lines) { $line in
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.s) {
+                    Button { line.pinned.toggle() } label: {
+                        Image(systemName: line.pinned ? "pin.fill" : "pin")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(line.pinned ? DottyLight.firefly.color : Color.inkFaint)
+                            .frame(width: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(line.pinned ? "Unpin" : "Pin")
+                    TextField(list ? "A \(title.lowercased().dropLast())" : "A sentence", text: $line.text, axis: .vertical)
+                        .lineLimit(1...6)
+                        .font(.lpBody).foregroundStyle(Color.ink)
+                        .onChange(of: line.text) { _, v in
+                            let clean = v.replacingOccurrences(of: "\n", with: " ")
+                            let cut = list && clean.count > limit ? String(clean.prefix(limit)) : clean
+                            if cut != v { line.text = cut }
+                        }
+                    Button { lines.removeAll { $0.id == line.id } } label: {
+                        Image(systemName: "xmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.inkFaint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete line")
+                }
+                .padding(.horizontal, Spacing.s).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.glassStrong))
+            }
+            if canAdd {
+                Button { lines.append(CompanionPage.Line(text: "")) } label: {
+                    Label("Add line", systemImage: "plus").font(.lpCaption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.inkMuted)
+            }
         }
     }
 }

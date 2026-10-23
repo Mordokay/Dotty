@@ -94,6 +94,11 @@ int main() {
   CHECK("evolve: prose keeps its pinned line",
         applyEvolution(prose, "backstory", "Worked in a bakery.\nNow runs every morning.") &&
             prose.backstory == "Grew up by the sea.\nWorked in a bakery.\nNow runs every morning.");
+  Profile bul = presetProfile("friend");
+  CHECK("evolve: list marks dropped", applyEvolution(bul, "speaking", "- Uses surf slang.\n* Talks fast.\n• Laughs a lot.") &&
+                                          bul.speaking == "Uses surf slang.\nTalks fast.\nLaughs a lot.");
+  CHECK("evolve: the review's (pinned) mark dropped",
+        applyEvolution(bul, "speaking", "Uses surf slang. (pinned)\nTalks fast.") && bul.speaking == "Uses surf slang.\nTalks fast.");
   CHECK("evolve: unknown field refused", !applyEvolution(prose, "name", "Bob") && !applyEvolution(prose, "voice", "Kore"));
   CHECK_EQ("evolve: the log line",
            evolutionLine(1790000000, "traits", "a\nb", "a\nc", "she got braver"),

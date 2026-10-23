@@ -1,6 +1,7 @@
 #include "companion_store.h"
 
 #include <algorithm>
+#include <cstring>
 
 #include "voices.h"
 
@@ -168,6 +169,14 @@ bool applyEvolution(Profile &p, const std::string &field, const std::string &val
   const auto pinIt = p.pins.find(field);
   const std::vector<std::string> pinned = pinIt == p.pins.end() ? std::vector<std::string>() : pinIt->second;
   std::vector<std::string> out = splitLines(value);
+  for (std::string &line : out)  // "- ", "* ", "• " list marks (the review lists the lines that way)
+    for (const char *mark : {"- ", "* ", "\xE2\x80\xA2 "})
+      if (line.rfind(mark, 0) == 0) line = trim(line.substr(strlen(mark)));
+  for (std::string &line : out) {  // the review marks pinned lines "(pinned)": not part of the text
+    const std::string tag = " (pinned)";
+    if (line.size() > tag.size() && line.compare(line.size() - tag.size(), tag.size(), tag) == 0)
+      line = trim(line.substr(0, line.size() - tag.size()));
+  }
   // Each pinned line it dropped goes back right after the old line before it that's still there.
   for (size_t i = 0; i < old.size(); i++) {
     if (!contains(pinned, old[i]) || contains(out, old[i])) continue;

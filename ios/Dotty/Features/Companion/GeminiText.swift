@@ -94,7 +94,8 @@ enum CompanionDesign {
     /// One field again, with the whole character in mind: every filled field (the one being
     /// rewritten too, as the version to improve on), the name, the voice and the avatar.
     static func field(_ field: String, label: String, description: String, current: [String: String],
-                      name: String = "", voice: String = "", avatar: String = "") -> (prompt: String, schema: [String: Any]) {
+                      name: String = "", voice: String = "", avatar: String = "",
+                      keep: [String] = []) -> (prompt: String, schema: [String: Any]) {
         let labels = ["personality": "Personality", "traits": "Traits", "quirks": "Quirks",
                       "speaking": "Way of speaking", "backstory": "Backstory"]
         var known: [String] = []
@@ -119,6 +120,11 @@ enum CompanionDesign {
                 "flowery language (rewrite that in plain words). For a list, keep the items that are fine word for word and " +
                 "replace at most two. Don't repeat what the other fields already say."
         }
+        if !keep.isEmpty {
+            prompt += "\nThe user pinned these lines: keep each of them word for word, as its own line:\n" +
+                keep.map { "- \($0)" }.joined(separator: "\n")
+        }
+        if field != "traits" && field != "quirks" { prompt += "\nOne sentence per line." }
         let list = field == "traits" || field == "quirks"
         let schema: [String: Any] = [
             "type": "OBJECT",
