@@ -34,7 +34,7 @@
 #include "updates.h"
 #include "wifi_setup.h"
 
-DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.31");
+DOTTY_CARTRIDGE("launcher", "Launcher", "0.9.32");
 
 namespace {
 

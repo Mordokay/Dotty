@@ -26,6 +26,7 @@ import base64
 import datetime
 import hashlib
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -52,10 +53,20 @@ def is_draft(folder):
     return manifest.exists() and json.loads(manifest.read_text()).get("draft", False)
 
 
+def custom_core_envs():
+    """Envs with custom_sdkconfig: pioarduino rebuilds the shared core libraries for them in place,
+    and reinstalls the stock ones for every other env, so they're built last (one swap, not two)."""
+    text = (REPO / "platformio.ini").read_text()
+    return {m.group(1) for m in re.finditer(r"^\[env:([^\]]+)\]((?:\n(?!\[).*)*)", text, re.M)
+            if re.search(r"^custom_sdkconfig\s*=", m.group(2), re.M)}
+
+
 def cartridge_ids():
     # Rescue (factory partition) is USB-only: never in the catalog. Drafts aren't published yet.
-    return sorted(p.name for p in (REPO / "cartridges").iterdir()
-                  if (p / "main.cpp").exists() and p.name != "rescue" and not is_draft(p))
+    custom = custom_core_envs()
+    return sorted((p.name for p in (REPO / "cartridges").iterdir()
+                   if (p / "main.cpp").exists() and p.name != "rescue" and not is_draft(p)),
+                  key=lambda name: (name in custom, name))
 
 
 def build(cartridge_id):
