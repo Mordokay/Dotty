@@ -48,6 +48,7 @@ final class DottyLink: NSObject {
     @ObservationIgnored private var dataCharacteristic: CBCharacteristic?
     @ObservationIgnored var onRelayRaw: ((Data) -> Void)?
     @ObservationIgnored var onRelayEvent: ((DottyMessage) -> Void)?
+    @ObservationIgnored var onReady: (() -> Void)?  // each time a connection is ready (the relay says hello)
     @ObservationIgnored private var writeReady: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var wantsScan = false
@@ -259,6 +260,7 @@ final class DottyLink: NSObject {
         readyWaiters = []
         waiters.forEach { $0.resume() }
         Task { await syncClock() }
+        onReady?()
     }
 
     /// Dotty's clock chip drifts and most cartridges have no other time source, so every

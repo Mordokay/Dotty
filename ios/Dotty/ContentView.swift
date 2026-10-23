@@ -17,6 +17,7 @@ struct ContentView: View {
             }
         }
         .environment(link)
+        .task { RelayService.shared.attach(link) }  // chats through this iPhone: app-wide, background too
         .preferredColorScheme(.dark)
         .animation(.settle, value: link.paired)
         .onChange(of: scenePhase) { _, phase in

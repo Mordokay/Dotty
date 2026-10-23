@@ -56,6 +56,8 @@ struct MacrosView: View {
                     .needsDotty(link)
                     Text("Changes apply from the next chat on Dotty. A reading lasts about a minute (~150 words).")
                         .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                    NavigationLink("Relay log") { RelayLogView() }
+                        .font(.lpCaption)
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.bottom, Spacing.xxl)
