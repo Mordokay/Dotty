@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <vector>
 
 // Rules for usage counting and history, with no I/O (tested on a computer, tools/companion_test).
 
@@ -21,3 +22,8 @@ std::string dayFile(int64_t localEpoch);
 int conversations(const std::string &dayLog, int gapSeconds);
 // An API key as pasted: surrounding spaces, tabs and newlines removed.
 std::string trimKey(const std::string &raw);
+// The app adds and removes keys one at a time (it once sent this iPhone's whole list, which wiped keys
+// added from elsewhere): "" when added, else why ("empty", "already there", "full"); removal by the
+// key's last 4 characters (the only part that ever leaves Dotty).
+std::string addKey(std::vector<std::string> &keys, const std::string &raw, size_t max);
+bool removeKey(std::vector<std::string> &keys, const std::string &hint);

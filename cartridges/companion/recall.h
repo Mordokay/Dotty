@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,13 @@ std::vector<std::string> exchanges(const std::string &dayLog, const std::string 
 // Exchanges mentioning any of the topic's words (and the one before and after); none = all.
 std::vector<std::string> byTopic(const std::vector<std::string> &all, const std::string &topic);
 std::string historyBlock(const std::vector<std::string> &exchanges);  // newest kept, ≤ kRecallMaxChars
+// The whole recall input, built a day at a time (newest first) so a month of chats is never held
+// as separate strings (small ones live in internal RAM, which a session can't spare): each day's
+// exchanges about the topic (with their neighbours) — every day's, when the topic is nowhere —
+// stopping at kRecallMaxChars; oldest first in the result.
+std::string recallBlock(const std::vector<std::string> &daysNewestFirst,
+                        const std::function<std::string(const std::string &day)> &readDay, const std::string &name,
+                        const std::string &topic);
 std::string recallRequest(const std::string &name, const std::string &question, int64_t nowLocal,
                           const std::string &history);
 std::string recallResult(const Written &found);  // the tool result Live talks about

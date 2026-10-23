@@ -157,6 +157,53 @@ std::string historyBlock(const std::vector<std::string> &ex) {
   return out;
 }
 
+std::vector<std::string> topicWords(const std::string &topic) {
+  std::vector<std::string> words;
+  std::string word;
+  for (const char c : lower(topic) + " ") {
+    if (isalnum(static_cast<unsigned char>(c)) || (c & 0x80)) word += c;
+    else if (!word.empty()) words.push_back(word), word.clear();
+  }
+  return words;
+}
+
+std::string recallBlock(const std::vector<std::string> &daysNewestFirst,
+                        const std::function<std::string(const std::string &day)> &readDay, const std::string &name,
+                        const std::string &topic) {
+  std::vector<std::string> words = topicWords(topic);
+  if (!words.empty()) {  // the topic nowhere in these days: read them all instead
+    bool anywhere = false;
+    for (size_t i = 0; i < daysNewestFirst.size() && !anywhere; i++) {
+      const std::string text = lower(readDay(daysNewestFirst[i]));
+      for (const std::string &w : words) anywhere |= text.find(w) != std::string::npos;
+    }
+    if (!anywhere) words.clear();
+  }
+  std::vector<std::string> dayBlocks;  // newest first
+  size_t used = 0;
+  for (const std::string &day : daysNewestFirst) {
+    std::vector<std::string> ex = exchanges(readDay(day), name);
+    if (!words.empty()) {
+      bool here = false;
+      for (const std::string &e : ex)
+        for (const std::string &w : words) here |= lower(e).find(w) != std::string::npos;
+      if (!here) continue;
+      ex = byTopic(ex, topic);
+    }
+    std::string block;
+    size_t first = ex.size(), size = 0;  // the newest of this day that still fit
+    while (first > 0 && used + size + ex[first - 1].size() + 1 <= kRecallMaxChars) size += ex[--first].size() + 1;
+    for (size_t i = first; i < ex.size(); i++) block += ex[i] + "\n";
+    used += block.size();
+    if (!block.empty()) dayBlocks.push_back(block);
+    if (first > 0) break;  // full
+  }
+  std::string out;
+  out.reserve(used);
+  for (size_t i = dayBlocks.size(); i-- > 0;) out += dayBlocks[i];
+  return out;
+}
+
 std::string recallRequest(const std::string &name, const std::string &question, int64_t nowLocal,
                           const std::string &history) {
   JsonDocument doc;

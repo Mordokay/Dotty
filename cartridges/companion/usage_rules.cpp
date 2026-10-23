@@ -120,3 +120,24 @@ int conversations(const std::string &dayLog, int gapSeconds) {
   }
   return count;
 }
+
+std::string addKey(std::vector<std::string> &keys, const std::string &raw, size_t max) {
+  const std::string key = trimKey(raw);
+  if (key.empty()) return "empty";
+  for (const std::string &k : keys)
+    if (k == key) return "already there";
+  if (keys.size() >= max) return "full";
+  keys.push_back(key);
+  return "";
+}
+
+bool removeKey(std::vector<std::string> &keys, const std::string &hint) {
+  for (size_t i = 0; i < keys.size(); i++) {
+    const std::string &k = keys[i];
+    if (k.size() >= hint.size() && !hint.empty() && k.compare(k.size() - hint.size(), hint.size(), hint) == 0) {
+      keys.erase(keys.begin() + i);
+      return true;
+    }
+  }
+  return false;
+}

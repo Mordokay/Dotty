@@ -28,6 +28,7 @@
 #include "companions.h"
 #include "key_ring.h"
 #include "last_line.h"
+#include "job_slot.h"
 #include "macro_store.h"
 #include "recall.h"
 #include "script_writer.h"
@@ -148,11 +149,11 @@ bool writing = false;            // a job asked, its follow-up not sent yet
 bool reading = false;            // the reading turn is under way
 bool readingStarts = false;      // its first text piece is next
 bool questionDone = false;       // the question's own turn (often "Give me a moment") has ended
-volatile bool written = false;   // the task has finished (writtenResult is ready)
-volatile uint32_t writerJob = 0; // a job's number: BOOT or a disconnect makes a running one stale
+bool written = false;            // the job's result has been taken (writtenResult is ready)
 Written writtenResult;
-std::string writerBody;          // the request, built on the loop for the task
-String writerKey;
+std::string writerBody;          // the next job's request, built on the loop (the task gets a copy)
+bool jobPending = false;         // asked while the last task (cancelled) was still running: starts after
+JobSlot<Written> jobs;           // the task and its hand-over (job_slot.h)
 int longTokens = 0;              // the question's tokens (the exchange is counted once, at its end)
 bool keepBle = false;  // dev T: Bluetooth stays on during sessions (the soak test)
 // The session's lowest internal RAM (sampled every 250 ms while connected), logged when it closes.
@@ -471,10 +472,18 @@ int applyMemory(const ToolCall &c) {
 
 // ---------- the writer (write_long) ----------
 
+// What a task works from: its own copies (the loop may start building the next job meanwhile).
+struct WriterRequest {
+  uint32_t job;
+  Job kind;
+  std::string body;
+  String key;
+};
+
 void writerTask(void *arg) {
-  const uint32_t job = reinterpret_cast<uintptr_t>(arg);
+  WriterRequest *r = static_cast<WriterRequest *>(arg);
   const String url = String("https://generativelanguage.googleapis.com/v1beta/models/") + kWriterModel +
-                     ":generateContent?key=" + writerKey;
+                     ":generateContent?key=" + r->key;
   std::string body;
   esp_http_client_config_t config = {};
   config.url = url.c_str();
@@ -489,35 +498,47 @@ void writerTask(void *arg) {
   const uint32_t started = millis();
   esp_http_client_handle_t client = esp_http_client_init(&config);
   esp_http_client_set_header(client, "Content-Type", "application/json");
-  esp_http_client_set_post_field(client, writerBody.c_str(), writerBody.size());
+  esp_http_client_set_post_field(client, r->body.c_str(), r->body.size());
   const esp_err_t err = esp_http_client_perform(client);
   const int status = esp_http_client_get_status_code(client);
   esp_http_client_cleanup(client);
   Written w = err == ESP_OK ? parseWritten(status, body) : Written();
   if (err != ESP_OK) w.error = esp_err_to_name(err);
-  LOGI(jobKind == Job::Recall ? "recall" : "writer", "%s in %lu ms: %u characters, %d tokens%s%s",
-       w.ok ? (jobKind == Job::Recall ? w.text.substr(0, 120).c_str() : "written") : "failed",
+  const bool recall = r->kind == Job::Recall;
+  LOGI(recall ? "recall" : "writer", "%s in %lu ms: %u characters, %d tokens%s%s",
+       w.ok ? (recall ? w.text.substr(0, 120).c_str() : "written") : "failed",
        static_cast<unsigned long>(millis() - started), static_cast<unsigned>(w.text.size()), w.tokens,
        w.ok ? "" : ": ", w.error.c_str());
-  if (job == writerJob) {  // nobody gave up on it meanwhile
-    writtenResult = w;
-    written = true;
-  }
+  const uint32_t job = r->job;
+  delete r;
+  jobs.finish(job, w);  // the loop takes it if nobody gave up on it meanwhile
   vTaskDelete(nullptr);
 }
 
+// The job in writerBody / jobKind, now; or once the last (cancelled) task has finished: never two
+// TLS requests on top of Live.
+void launchJob() {
+  if (jobs.busy()) {
+    jobPending = true;
+    LOGI("writer", "waiting for the last request to end");
+    return;
+  }
+  jobPending = false;
+  WriterRequest *r = new WriterRequest{jobs.start(), jobKind, writerBody, sessionKeyText};
+  const uint32_t job = r->job;
+  if (xTaskCreatePinnedToCore(writerTask, "writer", 12288, r, 1, nullptr, 0) != pdPASS) {
+    delete r;
+    Written failed;
+    failed.error = "no task";
+    jobs.finish(job, failed);
+  }
+}
+
 void startJob() {
-  writerKey = sessionKeyText;
   writing = true;
   written = false;
   questionDone = false;
-  const uint32_t job = ++writerJob;
-  if (xTaskCreatePinnedToCore(writerTask, "writer", 12288, reinterpret_cast<void *>(static_cast<uintptr_t>(job)), 1,
-                              nullptr, 0) != pdPASS) {
-    writtenResult = Written();
-    writtenResult.error = "no task";
-    written = true;
-  }
+  launchJob();
   info.writing = jobKind == Job::Write;
   info.recalling = jobKind == Job::Recall;
   redraw = true;
@@ -543,22 +564,22 @@ void startRecall(const ToolCall &c) {
   const Profile &who = companions::active();
   const std::string name = who.awake() ? who.name : "the companion";
   const int64_t now = time(nullptr);
-  std::vector<std::string> all;
   const std::vector<std::string> days = recallDays(c.from, c.to, now);
-  for (const std::string &day : days)
-    for (const std::string &e : exchanges(history::raw(day.c_str()), name)) all.push_back(e);
-  const std::vector<std::string> kept = byTopic(all, c.group);
-  writerBody = recallRequest(name, c.text, now, historyBlock(kept));
+  const std::vector<std::string> newestFirst(days.rbegin(), days.rend());
+  // Built a day at a time, never every exchange at once (recall.h).
+  const std::string block = recallBlock(newestFirst, [](const std::string &day) { return history::raw(day.c_str()); }, name, c.group);
+  writerBody = recallRequest(name, c.text, now, block);
   jobKind = Job::Recall;
   jobCallId = c.id;
-  LOGI("recall", "\"%.80s\": %s..%s (%u days), topic \"%s\": %u of %u exchanges, %u bytes", c.text.c_str(),
+  LOGI("recall", "\"%.80s\": %s..%s (%u days), topic \"%s\": %u bytes of chats, internal %u KB free", c.text.c_str(),
        days.front().c_str(), days.back().c_str(), static_cast<unsigned>(days.size()), c.group.c_str(),
-       static_cast<unsigned>(kept.size()), static_cast<unsigned>(all.size()), static_cast<unsigned>(writerBody.size()));
+       static_cast<unsigned>(block.size()), heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
   startJob();
 }
 
 void cancelWriter() {
-  writerJob++;  // a running task's result is dropped
+  jobs.cancel();  // a running task's result is dropped
+  jobPending = false;
   writing = reading = questionDone = written = false;
   longTokens = 0;
   if (info.writing || info.recalling) redraw = true;
@@ -567,7 +588,10 @@ void cancelWriter() {
 
 // Both done (the text, and the question's own turn): Live reads it, or answers itself if it failed.
 void writerPoll() {
-  if (!writing || !written) return;
+  if (!writing) return;
+  if (jobPending && !jobs.busy()) launchJob();
+  if (!written && jobs.take(writtenResult)) written = true;
+  if (!written) return;
   // The question's own turn has ended; or it has said nothing at all and nothing has come for a
   // moment (a recall without words never ends its turn: the reply to the result is that question's).
   // Once it has started speaking ("Ooh, you're pushing my buttons"), wait for that turn to end: a
@@ -1362,6 +1386,49 @@ void notifyMacros() {
   ble::notify(event);
 }
 
+// Keys one at a time (usage_rules.h addKey / removeKey): the app used to send its iPhone's whole
+// Keychain list, which wiped keys added from elsewhere. The out-until times follow their keys.
+void registerKeyCommands() {
+  ble::on("companion.key.add", [](JsonObjectConst args, JsonObject reply) {
+    std::vector<std::string> keys;
+    for (const String &k : settings.keys) keys.push_back(k.c_str());
+    const std::string why = addKey(keys, args["key"] | "", KeyRing::kMax);
+    if (!why.empty()) {
+      reply["ok"] = false;
+      reply["error"] = why;
+      return;
+    }
+    settings.keys.push_back(keys.back().c_str());
+    ring.setCount(settings.keys.size());  // the new one: not out
+    saveKeys();
+    usage::markOut(0);
+    LOGI("companion", "key ..%s added (%u)", keyHint(settings.keys.back()).c_str(), static_cast<unsigned>(settings.keys.size()));
+    notifyChanged();
+  });
+  ble::on("companion.key.remove", [](JsonObjectConst args, JsonObject reply) {
+    const std::string hint = args["hint"] | "";
+    int index = -1;
+    for (size_t i = 0; i < settings.keys.size() && index < 0; i++)
+      if (keyHint(settings.keys[i]) == hint.c_str()) index = i;
+    std::vector<std::string> keys;
+    for (const String &k : settings.keys) keys.push_back(k.c_str());
+    if (index < 0 || !removeKey(keys, hint)) {
+      reply["ok"] = false;
+      reply["error"] = "unknown key";
+      return;
+    }
+    std::vector<int64_t> outs;
+    for (int i = 0; i < ring.count(); i++)
+      if (i != index) outs.push_back(ring.outUntil(i));
+    settings.keys.erase(settings.keys.begin() + index);
+    ring.setCount(settings.keys.size());
+    ring.restore(0, outs);
+    saveKeys();
+    LOGI("companion", "key ..%s removed (%u left)", hint.c_str(), static_cast<unsigned>(settings.keys.size()));
+    notifyChanged();
+  });
+}
+
 void registerMacroCommands() {
   ble::on("companion.macros", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["macros"].to<JsonArray>();
@@ -1458,6 +1525,7 @@ void notifyReplay() {
 
 void registerCompanionCommands() {
   registerMacroCommands();
+  registerKeyCommands();
   ble::on("companion.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["companions"].to<JsonArray>();
     for (const std::string &id : companions::list().order()) {

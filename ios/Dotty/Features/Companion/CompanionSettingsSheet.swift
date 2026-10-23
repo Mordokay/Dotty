@@ -134,6 +134,14 @@ struct CompanionSettingsSheet: View {
     private func add() async {
         let key = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         message = nil
+        if keys.contains(where: { $0.hint == GeminiKeys.hint(key) }) {
+            message = "Dotty already has this key."
+            return
+        }
+        if keys.count >= 3 {
+            message = "Dotty already has 3 keys: remove one first."
+            return
+        }
         checking = true
         let check = await GeminiKeys.validate(key)
         checking = false
@@ -141,19 +149,18 @@ struct CompanionSettingsSheet: View {
         case .offline: message = "Couldn't reach Google to check the key. Try again when you're online."
         case .refused(let why): message = "Google didn't accept this key: \(why)"
         case .ok:
-            var all = GeminiKeys.load().filter { $0 != key }
-            all.append(key)
-            all = Array(all.suffix(3))
-            if await send("companion.settings", ["keys": all]) {
-                GeminiKeys.save(all)
+            // One key at a time: Dotty keeps the keys it has (some may come from another iPhone).
+            if await send("companion.key.add", ["key": key]) {
+                GeminiKeys.save(Array((GeminiKeys.load().filter { $0 != key } + [key]).suffix(3)))
                 draft = ""
             }
         }
     }
 
     private func remove(_ key: DottyKey) async {
-        let rest = GeminiKeys.load().filter { GeminiKeys.hint($0) != key.hint }
-        if await send("companion.settings", ["keys": rest]) { GeminiKeys.save(rest) }
+        if await send("companion.key.remove", ["hint": key.hint]) {
+            GeminiKeys.save(GeminiKeys.load().filter { GeminiKeys.hint($0) != key.hint })
+        }
     }
 
     // MARK: - Dotty

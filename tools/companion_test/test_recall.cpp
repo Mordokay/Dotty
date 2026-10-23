@@ -4,6 +4,8 @@
 // every chat in the instruction.
 #include <ArduinoJson.h>
 
+#include <map>
+
 #include "check.h"
 #include "recall.h"
 #include "usage_rules.h"
@@ -51,6 +53,34 @@ int main() {
   many.back() = "newest";
   const std::string capped = historyBlock(many);
   CHECK("block: capped, keeping the newest", capped.size() <= kRecallMaxChars && has(capped, "newest"));
+
+  // The block built day by day, newest first, without holding every exchange at once (a month of
+  // chats as separate strings could empty the internal RAM mid-session).
+  std::map<std::string, std::string> files = {
+      {"2026-10-21", historyLine(1792573200, "We talked about kiwis", "Kiwis are fun", "", 1, 1) + "\n"},
+      {"2026-10-22", log},
+      {"2026-10-23", historyLine(1792746000, "Nothing much today", "Okay", "", 1, 1) + "\n"}};
+  auto read = [&](const std::string &day) { return files.count(day) ? files[day] : std::string(); };
+  const std::vector<std::string> newestFirst = {"2026-10-23", "2026-10-22", "2026-10-21"};
+  const std::string block = recallBlock(newestFirst, read, "Mia", "bananas");
+  CHECK("block: the topic's day only, with its neighbour", has(block, "I love bananas") && has(block, "sister Ana") &&
+                                                              !has(block, "kiwis") && !has(block, "Nothing much"));
+  const std::string everything = recallBlock(newestFirst, read, "Mia", "mangoes");
+  CHECK("block: no match anywhere = every day, oldest first",
+        has(everything, "kiwis") && has(everything, "Nothing much") && everything.find("kiwis") < everything.find("Nothing much"));
+  std::map<std::string, std::string> big;
+  std::vector<std::string> manyDays;
+  for (int i = 0; i < 31; i++) {
+    const std::string day = "2026-09-" + std::string(i < 9 ? "0" : "") + std::to_string(i + 1);
+    std::string lines;
+    for (int j = 0; j < 40; j++)
+      lines += historyLine(1790000000 + i * 86400 + j, "day" + std::to_string(i) + " " + std::string(300, 'y'), "ok", "", 1, 1) + "\n";
+    big[day] = lines;
+    manyDays.insert(manyDays.begin(), day);
+  }
+  const std::string capped2 = recallBlock(manyDays, [&](const std::string &d) { return big[d]; }, "Mia", "");
+  CHECK("block: stops at the cap, keeping the newest days",
+        capped2.size() <= kRecallMaxChars && has(capped2, "day30 ") && !has(capped2, "day0 "));
 
   const std::string body = recallRequest("Mia", "what was I saying yesterday morning", now, historyBlock(ex));
   JsonDocument doc;

@@ -2,6 +2,8 @@
 // When Google's free allowance resets, the history file format, the day files, key clean-up.
 #include <time.h>
 
+#include <vector>
+
 #include "check.h"
 #include "usage_rules.h"
 
@@ -47,5 +49,15 @@ int main() {
   CHECK_EQ("conversations: gaps over 3 minutes split them", conversations(dayLog, 180), 3);
   CHECK_EQ("conversations: none", conversations("", 180), 0);
   CHECK_EQ("conversations: one turn", conversations(historyLine(7, "a", "b", "", 1, 1), 180), 1);
+  // Keys from the app one at a time (sending this iPhone's whole list wiped keys added elsewhere).
+  std::vector<std::string> keys = {"AAAAAAAAAAAAone1", "BBBBBBBBBBBBtwo2"};
+  CHECK_EQ("key add: appended", addKey(keys, "  CCCCCCCCCCthree3\n", 3), std::string());
+  CHECK("key add: trimmed, at the end", keys.size() == 3 && keys[2] == "CCCCCCCCCCthree3");
+  CHECK_EQ("key add: full", addKey(keys, "DDDDDDDDDDDDfour", 3), std::string("full"));
+  CHECK_EQ("key add: already there", addKey(keys, "BBBBBBBBBBBBtwo2", 4), std::string("already there"));
+  CHECK_EQ("key add: empty", addKey(keys, "   ", 4), std::string("empty"));
+  CHECK("key remove: by its hint, the others stay", removeKey(keys, "two2") && keys.size() == 2 &&
+                                                        keys[0] == "AAAAAAAAAAAAone1" && keys[1] == "CCCCCCCCCCthree3");
+  CHECK("key remove: unknown hint", !removeKey(keys, "zzzz") && keys.size() == 2);
   return failures ? 1 : 0;
 }
