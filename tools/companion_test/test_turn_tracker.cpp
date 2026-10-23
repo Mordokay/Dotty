@@ -57,5 +57,22 @@ int main() {
   r.message(false, Names{}, true, 300);
   o = r.message(false, Names{}, true, 300);
   CHECK("unasked: 3rd turn closes", o.close);
+  // While the user still holds BOOT, nothing is the reply (push-to-talk: Gemini answers after the
+  // release). Through the iPhone a leftover generation reached Dotty mid-question, was taken for the
+  // reply ("interrupted", then turnComplete) and the real reply was dropped as "not the reply".
+  TurnTracker s;
+  s.start();
+  s.speaking(true);
+  TurnTracker::Out q = s.message(true, Names{"set_mood"}, false, 300);
+  CHECK("speaking: leftover content isn't delivered", !q.deliver && q.spent == 300 && !q.apply.at(0) && !q.answer.at(0));
+  q = s.message(false, Names{}, true, 200);
+  CHECK("speaking: a leftover turnComplete doesn't end the question", !q.done && q.spent == 200);
+  s.speaking(false);  // released: activityEnd
+  q = s.message(false, Names{"set_mood"}, false, 0);
+  CHECK("released: the reply's tools apply again", q.apply.at(0) && q.answer.at(0));
+  q = s.message(true, Names{}, false, 100);
+  CHECK("released: the reply is delivered", q.deliver);
+  q = s.message(false, Names{}, true, 900);
+  CHECK("released: and it ends the question with its own tokens", q.done && q.tokens == 1000);
   return failures ? 1 : 0;
 }

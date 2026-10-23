@@ -11,6 +11,9 @@
 //  - Asking again mid-reply (an interruption) drops the old reply's leftovers until its turn
 //    ends, so they don't land in the new question (a phantom history entry, the real reply lost).
 //  - Turns nobody asked for are counted as spent tokens; three of them close the session.
+//  - While the user still holds BOOT (speaking), nothing is the reply: push-to-talk means Gemini
+//    answers after the release. Through the iPhone a leftover generation arrived mid-question, was
+//    taken for the reply ("interrupted", then turnComplete) and the real one was dropped.
 struct TurnTracker {
   struct Out {
     bool deliver = false;      // audio / text for the question being answered
@@ -23,6 +26,8 @@ struct TurnTracker {
   };
 
   bool turn = false;  // a question is open (from start() until its reply ends)
+
+  void speaking(bool on) { speaking_ = on; }  // between activityStart and activityEnd
 
   void start() {
     draining_ = turn;  // the last reply hasn't ended: its leftovers are still coming
@@ -40,6 +45,10 @@ struct TurnTracker {
     if (draining_) {
       o.spent = tokens;
       if (turnComplete) draining_ = false;
+      return o;
+    }
+    if (speaking_) {  // leftovers of something else: the reply comes after the release
+      o.spent = tokens;
       return o;
     }
     for (size_t i = 0; i < toolNames.size() && turn; i++) {
@@ -67,6 +76,6 @@ struct TurnTracker {
   }
 
  private:
-  bool draining_ = false, speech_ = false, moodAnswered_ = false;
+  bool draining_ = false, speech_ = false, moodAnswered_ = false, speaking_ = false;
   int tokens_ = 0, unasked_ = 0;
 };

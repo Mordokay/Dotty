@@ -155,8 +155,10 @@ bool MacroList::load(const std::string &json) {
 
 std::string macrosSection(const MacroList &macros) {
   if (macros.all().empty()) return "";
-  std::string s = "Macros: when the user says one of these phrases (or clearly means it), call run_macro with its "
-                  "number and say at most a few words; Dotty then gives you a text to read aloud.";
+  // "bedtime story" alone once got a reply of its own: phrases count on their own too.
+  std::string s = "Macros: when the user's words contain one of these phrases, even on their own (\"bedtime story\"), "
+                  "or clearly mean it, always call run_macro with its number instead of answering yourself, and say at "
+                  "most a few words; Dotty then gives you a text to read aloud.";
   for (const Macro &m : macros.all()) {
     std::string phrases = m.triggers;
     for (size_t at = 0; (at = phrases.find('\n', at)) != std::string::npos;) phrases.replace(at, 1, " / ");

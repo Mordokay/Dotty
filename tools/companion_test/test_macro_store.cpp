@@ -54,6 +54,8 @@ int main() {
   const std::string section = macrosSection(presets);
   CHECK("section: run_macro with its number", has(section, "call run_macro") && has(section, "1: talk dirty to me / flirt with me") &&
                                                  has(section, "4: give me a pep talk"));
+  CHECK("section: a phrase on its own counts, and it's not answered directly",
+        has(section, "even on their own") && has(section, "always call run_macro") && has(section, "instead of answering"));
   CHECK("section: none = nothing", macrosSection(MacroList()).empty());
 
   Profile mia = presetProfile("partner");

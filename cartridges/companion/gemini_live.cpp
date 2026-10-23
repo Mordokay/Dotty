@@ -31,6 +31,7 @@ bool GeminiLive::open() {
 
 void GeminiLive::startTurn() {
   turns_.start();
+  turns_.speaking(true);
   lastMessageAt_ = millis();
   t_->sendText(liveActivityStart());
 }
@@ -41,12 +42,14 @@ void GeminiLive::sendAudio(const int16_t *pcm, size_t frames) {
 
 void GeminiLive::endTurn() {
   lastMessageAt_ = millis();  // the reply's silence counts from here
+  turns_.speaking(false);
   t_->flushVoice();
   t_->sendText(liveActivityEnd());
 }
 
 void GeminiLive::answerTool(const std::string &id, const std::string &name, const std::string &result) {
   if (!turns_.turn) turns_.start();  // still open (nothing said yet): the reply is that question's
+  turns_.speaking(false);
   lastMessageAt_ = millis();
   t_->sendText(liveToolResult(id, name, result));
 }
@@ -60,6 +63,7 @@ void GeminiLive::sendText(const std::string &text, bool continueQuestion) {
   std::string out;
   serializeJson(doc, out);
   if (!continueQuestion || !turns_.turn) turns_.start();
+  turns_.speaking(false);
   lastMessageAt_ = millis();
   t_->sendText(out);
 }
