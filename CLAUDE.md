@@ -932,6 +932,11 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   first build rebuilds the core, ~4 min; the generated `sdkconfig.*`, `managed_components/`,
   `.dummy/` are gitignored). Other cartridges keep the prebuilt core: the launcher (HTTPS with BLE
   up, see 0.9.25) is the next candidate; never Rescue (fixed 768 KB slot, the safety net).
+  **Bluetooth during a session** (dev key O, on that build, 2026-10-23): BLE on mid-session took
+  internal RAM from 105 KB to 42 KB free (largest 30 KB); the iPhone reconnected and sent
+  commands, a voice turn still answered in 1.2 s, and the writer's second TLS worked on top (HTTP
+  200, 147 words, 2.9 s) with 35 KB free, largest 27 KB left. It fits, thinly (the old hang came
+  at 36 KB / largest 12 KB): sessions still turn Bluetooth off until a longer soak says otherwise.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).

@@ -1972,6 +1972,11 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == 'O' && live.ready()) {  // dev: Bluetooth on during a session (does it fit now?)
+    ble::start();
+    LOGI("measure", "Bluetooth on in a session: internal %u KB free, largest %u KB",
+         heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
+  }
   if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
   // dev: a typed question (U; G asks for a one-minute guided meditation), and ending the chat now (E:
   // the review runs, which may evolve it).
