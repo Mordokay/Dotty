@@ -256,6 +256,7 @@ std::vector<Network> scan() {
 }
 
 bool connectTo(const String &ssid, const String &password, String &error) {
+  aborting = false;  // a stop meant for an earlier connect() (the companion's race) isn't this one's
   disconnect();
   return join(ssid, password, error);
 }

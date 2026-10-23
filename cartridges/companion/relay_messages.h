@@ -10,6 +10,12 @@
 // then bytes); Dotty's events go out as JSON on the Event characteristic. Plain C++ (host-tested).
 
 constexpr size_t kRelayMaxMessage = 96 * 1024;  // a recall's 60 KB of chats plus room
+constexpr size_t kRelayMaxVoiceSamples = 570;
+
+// Samples per voice frame so the whole notification (0x1F 0x01 seq, the 3-byte ADPCM header, two
+// samples a byte) fits MTU - 3: 570 made 291 bytes at the iPhone's MTU 293, and the stack silently cut
+// the last byte of every frame.
+size_t relayVoiceSamples(size_t mtu);
 
 class PieceAssembler {
  public:

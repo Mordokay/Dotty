@@ -45,6 +45,13 @@ int main() {
   std::vector<uint8_t> wrong = {0x01, 0x00, 0x05};
   CHECK("pieces: not a 0x02 value: refused", !a.add(wrong.data(), wrong.size(), out));
 
+  // Voice frames fit one notification: 0x1F 0x01 seq + the ADPCM header + 2 samples a byte ≤ MTU - 3
+  // (570 samples made 291 bytes at MTU 293, and the stack silently cut the last byte).
+  CHECK_EQ("voice: 568 samples at MTU 293", relayVoiceSamples(293), size_t(568));
+  CHECK("voice: the frame fits", 3 + 3 + relayVoiceSamples(293) / 2 <= 293 - 3);
+  CHECK_EQ("voice: at most 570 (the frame buffer)", relayVoiceSamples(517), size_t(570));
+  CHECK("voice: a tiny MTU still gets samples", relayVoiceSamples(23) >= 2 && 3 + 3 + relayVoiceSamples(23) / 2 <= 20);
+
   // Events Dotty sends.
   JsonDocument e;
   deserializeJson(e, relayOpenEvent(R"({"setup":{"model":"m"}})", "OJig", ""));

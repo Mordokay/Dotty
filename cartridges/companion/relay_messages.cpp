@@ -2,6 +2,12 @@
 
 #include <ArduinoJson.h>
 
+size_t relayVoiceSamples(size_t mtu) {
+  const size_t room = mtu > 23 ? mtu - 3 : 20;  // a notification's payload
+  const size_t samples = 2 * (room - 6);         // 3 bytes of frame header + 3 of ADPCM header
+  return samples < kRelayMaxVoiceSamples ? samples : kRelayMaxVoiceSamples;
+}
+
 bool PieceAssembler::add(const uint8_t *data, size_t len, std::string &complete) {
   complete.clear();
   if (len < 2 || data[0] != 0x02) return false;

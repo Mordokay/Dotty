@@ -180,6 +180,8 @@ relay::Transport relayTransport;
 portMUX_TYPE raceLock = portMUX_INITIALIZER_UNLOCKED;
 volatile bool wifiBegan = false;
 bool phoneWasReady = false;
+uint32_t relayOpenAt = 0;        // a relay chat's setup was sent (the phone has 10 s to answer)
+uint32_t relayDistrustUntil = 0; // the phone didn't answer a setup: Wi-Fi for chats until then
 std::string resumeRetryHandle;  // a hand-over's resume, retried while Google still holds the old session
 int resumeRetries = 0;
 uint32_t resumeRetryAt = 0;
@@ -814,6 +816,7 @@ void beginRelay(const std::string &resume = "") {
   LiveConfig config = sessionConfig();
   if (!resume.empty()) config.resumeHandle = resume;
   awaitingConnect = true;  // cleared when Gemini is ready
+  relayOpenAt = millis();
   if (!live.begin(sessionKeyText.c_str(), config, callbacks(), relayTransport)) {
     awaitingConnect = false;
     path.phoneLost();
@@ -884,7 +887,8 @@ void connect() {
   // The phone (connected, said hello, holds this key) takes the chat; else Wi-Fi is raced against it
   // with Bluetooth left on (mbedTLS in PSRAM made that fit; Bluetooth goes off once Wi-Fi has won and
   // the grace window is over).
-  const bool phone = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText));
+  const bool distrusted = relayDistrustUntil && static_cast<int32_t>(relayDistrustUntil - millis()) > 0;
+  const bool phone = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText)) && !distrusted;
   path.press(millis(), phone);
   phoneWasReady = phone;
   power::setWakeLock(power::kWakeLockNetwork, true);
@@ -2219,7 +2223,7 @@ void loop() {
   pollReplay();
 
   // The background connect finished (the screen may already be listening).
-  if (awaitingConnect && !connecting && !live.connected()) {
+  if (awaitingConnect && !connecting && !live.connected() && !resumeRetryAt) {
     awaitingConnect = awaitingSend = false;
     early.clear();
     voice::stopListening();
@@ -2254,6 +2258,16 @@ void loop() {
     }
   }
 
+  // The phone took a chat's setup but never answered (a lost piece, an app without its relay…):
+  // after 10 s the chat goes over Wi-Fi instead, the recording kept, and the phone sits out a minute.
+  if (awaitingConnect && live.overRelay() && live.connected() && !live.ready() && millis() - relayOpenAt > 10000) {
+    LOGW("companion", "the phone didn't answer the chat's setup: Wi-Fi instead");
+    relayDistrustUntil = millis() + 60000;
+    live.close();
+    awaitingConnect = false;
+    path.end();
+    connect();
+  }
   if (resumeRetryAt && millis() > resumeRetryAt) {  // a hand-over's resume, again
     resumeRetryAt = 0;
     if (relay::phoneReady()) beginRelay(resumeRetryHandle);

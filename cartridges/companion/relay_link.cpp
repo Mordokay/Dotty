@@ -14,10 +14,13 @@ namespace relay {
 namespace {
 
 constexpr size_t kBufferBytes = 64 * 1024;
-constexpr size_t kFrameSamples = 570;
+size_t frameSamples() {
+  return relayVoiceSamples(ble::mtu());
+}
 
 MessageBufferHandle_t incoming = nullptr;  // the phone's writes: BLE task → loop
 bool helloOk = false;
+uint32_t helloConnection = 0;  // the BLE connection the hello came on (a reconnect says hello again)
 std::vector<String> hints;
 PieceAssembler assembler;
 
@@ -35,7 +38,7 @@ std::map<uint32_t, Fetch> fetches;
 uint32_t nextFetch = 1;
 
 bool sendFrame(const int16_t *pcm, size_t count) {
-  static uint8_t buf[3 + adpcm::kHeader + kFrameSamples / 2 + 1];
+  static uint8_t buf[3 + adpcm::kHeader + kRelayMaxVoiceSamples / 2 + 1];
   buf[0] = 0x1F;
   buf[1] = 0x01;
   buf[2] = voiceSeq++;
@@ -92,6 +95,7 @@ void begin() {
   });
   ble::on("relay.hello", [](JsonObjectConst args, JsonObject reply) {
     helloOk = (args["version"] | 0) == kVersion;
+    helloConnection = ble::connection();
     hints.clear();
     for (JsonVariantConst k : args["keys"].as<JsonArrayConst>()) hints.push_back(k | "");
     reply["version"] = kVersion;
@@ -106,7 +110,7 @@ void poll() {
 }
 
 bool phoneReady() {
-  return helloOk && ble::connected();
+  return helloOk && ble::connection() != 0 && ble::connection() == helloConnection;
 }
 
 bool phoneHasKey(const String &keyHint) {
@@ -160,9 +164,10 @@ bool Transport::sendVoice(const int16_t *pcm, size_t frames) {
   if (!connected()) return false;
   pendingVoice.insert(pendingVoice.end(), pcm, pcm + frames);
   size_t at = 0;
-  while (pendingVoice.size() - at >= kFrameSamples) {
-    if (!sendFrame(pendingVoice.data() + at, kFrameSamples)) break;
-    at += kFrameSamples;
+  const size_t per = frameSamples();
+  while (pendingVoice.size() - at >= per) {
+    if (!sendFrame(pendingVoice.data() + at, per)) break;
+    at += per;
   }
   pendingVoice.erase(pendingVoice.begin(), pendingVoice.begin() + at);
   return true;
