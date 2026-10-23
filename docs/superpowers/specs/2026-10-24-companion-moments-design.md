@@ -272,6 +272,19 @@ Local epoch times, every command ≤ 512 bytes.
 | A group changes too late to record again | the members' own recordings in a row, then the text of the rest |
 | Sung style sounds poor | the jingle + spoken rhyme fallback |
 
+## The place, as system data (sandbox fix)
+
+The companion's instruction names where the user is; today it reads the Weather cartridge's settings
+(NVS `weather/name`), which breaks the sandbox rule (CLAUDE.md). Instead:
+
+- The app sends its place on every connection, next to the clock: `core.place {name, lat, lon}` (the
+  town from CoreLocation + reverse geocoding, which the app already uses for Weather), registered by
+  the shell in every firmware, kept in the system NVS namespace `clock` (`place`, `lat`, `lon`,
+  `placeAt`) → `shell::place()`. A missing location permission sends nothing.
+- The companion uses `shell::place()`; with none known, the instruction just leaves the place out.
+  `placeName()` and the read of `weather` go.
+- (Piece 4 can refresh it at every phone wake and add WeatherKit; see the roadmap.)
+
 ## Out of scope
 
 The phone sync bundle, ANCS notifications, HealthKit, calendar, Slack, Reddit (piece 4 and later, as
