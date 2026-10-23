@@ -1033,6 +1033,24 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Swift checks: `tools/relay_swift_check/check.swift`. `ble::notify` retries a short message and
   takes a ready JSON string; `ble::notifyRaw`, `ble::mtu`. In a relay chat Bluetooth is on, so the
   app's chat screen updates after every reply.
+  **Device findings (2026-10-23, the user's tests), all fixed:** while BOOT is held nothing is the
+  reply (`TurnTracker::speaking`: a leftover generation, slower through the iPhone, was taken for
+  the reply and the real one dropped); the phone winning the race aborts the Wi-Fi join at once
+  (`net::abortConnect`: a relay chat with Wi-Fi still joining had 13 KB free and its BLE link timed
+  out; with Wi-Fi off a relay chat has ~80 KB); iOS cuts the phone's idle Gemini socket 20-90 s
+  after a reply, so relay chats wrap up after **20 s** of quiet (review, close; Wi-Fi keeps 3 min)
+  and keep the session-resume handle for **10 min** — the next press resumes the conversation, a
+  1006 close while idle or during the review is no error — and the app keeps one background task
+  for the whole chat; a relay chat belongs to one BLE connection (`ble::connection()` numbers them:
+  after a lock/unlock the old chat looked alive and swallowed the recording), and locking closes it;
+  the grace window waits for a phone that said hello (it expired under a playing reply); a
+  hand-over's resume is retried (Google answered 1008 "already connected" once); the text model took
+  22-24 s through the phone on a slow day (5-16 s from a Mac), so fetches get **60 s**; macros fire on
+  their phrase alone ("bedtime story"). **Wi-Fi joins** (every cartridge, `net.*`): Bluetooth sharing
+  the radio made the all-channel scan 8.8 s and the join (which scanned again) 6.5 s; now the access
+  point joined last time is joined directly (NVS `wifi/lastBssid`, `lastChannel`, `WIFI_FAST_SCAN`,
+  6 s) — **1.7 s** — and after a full scan its strongest access point likewise; press → Gemini ready
+  over Wi-Fi ~4 s (was ~17 s).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
