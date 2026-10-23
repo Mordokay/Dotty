@@ -999,6 +999,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   raw PCM (32 / 48 KB/s) doesn't fit. Found on the way: `ble::notify` sent a short message in one
   notification with no retry, so a reply right after a burst was dropped (the app waited 90 s) —
   the spike branch retries it like the pieces; carry that fix over if the relay goes ahead.
+  **Probe 2** (same branch): a chat relayed through the iPhone. Dotty (relay mode, dev key L) sends
+  {event: relay.listen}, its voice as IMA ADPCM frames (16 kHz, 570 samples, each frame carrying its
+  start state; `adpcm.h` + the app's `Adpcm.swift`, byte for byte) on Event (0x1F 0x01 seq …), then
+  relay.release; the app (`RelayService`, app-wide, background task per turn) holds the Gemini Live
+  WebSocket and sends the reply back on Data (0x01 seq + ADPCM at 24 kHz, 0x03 = end). Measured, 8
+  of the user's turns: reply audio 0.93-1.23 s after release (one 3.0 s), every turn complete, no
+  Wi-Fi on Dotty; the user: "way faster with bluetooth" (no 5-8 s Wi-Fi join + TLS per chat). Bug
+  found: relay mode must keep the "listening without a session → connect" rule out (it switched
+  BLE off mid-turn). Open: the background / locked-iPhone case, the sound quality of ADPCM, and Dotty
+  locking itself (its lock turns BLE off) — a relay companion needs Bluetooth while locked.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
