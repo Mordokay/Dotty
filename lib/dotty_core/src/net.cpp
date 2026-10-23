@@ -74,6 +74,10 @@ const Saved *findSaved(const String &ssid) {
   return nullptr;
 }
 
+// connect() gives up as soon as it can (the companion's phone won the race for a chat): after the
+// scan and every 100 ms of a join. Reset at the start of each connect().
+volatile bool aborting = false;
+
 bool join(const String &ssid, const String &password, String &error) {
   WiFi.mode(WIFI_STA);
   // A mesh has several access points with one name: by default the ESP32 joins the first one its
@@ -83,7 +87,11 @@ bool join(const String &ssid, const String &password, String &error) {
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid.c_str(), password.c_str());
   const uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs) delay(100);
+  while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs && !aborting) delay(100);
+  if (aborting && WiFi.status() != WL_CONNECTED) {
+    error = "stopped";
+    return false;
+  }
   if (WiFi.status() == WL_CONNECTED) {
     LOGI("wifi", "joined '%s', %s, %d dBm", ssid.c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
     lastJoinedRssi = WiFi.RSSI();
@@ -226,18 +234,28 @@ bool connectTo(const String &ssid, const String &password, String &error) {
   return join(ssid, password, error);
 }
 
+void abortConnect() {
+  aborting = true;
+}
+
 bool connect(String &error) {
+  aborting = false;
   if (WiFi.status() == WL_CONNECTED) return true;
   if (networks.empty()) {
     error = "no Wi-Fi set up";
     return false;
   }
   std::vector<Network> visible = scan();  // strongest first
+  if (aborting) {
+    error = "stopped";
+    return false;
+  }
   // The preferred network goes first when it's in range; the rest stay strongest first.
   std::stable_partition(visible.begin(), visible.end(), [](const Network &n) { return n.ssid == preferredSsid; });
   for (const Network &n : visible) {
     const Saved *s = findSaved(n.ssid);
     if (s && join(s->ssid, s->password, error)) return true;
+    if (aborting) return false;
   }
   if (error.isEmpty()) error = "no saved network in range";
   return false;

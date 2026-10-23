@@ -46,6 +46,8 @@ std::vector<Network> scan();
 bool connectTo(const String &ssid, const String &password, String &error);
 // Joins the strongest saved network in range.
 bool connect(String &error);
+// Makes a connect() running on another task give up soon (after its scan, or within 100 ms of a join).
+void abortConnect();
 void disconnect();
 bool connected();
 String ssid();

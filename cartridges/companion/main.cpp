@@ -291,8 +291,8 @@ void disconnect(const char *why) {
     return;
   }
   if (lowFree != SIZE_MAX)
-    LOGI("companion", "session low: internal %u KB free, largest %u KB (Bluetooth %s)", lowFree / 1024, lowLargest / 1024,
-         keepBle ? "on" : "off");
+    LOGI("companion", "session low: internal %u KB free, largest %u KB (%s)", lowFree / 1024, lowLargest / 1024,
+         live.overRelay() ? "through the iPhone" : ble::running() ? "Wi-Fi, Bluetooth on" : "Wi-Fi");
   lowFree = lowLargest = SIZE_MAX;
   live.close();
   net::disconnect();
@@ -792,10 +792,19 @@ void beginRelay(const std::string &resume = "") {
   if (info.state != Talk::Listening && !awaitingSend) setState(Talk::Connecting, "Waking up...");
 }
 
+// The phone arrived in a Wi-Fi chat's grace window: the chat moves to it, the conversation resumed.
+void handOver() {
+  const std::string handle = live.latestHandle();
+  live.close();
+  net::disconnect();
+  power::setWakeLock(power::kWakeLockNetwork, false);
+  beginRelay(handle);
+}
+
 void connectLoop(void *) {
   String error;
   bool ok = net::connect(error);
-  if (!ok) {  // a join sometimes times out once and works straight after (seen at boot)
+  if (!ok && !cancelConnect) {  // a join sometimes times out once and works straight after (seen at boot)
     LOGW("companion", "Wi-Fi: %s, trying again", error.c_str());
     error = "";
     ok = net::connect(error);
@@ -2225,11 +2234,18 @@ void loop() {
         LOGI("companion", "the phone came back late: Wi-Fi keeps this chat");
       } else {
         LOGI("companion", "the phone won the race");
+        net::abortConnect();  // the Wi-Fi join stops: its radio and memory are the relay's again
         beginRelay();
       }
     }
   }
   phoneWasReady = phoneNow;
+  // The phone came back during a Wi-Fi chat: it takes the chat between turns (Wi-Fi and Bluetooth
+  // together are the tight case — a WebSocket stalled 9 s and dropped while the phone reconnected).
+  if (live.ready() && !live.overRelay() && phoneNow && (info.state == Talk::Ready || info.state == Talk::After) &&
+      !writing && !reading && !reviewStart && path.takeHandover()) {
+    handOver();
+  }
   if (live.connected() && !live.overRelay() && ble::running() && !path.keepBluetooth(millis())) {
     LOGI("companion", "Wi-Fi chat: Bluetooth off for the rest of it");
     ble::stop();
@@ -2249,13 +2265,7 @@ void loop() {
     }
     if (info.state == Talk::Connecting || info.state == Talk::Ready || info.state == Talk::After ||
         info.state == Talk::Speaking) {
-      if (live.connected() && !live.overRelay() && relay::phoneReady() && path.takeHandover()) {
-        // The phone arrived in the grace window: the chat moves to it, the conversation resumed.
-        const std::string handle = live.latestHandle();
-        live.close();
-        net::disconnect();
-        beginRelay(handle);
-      }
+      if (live.connected() && !live.overRelay() && relay::phoneReady() && path.takeHandover()) handOver();
       startTalking();  // also interrupts a reply
     }
   }
