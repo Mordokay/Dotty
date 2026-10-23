@@ -102,11 +102,14 @@ text exact (shown on screen), the voice the companion's own, and the length cont
 path proven by the writer and macros.
 
 1. **Write**: the writer (`gemini-flash-lite-latest`) gets the companion's character and memories, the
-   moment (`kind`, `what`, `style`, the time it will play) and returns the line, ≤ 60 words (sung: a
-   short verse or two). Through `relay.fetch` when the phone is there, else Dotty's own HTTPS.
+   moment (`kind`, `what`, `style`, the time it will play) and returns the line, **≤ 150 words**
+   (about a minute: the length the writer and word-for-word reading are proven at, the user's choice),
+   as short as the message allows: a plain reminder is usually a sentence or two. Through `relay.fetch` when the phone is there, else Dotty's own HTTPS.
 2. **Read**: a Live turn "say the text below aloud exactly, word for word, {style note}" (style notes:
    sung → "sing it to a simple, cheerful melody"; whispered, excited, calm → the matching delivery).
-   The reply audio goes to an `AdpcmRecorder`, not to the speaker, then the WAV + timing file are saved
+   A line over ~100 words is read in chunks like a long answer
+   (`readingChunks`, 0.4.1); the recording has no gaps between them. The reply audio goes to an
+   `AdpcmRecorder`, not to the speaker, then the WAV + timing file are saved
    by the replay's save task.
 3. **Singing is an approximation**: Live is a speech model. The first device test decides; if it sounds
    poor, `sung` becomes a short `playNotes` jingle before a spoken, rhyming line (the spec's fallback,
@@ -127,7 +130,8 @@ path proven by the writer and macros.
   read and recorded.
 - **Not ready** (quota, network, no phone and no Wi-Fi): retried at every phone wake until the moment
   fires (then the no-recording fallback).
-- Cost: a short line ≈ 2–3k tokens (writer + reading); a day of 2 spontaneous lines ≈ 6k.
+- Cost: a short line ≈ 2–3k tokens (writer + reading), a full 150-word line ≈ 6–7k; a day of 2
+  spontaneous lines ≈ 6–14k. A 150-word recording is ~60 s, ~2.9 MB on the card.
 
 ## Timers
 
