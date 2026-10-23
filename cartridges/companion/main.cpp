@@ -27,6 +27,7 @@
 #include "history.h"
 #include "companions.h"
 #include "key_ring.h"
+#include "last_line.h"
 #include "piece_buffer.h"
 #include "ui.h"
 #include "memories.h"
@@ -115,13 +116,17 @@ uint32_t noteUntil = 0;        // "Remembered"… shows until then
 // instant, the iPhone's reconnect hung the Bluetooth controller (interrupt watchdog in
 // ll_connection_update_ind_handler, 2026-10-22).
 uint32_t bleBackAt = 0;
-// The acting demo (2026-10-23): Mia's replies to three scenes (sad news, dolphins, worried), with
-// and without the persona's acting notes, recorded as data/act_<variant><scene>.wav and played on a
-// screen of 6 buttons, opened from a small A/B corner button on the idle main screen — kept so the
-// user can let others hear the difference. Dev key V records (first press: acting, next: plain).
-bool toneTest = false, toneScreen = false;
-int toneVariant = 0, toneIndex = 0;  // variant 0 = acting, 1 = plain; index = the scenario
-std::string toneRec;
+// The last thing said, for replay (per companion: last.wav + last.json in its folder). The reply's
+// audio is copied as it arrives (up to a minute, like the voice backlog) and saved once it has played.
+constexpr size_t kLastMaxFrames = 60 * 24000;
+int16_t *lastRec = nullptr;  // PSRAM, only while a reply is being kept
+size_t lastRecFrames = 0;
+LastLine lastPending;  // this reply's text pieces
+LastLine lastLine;     // the active companion's saved one
+bool hasLast = false;
+Replay replay;
+std::string replayShown;  // the replay's text on screen
+int historyTurns = 0, countedTurns = -1;  // turns appended to history, and when talksToday last counted
 bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
@@ -269,6 +274,15 @@ void beginReply() {
 
 String idleStatus();
 void applyCompanion();
+void stopReplay();
+void notifyReplay();
+void beginLast();
+void saveLast();
+bool canReplay();
+void toggleReplay();
+void setReplayLoop(bool on);
+void pollReplay();
+void loadLast();
 void notifyChanged();
 
 // Another companion: its own persona, voice, avatar, memories and history from the next session.
@@ -276,8 +290,10 @@ void switchCompanion(const std::string &id) {
   if (id == companions::active().id || !companions::find(id)) return;
   if (live.connected() || connecting) disconnect("companion changed");
   live.forgetResume();  // a goAway handle holds the old companion's conversation (and its memory numbers)
+  stopReplay();
   companions::select(id);
   applyCompanion();
+  loadLast();  // its own last line
   setState(Talk::Offline, idleStatus());
   notifyChanged();  // the app's pager follows a switch made on Dotty
 }
@@ -335,7 +351,6 @@ void syncProfile() {
 // A memory call from the model: change the store, save it, show a note for 3 s, note it for the
 // history line. Returns the memory's id for remember (sent back so the model can name it).
 int applyMemory(const ToolCall &c) {
-  if (toneTest) return -1;  // the acting demo's role-play isn't real life
   // Switched companion since this session opened: nothing lands on the new one.
   if (sessionCompanion != companions::active().id) return -1;
   MemoryStore &store = memories::store();
@@ -423,6 +438,7 @@ GeminiLive::Callbacks callbacks() {
       beginReply();
     } else {
       textQueue.push_back({replyFrames, t});
+      lastPending.add(replyFrames / 24, t);  // 24 kHz: frames → ms
     }
   };
   cb.audio = [](const int16_t *pcm, size_t frames) {
@@ -430,7 +446,11 @@ GeminiLive::Callbacks callbacks() {
     if (!voice::playing()) beginReply();
     voice::play(pcm, frames);
     replyFrames += frames;
-    if (toneTest && toneRec.size() < 24000u * 2 * 30) toneRec.append(reinterpret_cast<const char *>(pcm), frames * 2);
+    if (lastRec && lastRecFrames < kLastMaxFrames) {  // kept for replay (the first minute)
+      const size_t n = min(frames, kLastMaxFrames - lastRecFrames);
+      memcpy(lastRec + lastRecFrames, pcm, n * 2);
+      lastRecFrames += n;
+    }
   };
   cb.mood = [](const std::string &m) {
     turnMood = m.c_str();
@@ -453,6 +473,7 @@ GeminiLive::Callbacks callbacks() {
     for (const TextPiece &p : textQueue) full += p.text;
     const uint32_t ms = firstAudioAt ? firstAudioAt - releasedAt : millis() - releasedAt;
     history::append(heard, full, turnMood.c_str(), ms, tokens, turnMemory);
+    historyTurns++;  // the lock screen counts its talks again
     usage::addTurn(tokens, sessionKey);
     LOGI("companion", "turn: %u ms to first audio, %d tokens; heard \"%s\"; said \"%s\"", static_cast<unsigned>(ms),
          tokens, heard.c_str(), full.c_str());
@@ -496,15 +517,6 @@ GeminiLive::Callbacks callbacks() {
 
 // ---------- connecting ----------
 
-std::string tonePersona() {
-  if (!toneTest) return personaSection;
-  Profile p = presetProfile("partner");
-  p.name = "Mia";
-  std::string t = personaText(p);
-  if (toneVariant == 1) t = t.substr(0, t.find(" Acting:"));
-  return t;
-}
-
 void connectLoop(void *) {
   String error;
   bool ok = net::connect(error);
@@ -519,7 +531,7 @@ void connectLoop(void *) {
     config.voice = sessionVoice.c_str();
     config.textOnly = settings.textOnly;
     config.systemInstruction = systemInstruction(localClock(nowUtc()).c_str(), placeName().c_str(),
-                                                 tonePersona(), memorySection);  // Task 4: the companion's persona
+                                                 personaSection, memorySection);  // Task 4: the companion's persona
     ok = live.begin(sessionKeyText.c_str(), config, callbacks());
     if (!ok) error = "Can't reach Gemini";
   } else {
@@ -611,6 +623,8 @@ void startTalking() {
   turnMood = info.mood = "neutral";
   firstAudioAt = 0;
   reviewStart = 0;  // talking again: the end-of-chat review is dropped (its reply drains away)
+  stopReplay();
+  beginLast();
   turnMemory.clear();
   textQueue.clear();
   replyFrames = 0;
@@ -774,72 +788,151 @@ void onSettingsTap(uint16_t x, uint16_t y) {
   redraw = true;
 }
 
-String tonePath(int v, int i) {
-  return storage::myDataDir() + "/act_" + String(v) + String(i) + ".wav";
+// ---------- the last thing said: kept per companion, replayed (play / pause / loop) ----------
+
+String lastPath(const std::string &id, const char *ext) {
+  return companions::folder(id) + "/last." + ext;
 }
 
-void saveTone() {
-  if (toneRec.empty() || toneIndex > 2) return toneRec.clear();
-  const uint32_t bytes = toneRec.size();
-  uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0};
-  auto put32 = [&](int at, uint32_t v) { for (int i = 0; i < 4; i++) h[at + i] = v >> (8 * i); };
-  put32(4, 36 + bytes);
-  put32(24, 24000);
-  put32(28, 48000);
-  h[32] = 2, h[34] = 16;
-  memcpy(h + 36, "data", 4);
-  put32(40, bytes);
-  File f = SD_MMC.open(tonePath(toneVariant, toneIndex), FILE_WRITE);
-  static uint8_t chunk[2048];
+// A new reply: keep its audio (a minute at most) and its text pieces.
+void beginLast() {
+  lastPending = LastLine();
+  lastRecFrames = 0;
+  if (settings.textOnly) return;
+  if (!lastRec) lastRec = static_cast<int16_t *>(heap_caps_malloc(kLastMaxFrames * 2, MALLOC_CAP_SPIRAM));
+  if (!lastRec) LOGW("companion", "no memory to keep the reply for replay");
+}
+
+void freeLast() {
+  if (lastRec) heap_caps_free(lastRec);
+  lastRec = nullptr;
+  lastRecFrames = 0;
+}
+
+void loadLast() {
+  hasLast = false;
+  const std::string id = companions::active().id;
+  File f = SD_MMC.open(lastPath(id, "json"));
+  std::string json;
   if (f) {
-    f.write(h, sizeof(h));
-    for (size_t at = 0; at < toneRec.size(); at += sizeof(chunk)) {
-      const size_t n = min(sizeof(chunk), toneRec.size() - at);
-      memcpy(chunk, toneRec.data() + at, n);
-      f.write(chunk, n);
-    }
+    json.reserve(f.size());
+    while (f.available()) json += static_cast<char>(f.read());
   }
   f.close();
-  LOGI("companion", "acting test: variant %d scenario %d saved (%.1f s)", toneVariant, toneIndex, bytes / 48000.0f);
-  toneRec.clear();
-  toneRec.shrink_to_fit();
-  toneIndex++;
+  hasLast = parseLastLine(json, lastLine) && SD_MMC.exists(lastPath(id, "wav"));
 }
 
-void drawToneScreen() {
-  epd.fillScreen(EpdDisplay::kWhite);
-  nav::draw(epd, "Acting test", nav::Icon::Back, nav::Icon::None);
-  static const char *rows[] = {"Sad news", "Dolphins", "Worried"};
-  epd.setFont(nullptr);
-  epd.setTextColor(EpdDisplay::kBlack);
-  epd.setCursor(40, 50);
-  epd.print("acting");
-  epd.setCursor(138, 50);
-  epd.print("plain");
-  for (int r = 0; r < 3; r++)
-    for (int v = 0; v < 2; v++) {
-      const int16_t x = 4 + v * 98, y = 62 + r * 46, w = 94, hgt = 42;
-      const bool has = SD_MMC.exists(tonePath(v, r));
-      epd.drawRoundRect(x, y, w, hgt, 6, EpdDisplay::kBlack);
-      if (has) epd.drawRoundRect(x + 1, y + 1, w - 2, hgt - 2, 5, EpdDisplay::kBlack);
-      const String label = has ? rows[r] : "-";
-      epd.setCursor(x + (w - 6 * label.length()) / 2, y + 17);
-      epd.print(label);
-    }
-}
-
-void onToneTap(uint16_t x, uint16_t y) {
-  if (y < nav::kHeight) {
-    if (nav::hit(x, y) < 0) toneScreen = false;
-  } else if (y >= 62) {
-    const int v = x >= 100 ? 1 : 0, r = min(2, (y - 62) / 46);
-    if (SD_MMC.exists(tonePath(v, r))) player.play(tonePath(v, r).c_str());
+bool writeCard(const String &path, const uint8_t *head, size_t headLen, const uint8_t *data, size_t len) {
+  File f = SD_MMC.open(path + ".part", FILE_WRITE);
+  static uint8_t chunk[4096];  // through internal RAM, as every card write here
+  bool ok = static_cast<bool>(f) && f.write(head, headLen) == headLen;
+  for (size_t at = 0; ok && at < len; at += sizeof(chunk)) {
+    const size_t n = min(sizeof(chunk), len - at);
+    memcpy(chunk, data + at, n);
+    ok = f.write(chunk, n) == n;
   }
-  redraw = true;
+  f.close();
+  if (ok) {
+    SD_MMC.remove(path);
+    ok = SD_MMC.rename(path + ".part", path);
+  }
+  return ok;
 }
 
-bool demoAvailable() {
-  return SD_MMC.exists(tonePath(0, 0)) || SD_MMC.exists(tonePath(1, 0));
+// The reply has been heard: onto the card, as the companion's last line.
+void saveLast() {
+  if (!lastRec || settings.textOnly || lastRecFrames < 24000 / 2) return freeLast();  // nothing worth replaying
+  const uint32_t started = millis();
+  lastPending.ms = UINT32_MAX;
+  lastPending.cut(lastRecFrames / 24);
+  lastPending.mood = turnMood.c_str();
+  lastPending.t = time(nullptr);
+  uint8_t header[44];
+  wavHeader(header, lastRecFrames * 2, 24000);
+  const std::string json = lastLineJson(lastPending);
+  const bool ok = writeCard(lastPath(sessionCompanion, "wav"), header, sizeof(header),
+                            reinterpret_cast<const uint8_t *>(lastRec), lastRecFrames * 2) &&
+                  writeCard(lastPath(sessionCompanion, "json"), reinterpret_cast<const uint8_t *>(json.data()),
+                            json.size(), nullptr, 0);
+  LOGI("companion", "last line %s: %.1f s in %lu ms", ok ? "saved" : "NOT saved", lastRecFrames / 24000.0f,
+       static_cast<unsigned long>(millis() - started));
+  freeLast();
+  if (ok && sessionCompanion == companions::active().id) {
+    lastLine = lastPending;
+    hasLast = true;
+    redraw = true;
+  }
+}
+
+bool canReplay() {
+  return hasLast && !settings.textOnly &&
+         (info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Error);
+}
+
+void stopReplay() {
+  if (replay.state() == Replay::Stopped) return;
+  replay.stop();
+  player.stop();
+  info.said = lastLine.text().c_str();
+  info.page = -1;
+  redraw = true;
+  notifyReplay();
+}
+
+bool playLast() {
+  replayShown.clear();
+  info.page = -1;
+  info.mood = lastLine.mood.c_str();
+  return player.play(lastPath(companions::active().id, "wav").c_str());
+}
+
+// Play / pause (a stopped replay starts from the beginning).
+void toggleReplay() {
+  if (!canReplay()) return;
+  const bool fresh = replay.state() == Replay::Stopped;
+  replay.toggle(millis());
+  if (fresh && !playLast()) replay.stop();
+  else if (!fresh) player.togglePause();
+  LOGI("companion", "replay %s%s", replay.state() == Replay::Playing ? "playing" : replay.state() == Replay::Paused ? "paused" : "failed",
+       replay.looping() ? " (loop)" : "");
+  redraw = true;
+  notifyReplay();
+}
+
+void setReplayLoop(bool on) {
+  replay.setLoop(on, millis());
+  LOGI("companion", "replay loop %s", on ? "on" : "off");
+  redraw = true;
+  notifyReplay();
+}
+
+// Every pass: the text follows the voice (a redraw a second at most), the end loops or stops.
+void pollReplay() {
+  if (replay.state() == Replay::Stopped) return;
+  if (!canReplay()) return stopReplay();  // talking, text only, another companion…
+  if (replay.state() != Replay::Playing) return;
+  shell::wake();  // no auto-lock while it plays
+  if (replay.tooLong(millis())) {
+    LOGI("companion", "replay loop stopped: 30 minutes untouched");
+    return stopReplay();
+  }
+  if (!player.isPlaying()) {
+    if (replay.ended(millis()) == Replay::Again) {
+      playLast();
+    } else {
+      info.said = lastLine.text().c_str();
+      redraw = true;
+      notifyReplay();
+      return;
+    }
+  }
+  const std::string t = lastLine.textAt(player.positionMs());
+  if (t != replayShown && millis() - lastTextAt > 1000) {
+    replayShown = t;
+    info.said = t.c_str();
+    lastTextAt = millis();
+    redraw = true;
+  }
 }
 
 bool idleScreen() {
@@ -847,32 +940,27 @@ bool idleScreen() {
 }
 
 void drawApp() {
-  if (toneScreen) {
-    drawToneScreen();
-  } else if (settingsOpen) {
+  if (settingsOpen) {
     screens::drawSettings(settingsView());
   } else if (historyOpen) {
     std::vector<std::pair<String, String>> exchanges;
     loadHistory(exchanges);
     screens::drawHistory(exchanges, historyScroll);
   } else {
+    info.replayable = canReplay();
+    info.replaying = replay.state() == Replay::Playing;
+    info.replayPaused = replay.state() == Replay::Paused;
+    info.replayLoop = replay.looping();
+    info.replayProgress = replay.state() == Replay::Stopped ? 0 : lastLine.progress(player.positionMs());
     screens::draw(info);
-    if (idleScreen() && demoAvailable()) {  // the acting demo's corner button
-      epd.drawRoundRect(4, 176, 34, 20, 4, EpdDisplay::kBlack);
-      epd.setFont(nullptr);
-      epd.setTextColor(EpdDisplay::kBlack);
-      epd.setCursor(12, 183);
-      epd.print("A/B");
-    }
   }
 }
 
 void onTap(uint16_t x, uint16_t y) {
-  if (toneScreen) return onToneTap(x, y);
-  if (!settingsOpen && !historyOpen && idleScreen() && x < 44 && y > 166 && demoAvailable()) {
-    toneScreen = true;
-    redraw = true;
-    return;
+  if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
+    const ReplayHit hit = screens::replayHit(x, y);
+    if (hit == ReplayHit::PlayPause) return toggleReplay();
+    if (hit == ReplayHit::Loop) return setReplayLoop(!replay.looping());
   }
   if (settingsOpen) return onSettingsTap(x, y);
   if (historyOpen) {
@@ -881,6 +969,7 @@ void onTap(uint16_t x, uint16_t y) {
     return;
   }
   if (y < 40 && x < 50) {  // settings
+    stopReplay();  // its voice samples use the speaker
     settingsOpen = true;
     redraw = true;
   } else if (y < 40 && x > 150) {
@@ -984,6 +1073,33 @@ bool writePhoto(const std::string &id, const std::string &big, const std::string
     ok = SD_MMC.rename(path + ".part", path);
   }
   return ok;
+}
+
+// The last line and the replay, for the app: {last?: {text, seconds, t, mood}, replay: {state, loop}}.
+void replyReplay(JsonObject reply) {
+  if (hasLast) {
+    JsonObject last = reply["last"].to<JsonObject>();
+    last["text"] = lastLine.text();
+    last["seconds"] = lastLine.ms / 1000.0f;
+    last["t"] = lastLine.t;
+    last["mood"] = lastLine.mood;
+  }
+  JsonObject r = reply["replay"].to<JsonObject>();
+  r["state"] = replay.state() == Replay::Playing ? "playing" : replay.state() == Replay::Paused ? "paused" : "stopped";
+  r["loop"] = replay.looping();
+  r["available"] = canReplay();
+}
+
+// Play / pause / loop changed (Dotty or the app): a small event of its own, so the app doesn't
+// reload every companion for it.
+void notifyReplay() {
+  JsonDocument event;
+  event["event"] = "companion.replay";
+  JsonObject r = event["replay"].to<JsonObject>();
+  r["state"] = replay.state() == Replay::Playing ? "playing" : replay.state() == Replay::Paused ? "paused" : "stopped";
+  r["loop"] = replay.looping();
+  r["available"] = canReplay();
+  ble::notify(event);
 }
 
 void registerCompanionCommands() {
@@ -1248,6 +1364,25 @@ void registerCommands() {
     today["tokens"] = usage::tokensToday();
     if (const int64_t out = usage::outUntilUtc()) reply["outUntil"] = out;
     reply["memories"] = static_cast<int>(memories::store().all().size());
+    replyReplay(reply);
+  });
+  // {action?: play | pause | toggle | stop, loop?}: the active companion's last line on Dotty.
+  ble::on("companion.replay", [](JsonObjectConst args, JsonObject reply) {
+    if (args["loop"].is<bool>()) setReplayLoop(args["loop"].as<bool>());
+    const std::string action = args["action"] | "";
+    const Replay::State now = replay.state();
+    if (!action.empty() && !canReplay()) {
+      reply["ok"] = false;
+      reply["error"] = !hasLast ? "nothing yet" : settings.textOnly ? "text only" : "busy";
+    } else if (action == "toggle" || (action == "play" && now != Replay::Playing) || (action == "pause" && now == Replay::Playing)) {
+      toggleReplay();
+    } else if (action == "stop") {
+      stopReplay();
+    } else if (!action.empty() && action != "play" && action != "pause") {
+      reply["ok"] = false;
+      reply["error"] = "bad action";
+    }
+    replyReplay(reply);
   });
   // Memories (the app's Memories screen). Every change saves and tells the app.
   auto unavailable = [](JsonObject reply) {
@@ -1433,13 +1568,29 @@ void registerCommands() {
   });
 }
 
-// Locked: the avatar asleep under the clock, with today's chats beside it once there are some.
+// Today's talks with the active companion (from its history: turns within the idle close are one
+// talk). Read once per day / companion / new turn, not at every minute's redraw.
+int talksToday() {
+  static String day;
+  static std::string who;
+  static int count = 0;
+  const String today = dayFile(time(nullptr)).c_str();
+  if (today != day || who != companions::active().id || historyTurns != countedTurns) {
+    day = today;
+    who = companions::active().id;
+    countedTurns = historyTurns;
+    count = conversations(history::day(today.substring(0, 10)).c_str(), kIdleMs / 1000);
+  }
+  return count;
+}
+
+// Locked: the avatar asleep under the clock, with today's talks with it beside it once there are some.
 int16_t drawLockAvatar(Adafruit_GFX &gfx, const tm &, int16_t maxHeight) {
   if (maxHeight < avatar::kSmall) return 0;
-  const int turns = usage::turnsToday();
   const Profile &who = companions::active();
+  const int talks = who.awake() ? talksToday() : 0;
   String line = who.awake() ? screenName(who) : String("Not awake yet");
-  if (who.awake() && turns) line += String(" - ") + turns + (turns == 1 ? " chat" : " chats");
+  if (talks) line += String(" - ") + talks + (talks == 1 ? " chat" : " chats");
   gfx.setFont(&FreeSans9pt7b);
   int16_t bx, by;
   uint16_t tw = 0, th = 0;
@@ -1473,6 +1624,9 @@ void setup() {
   voice::begin(player);
   loadSettings();
   applyCompanion();
+  loadLast();
+  for (const char *old : {"00", "01", "02", "10", "11", "12"})  // the acting demo's recordings (gone in 0.3.0)
+    SD_MMC.remove(storage::myDataDir() + "/act_" + old + ".wav");
   registerCommands();
   setState(Talk::Offline, idleStatus());
   shell::showApp();
@@ -1495,11 +1649,13 @@ void loop() {
     if (!shell::locked()) ble::start();
   }
   if (!unlocked) {
+    stopReplay();
     if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
     return;
   }
   if (!connecting) live.poll();  // the connect task owns the socket until it ends
   voice::poll();
+  pollReplay();
 
   // The background connect finished (the screen may already be listening).
   if (awaitingConnect && !connecting && !live.connected()) {
@@ -1585,7 +1741,7 @@ void loop() {
   }
   if (info.state == Talk::Speaking && !voice::playing() && !live.inTurn()) {
     LOGI("companion", "spoken; longest loop pause %lu ms", static_cast<unsigned long>(longestPause));
-    if (toneTest) saveTone();
+    saveLast();
     longestPause = 0;
     releaseText(true);
     setState(Talk::After);
@@ -1641,8 +1797,13 @@ void loop() {
   if (input.key == 'r') simulatedHold = !simulatedHold;
   if (input.key == 't') onTap(10, 10);
   if (input.key == 'X') live.close();
-  // dev: a typed question (U), and ending the chat now (E: the review runs, which may evolve it).
-  if (input.key == 'U' && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
+  if (input.key == 'A') toggleReplay();  // dev: the replay's play / pause (4 taps the loop button)
+  // dev: a typed question (U; G asks for a whole minute of surf talk), and ending the chat now (E:
+  // the review runs, which may evolve it).
+  const bool longAsk = input.key == 'G';
+  if ((input.key == 'U' || longAsk) && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
+    stopReplay();
+    beginLast();
     said.clear();  // a turn like startTalking's, without opening a voice activity
     info.said = "";
     turnMood = info.mood = "neutral";
@@ -1650,7 +1811,9 @@ void loop() {
     turnMemory.clear();
     textQueue.clear();
     replyFrames = 0;
-    heard = "You know what, after all our talks about the sea you've become a real ocean lover yourself. You get "
+    heard = longAsk ? "Talk to me about surfing for one whole minute, about 150 words: your favourite waves, a "
+                      "wipeout story, tips for a beginner. Don't stop early, I'm listening."
+                    : "You know what, after all our talks about the sea you've become a real ocean lover yourself. You get "
             "excited about waves now, and you keep slipping surf slang into everything. I love that about you!";
     info.heard = heard.c_str();
     live.sendText(heard);
@@ -1725,17 +1888,6 @@ void loop() {
     companions::save(p);
     if (live.connected()) disconnect("asleep again");
     setState(Talk::Offline, idleStatus());
-  }
-  if (input.key == 'Y') {
-    toneScreen = !toneScreen;
-    redraw = true;
-  }
-  if (input.key == 'V') {  // the acting test: first press = acting, the next = plain
-    toneVariant = toneTest ? 1 - toneVariant : 0;
-    toneTest = true;
-    toneIndex = 0;
-    LOGI("companion", "acting test: variant %d", toneVariant);
-    if (live.connected()) disconnect("acting test");
   }
   if (input.key == 'J' && live.connected()) live.sendRaw("not json");  // dev: the server closes the session
   if (input.key == 'N') {  // dev: show the memory note

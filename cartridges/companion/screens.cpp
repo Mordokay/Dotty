@@ -37,6 +37,29 @@ void drawHistoryIcon() {
   epd.drawLine(cx, cy, cx + 4, cy + 3, kBlack);
 }
 
+// The replay buttons in a column under the gear, left of the avatar (the bottom third stays for the
+// text and the meter): ▶ / ‖, then loop (dark when on).
+constexpr int16_t kReplaySize = 30, kReplayX = 3, kPlayY = 40, kLoopY = 76;
+
+void drawReplayButtons(bool playing, bool loop) {
+  epd.drawRoundRect(kReplayX, kPlayY, kReplaySize, kReplaySize, 6, kBlack);
+  const int16_t cx = kReplayX + kReplaySize / 2, cy = kPlayY + kReplaySize / 2;
+  if (playing) {  // pause
+    epd.fillRect(cx - 6, cy - 7, 4, 14, kBlack);
+    epd.fillRect(cx + 2, cy - 7, 4, 14, kBlack);
+  } else {  // play
+    epd.fillTriangle(cx - 4, cy - 8, cx - 4, cy + 8, cx + 7, cy, kBlack);
+  }
+  const uint16_t ink = loop ? kWhite : kBlack;
+  if (loop) epd.fillRoundRect(kReplayX, kLoopY, kReplaySize, kReplaySize, 6, kBlack);
+  else epd.drawRoundRect(kReplayX, kLoopY, kReplaySize, kReplaySize, 6, kBlack);
+  const int16_t lx = kReplayX + kReplaySize / 2, ly = kLoopY + kReplaySize / 2;
+  // A ring with a gap at the top right and an arrowhead: "again".
+  for (int r = 7; r <= 9; r++) epd.drawCircle(lx, ly, r, ink);
+  epd.fillRect(lx + 1, ly - 10, 10, 8, loop ? kBlack : kWhite);
+  epd.fillTriangle(lx + 1, ly - 13, lx + 1, ly - 3, lx + 7, ly - 8, ink);
+}
+
 // A memory change: a bookmark and the word, under the avatar (beside it in text-only mode).
 void drawNote(const String &note, bool small) {
   epd.setFont(nullptr);  // the small built-in font: 6 px a character
@@ -146,7 +169,18 @@ int replyPages(const ScreenInfo &info) {
   return pageCount(wrap(info.said, small ? kW - 70 : kW - 16, 40).size(), small ? 8 : 2);
 }
 
-void draw(const ScreenInfo &info) {
+ReplayHit replayHit(uint16_t x, uint16_t y) {
+  if (x > kReplayX + kReplaySize + 4 || y < kPlayY) return ReplayHit::None;  // above: the gear
+  if (y < (kPlayY + kReplaySize + kLoopY) / 2) return ReplayHit::PlayPause;
+  if (y < kLoopY + kReplaySize + 8) return ReplayHit::Loop;
+  return ReplayHit::None;
+}
+
+void draw(const ScreenInfo &shownInfo) {
+  // A replay looks like the reply did: talking while it plays, its text paused.
+  ScreenInfo info = shownInfo;
+  if (info.replaying) info.state = Talk::Speaking;
+  else if (info.replayPaused) info.state = Talk::After;
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   const bool small = info.textOnly && (info.state == Talk::Speaking || info.state == Talk::After);
@@ -157,6 +191,13 @@ void draw(const ScreenInfo &info) {
   drawGear();
   if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   drawHistoryIcon();
+  if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);
+  if ((shownInfo.replaying || shownInfo.replayPaused) && !small) {  // how far the replay is, like a song's bar
+    constexpr int16_t x = 8, y = 135, w = kW - 16, h = 6;
+    epd.drawRoundRect(x, y, w, h, 3, kBlack);
+    const int16_t filled = static_cast<int32_t>(w - 4) * info.replayProgress / 1000;
+    if (filled > 0) epd.fillRect(x + 2, y + 2, filled, h - 4, kBlack);
+  }
 
   epd.setFont(&FreeSans9pt7b);
   // Below the 128 px avatar: two lines of text (baselines 158 and 177), the meter between them.

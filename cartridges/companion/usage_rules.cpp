@@ -1,5 +1,7 @@
 #include "usage_rules.h"
 
+#include <cstdlib>
+
 #include <stdio.h>
 
 namespace {
@@ -104,4 +106,17 @@ std::string trimKey(const std::string &raw) {
   const size_t start = raw.find_first_not_of(space);
   if (start == std::string::npos) return "";
   return raw.substr(start, raw.find_last_not_of(space) - start + 1);
+}
+
+int conversations(const std::string &dayLog, int gapSeconds) {
+  int count = 0;
+  int64_t last = 0;
+  bool any = false;
+  for (size_t at = dayLog.find("{\"t\":"); at != std::string::npos; at = dayLog.find("{\"t\":", at + 1)) {
+    const int64_t t = strtoll(dayLog.c_str() + at + 5, nullptr, 10);
+    if (!any || t - last >= gapSeconds) count++;
+    any = true;
+    last = t;
+  }
+  return count;
 }

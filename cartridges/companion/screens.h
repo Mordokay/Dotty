@@ -18,6 +18,9 @@ struct ScreenInfo {
   int frame = 0;         // the animation clock (blink, bob, talking mouth)
   String note;           // "Remembered"… under the avatar for a few seconds ("" = none)
   int page = -1;         // a long reply's page after it ends (-1 = the last one)
+  // The last line's replay: buttons under the gear (▶/‖, then loop) when there is one.
+  bool replayable = false, replaying = false, replayPaused = false, replayLoop = false;
+  int replayProgress = 0;  // 0..1000 while a replay plays or is paused (the bar under the avatar)
 };
 
 struct SettingsView {
@@ -28,6 +31,7 @@ struct SettingsView {
   int companions = 1;
   int choices = 2;  // favourite voices to step through (no arrows for one)
 };
+enum class ReplayHit { None, PlayPause, Loop };
 enum class SettingsHit { None, Back, CompanionPrev, CompanionNext, VolumeDown, VolumeUp, Speak, VoicePrev, VoiceNext };
 
 namespace screens {
@@ -39,6 +43,7 @@ void drawHistory(const std::vector<std::pair<String, String>> &exchanges, int sc
 // Settings (top-left gear): the companion, volume, out loud / text only, the voice.
 void drawSettings(const SettingsView &v);
 SettingsHit settingsHit(uint16_t x, uint16_t y);
+ReplayHit replayHit(uint16_t x, uint16_t y);
 // Pages a reply takes (for swiping through it).
 int replyPages(const ScreenInfo &info);
 

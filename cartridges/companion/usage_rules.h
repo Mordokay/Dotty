@@ -17,5 +17,7 @@ std::string historyLine(int64_t localEpoch, const std::string &you, const std::s
                         const std::string &memory = "");
 // The day's history file name for a local time: "2026-10-22.jsonl".
 std::string dayFile(int64_t localEpoch);
+// Talks in a day's history (its .jsonl text): turns less than `gapSeconds` apart are one talk.
+int conversations(const std::string &dayLog, int gapSeconds);
 // An API key as pasted: surrounding spaces, tabs and newlines removed.
 std::string trimKey(const std::string &raw);

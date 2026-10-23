@@ -211,6 +211,7 @@ struct CompanionPage: View {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 header
                 if let error { NoticeCard(kind: .error, text: error) }
+                if isActive && summary.awake { LastLineCard(name: displayName) }
                 avatarCard.needsDotty(link)
                 voiceCard.needsDotty(link)
                 characterCard.needsDotty(link)

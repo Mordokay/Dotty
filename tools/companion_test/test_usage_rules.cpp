@@ -39,5 +39,13 @@ int main() {
   CHECK_EQ("key: spaces and a newline trimmed", trimKey("  AIza123 \n"), std::string("AIza123"));
   CHECK_EQ("key: only whitespace is no key", trimKey("\n"), std::string(""));
   CHECK_EQ("key: inner text kept", trimKey("\tAQ.Xy7Zq2W\r\n"), std::string("AQ.Xy7Zq2W"));
+  // Conversations in a day's history: turns closer than the idle close (3 min) are one talk.
+  const std::string dayLog = historyLine(1000, "a", "b", "happy", 900, 10) + "\n" +
+                             historyLine(1060, "c", "d", "happy", 900, 10) + "\n" +
+                             historyLine(1300, "e", "f", "happy", 900, 10) + "\n" + "\n" +
+                             historyLine(5000, "g", "h", "happy", 900, 10) + "\n";
+  CHECK_EQ("conversations: gaps over 3 minutes split them", conversations(dayLog, 180), 3);
+  CHECK_EQ("conversations: none", conversations("", 180), 0);
+  CHECK_EQ("conversations: one turn", conversations(historyLine(7, "a", "b", "", 1, 1), 180), 1);
   return failures ? 1 : 0;
 }

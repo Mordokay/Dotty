@@ -877,8 +877,8 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `set_name {name}` saves the name it's given; until then "Not awake yet. Hold BOOT". Every persona
   ends with **acting notes** (commit to each line's emotion: whispers, laughs, sighs…; the user's
   A/B: a little spark, +~200 tokens a turn, kept) and set_mood has 16 moods on the 12 faces.
-  Affective dialog is not supported on gemini-3.8-live (1007 both ways). The acting demo (6
-  recordings, `data/act_*.wav`) opens from an A/B button bottom-left on the idle screen.
+  Affective dialog is not supported on gemini-3.8-live (1007 both ways). (The acting demo's A/B
+  screen and its `data/act_*.wav` were removed for the replay; boot deletes leftover files.)
   Switching companion (settings row, app pager, `companion.select`) closes the session; memory and
   name calls only land on the session's companion. Layout: avatar 128 px, text 2 lines, settings 4
   rows (Companion, Volume, Speak, Voice); a photo avatar shows a mood badge. **Keys**: up to 3, one
@@ -890,8 +890,24 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   keys, Speak, volume, today), `AvatarPhotoEditor` (circle crop, dithered 128/48), the **Gemini
   co-designer** (`GeminiText`, `gemini-flash-lite-latest`: ~2-9 s, where 3.8 Flash took 20-60 s
   thinking) with ✨ Suggest per field. Dev keys S (next companion), W (forget its name), P (test
-  photo / back), Z ("Zoë 🌙" / Luna), V and Y (acting demo), I (every profile into the log), U (a
-  typed turn: "you've become an ocean lover…"), E (end the chat now: the review runs).
+  photo / back), Z ("Zoë 🌙" / Luna), I (every profile into the log), U (a typed turn: "you've
+  become an ocean lover…"), G (a typed "a whole minute of surf talk"), E (end the chat now: the
+  review runs), A (replay play / pause; serial `4` taps the loop button).
+- **Replay** (user, 2026-10-23): each reply's audio is copied as it arrives (PSRAM, ≤ 60 s, freed
+  after) and, once heard, saved as the companion's `last.wav` (24 kHz) + `last.json` (`last_line.*`,
+  host-tested: text pieces timed in ms to the audio, so a replay pages the text like the first time;
+  WAV header; `Replay` play / pause / loop, a loop stops after 30 min untouched). Buttons in a
+  column under the gear (▶/‖, loop dark when on; the bottom third stays for text and meter), a
+  progress bar between the avatar and the text while it plays; BOOT, settings, lock or a switch
+  stop it. BLE `companion.replay {action?: play|pause|toggle|stop, loop?}` → {last?: {text,
+  seconds, t, mood}, replay: {state, loop, available}} (also in `companion.status`), event
+  `companion.replay`. App: `LastLineCard` on the active companion's page (play/pause, loop).
+  Saving a 30 s line takes ~1 s after it has played. **Long replies**: asked for "one whole
+  minute" (also "about 150 words", and with an instruction rule to honour lengths) Gemini Live
+  gave 25-30 s every time — a single spoken reply stays around half a minute.
+- The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
+  turns within the 3-minute idle close are one talk); it was the day's exchanges across every
+  companion (79 on a test-heavy day).
 - **Evolution** (user, 2026-10-23: companions aren't set in stone; before any release): `evolve
   {field, value, why}` (personality, traits, quirks, speaking, backstory; the whole new field, a line
   per item/sentence) lands **once per chat** — the model calls it mid-chat when told it changed (the
