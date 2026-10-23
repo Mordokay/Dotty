@@ -163,3 +163,24 @@ the pager's header.
   switching on Dotty and from the app pager; each companion keeps its own memories; a photo avatar
   with its mood badge; the 128 px layout on every screen (screenshots).
 - App: build; the user's pass over the pager, the + page with Gemini, a photo avatar.
+
+## Evolution (added 2026-10-23, before the first release)
+
+Companions are not set in stone (the user). Agreed:
+
+- **When:** only in the end-of-chat memory review: Gemini also asks itself whether this chat
+  really changed the companion (a new interest, a quirk picked up, a trait that softened, a new
+  line of backstory). A tool `evolve {field, value, why}` (NON_BLOCKING, applied only inside the
+  review's turn); `field` ∈ personality, traits, quirks, speaking, backstory; `value` = the whole
+  new field, one line per item/sentence. **Slowly:** at most one change per chat (Dotty ignores
+  more), and the prompt says most chats change nothing.
+- **Pins, per line:** every field is a list of lines (traits and quirks already are; personality,
+  way of speaking and backstory are split on line breaks — the app edits them line by line).
+  Each line can be pinned (a pin icon at its left in the app). Pinned lines never change by
+  themselves: Dotty puts back any pinned line an evolution dropped (the user can still edit them).
+  Pins are stored in the profile as `pins: {field: [line text…]}`.
+- **Log + undo:** each change is appended to the companion's `evolution.jsonl` on the card
+  (`{t, field, before, after, why}`); the app shows "How {name} has changed" (date, what changed,
+  before → after, why) with Undo, which puts `before` back (and logs the undo).
+- BLE: `companion.update {id, pins: {field: [lines]}}`, `companion.evolution {id}` (newest first,
+  ≤ 50), `companion.evolution.undo {id, t}`.

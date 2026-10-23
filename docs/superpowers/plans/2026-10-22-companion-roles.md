@@ -130,3 +130,16 @@
 - [ ] **Step 1:** `DOTTY_CARTRIDGE(..., "0.3.0")`; remove dev variants left from Task 1; CLAUDE.md (Companion: roles — fields, presets, onboarding, layout, photo, BLE, app); cartridge.json description ("…a few companions, each their own person, who remember you").
 - [ ] **Step 2:** The user's pass in the app (pager, + with Gemini, a photo avatar, switching). Host tests pass; firmware + app build.
 - [ ] **Step 3:** Commit, key check on outgoing commits, push, `.venv/bin/python tools/build_catalog.py --release` → companion 0.3.0.
+
+### Task 11: Evolution on Dotty (added 2026-10-23)
+
+**Files:** `companion_store.h/.cpp` (pins, `applyEvolution`, the log line), `live_protocol.*` (`evolve` tool), `turn_tracker.h` (unchanged rules: applied inside a question), `main.cpp` (the review prompt, one change per chat, the log, BLE), tests `test_companion_store.cpp`, `test_live_protocol.cpp`.
+
+- [ ] **Step 1: Failing tests:** pins round-trip in the profile JSON; `applyEvolution(p, "traits", "a\nb", why, now)` keeps every pinned trait (re-added at its place in the old order when dropped) and respects limits; a prose field's pinned lines survive; an unknown field → false; `evolutionLine(t, field, before, after, why)` is one JSON line; setup declares `evolve` (NON_BLOCKING, `field` enum of the five, `value`, `why` required) and parses it.
+- [ ] **Step 2: Implement** + the review prompt (the companion's sheet with pinned lines marked, "at most one change, only if this chat gave a real reason; most chats change nothing"), one `evolve` per review applied (later ones ignored), `evolution.jsonl`, `companion.evolution`, `companion.evolution.undo`, pins via `companion.update`. Device check: a chat that gives a reason ("I've started running every morning, and you said you'd like to try it too") → after the idle review, `evolve` logged, the field changed, a pinned line kept.
+
+### Task 12: Evolution in the app (added 2026-10-23)
+
+**Files:** `CompanionView.swift` (line-by-line field editor with pin icons; "How {name} has changed" with Undo).
+
+- [ ] **Step 1:** Every character field becomes a list of lines (TextField per line, + Add line, swipe to delete, a pin icon at the left of each line); pins saved with `companion.update {pins}`; the change log section with before → after, why, date, Undo. Build → BUILD SUCCEEDED; the user's pass in Task 10.
