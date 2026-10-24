@@ -46,7 +46,11 @@ int main() {
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
   CHECK_EQ("setup: the tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"
-                                                  "set_moment,cancel_moment,list_moments,start_timer,stop_timer,"));
+                                                  "set_moment,cancel_moment,list_moments,start_timer,stop_timer,"
+                                                  "start_recording,play_recording,delete_recording,"));
+  CHECK("setup declares start_recording, play_recording, delete_recording",
+        fns[15]["parameters"]["required"][0] == "title" && fns[16]["parameters"]["required"][0] == "query" &&
+            fns[17]["parameters"]["required"][0] == "query");
   CHECK("setup declares set_moment, cancel_moment, list_moments, start_timer, stop_timer",
         fns[10]["parameters"]["required"].size() == 3 && fns[10]["parameters"]["properties"]["kind"]["enum"][1] == "alarm" &&
             !fns[10]["parameters"]["properties"]["days"].isNull() && fns[11]["parameters"]["required"][0] == "id" &&
@@ -108,6 +112,9 @@ int main() {
                                        sm.calls[0].text == "gym" && sm.calls[0].style == "excited" && sm.calls[0].repeat == "days" &&
                                        sm.calls[0].days.size() == 2 && sm.calls[0].days[1] == "wed");
     const LiveEvent st = liveParse(R"({"toolCall":{"functionCalls":[{"name":"start_timer","args":{"seconds":600,"label":"pasta","tickEvery":60},"id":"t1"}]}})");
+    const LiveEvent sr = liveParse(R"({"toolCall":{"functionCalls":[{"name":"start_recording","args":{"title":"Bananas in space"},"id":"r1"},{"name":"play_recording","args":{"query":"the last one"},"id":"r2"}]}})");
+    CHECK("parse start_recording's title and play_recording's query",
+          sr.calls.size() == 2 && sr.calls[0].label == "Bananas in space" && sr.calls[1].text == "the last one");
     CHECK("parse start_timer: seconds 600, label pasta, tickEvery 60",
           st.calls.size() == 1 && st.calls[0].seconds == 600 && st.calls[0].label == "pasta" && st.calls[0].tickEvery == 60);
   }
@@ -171,6 +178,8 @@ int main() {
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
+  CHECK("instruction: recordings", noPlace.find("call start_recording") != std::string::npos &&
+                                        noPlace.find("only after they confirmed") != std::string::npos);
   CHECK("instruction: moments only when asked", noPlace.find("call set_moment") != std::string::npos &&
                                                     noPlace.find("only when the user asks") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);

@@ -19,6 +19,8 @@ int main() {
   CHECK("recall in a question: applied, not answered (Dotty answers with what it found)", o.apply.at(0) && !o.answer.at(0));
   o = t.message(false, Names{"list_moments", "set_moment"}, false, 0);
   CHECK("list_moments applied, not answered", o.apply.at(0) && !o.answer.at(0) && o.apply.at(1) && o.answer.at(1));
+  o = t.message(false, Names{"play_recording", "start_recording", "delete_recording"}, false, 0);
+  CHECK("play_recording applied, not answered", o.apply.at(0) && !o.answer.at(0) && o.answer.at(1) && !o.answer.at(2));
   o = t.message(false, Names{"set_name"}, false, 0);
   CHECK("set_name in a question: applied and answered", o.apply.at(0) && o.answer.at(0));
   o = t.message(false, Names{}, true, 800);  // its own turn, no speech yet

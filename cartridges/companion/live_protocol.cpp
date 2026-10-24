@@ -162,6 +162,13 @@ std::string liveSetup(const LiveConfig &config) {
   JsonObject timerStyle = param(timer, "style", "STRING", false);
   for (const char *st : {"spoken", "sung", "whispered", "excited", "calm"}) timerStyle["enum"].add(st);
   declare("stop_timer", "Stop the running timer");
+  // Voice notes (recording_store.h): recorded on Dotty, never sent here; their text comes later.
+  JsonObject rec = declare("start_recording", "Open Dotty's recorder for a voice note the user wants to record");
+  param(rec, "title", "STRING", true)["description"] = "a short title from what they said it's about";
+  JsonObject play = declare("play_recording", "Play one of the user's voice notes on Dotty");
+  param(play, "query", "STRING", true)["description"] = "a title word, a date or \"the last one\"";
+  JsonObject del = declare("delete_recording", "Delete one of the user's voice notes (only after they confirmed)");
+  param(del, "query", "STRING", true)["description"] = "a title word, a date or \"the last one\"";
   return serialize(doc);
 }
 
@@ -216,7 +223,7 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | (args["question"] | ""))));
+    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | (args["question"] | (args["query"] | "")))));
     c.field = args["field"] | "";
     c.why = args["why"] | "";
     c.seconds = args["seconds"] | 0;
@@ -227,7 +234,7 @@ LiveEvent liveParse(const std::string &message) {
     c.at = args["at"] | "";
     c.repeat = args["repeat"] | "";
     c.style = args["style"] | "";
-    c.label = args["label"] | "";
+    c.label = args["label"] | (args["title"] | "");
     c.tickEvery = args["tickEvery"] | 0;
     for (JsonVariant d : args["days"].as<JsonArray>())
       if (d.is<const char *>()) c.days.push_back(d.as<const char *>());
@@ -290,6 +297,9 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "24 hours), with what to say or do when it ends in what (and style) if they asked for something. Always call the tool, every time: never say a reminder, alarm or timer is set without calling it (a second "
       "timer while one runs comes back as an error to tell the user about). Then confirm it briefly in your own words. "
       "To cancel or change one, list_moments gives their numbers. "
+      "When the user wants to record something (a voice note, an idea, a story), call start_recording with a short "
+      "title and tell them to start whenever they're ready; the recording itself never comes to you, only its text "
+      "afterwards. To play one, call play_recording; to delete one, only after they confirmed, delete_recording. "
       "You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "

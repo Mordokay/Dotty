@@ -110,7 +110,7 @@ void GeminiLive::close() {
 
 static bool isMomentTool(const std::string &name) {
   return name == "set_moment" || name == "cancel_moment" || name == "list_moments" || name == "start_timer" ||
-         name == "stop_timer";
+         name == "stop_timer" || name == "start_recording" || name == "play_recording" || name == "delete_recording";
 }
 
 void GeminiLive::onMessage(const std::string &message) {
