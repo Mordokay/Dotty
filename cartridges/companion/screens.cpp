@@ -1,6 +1,7 @@
 #include "screens.h"
 #include "text_pages.h"
 
+#include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 
@@ -87,24 +88,40 @@ void drawReplayButtons(bool playing, bool loop) {
   epd.fillTriangle(lx + 1, ly - 13, lx + 1, ly - 3, lx + 7, ly - 8, ink);
 }
 
-// A memory change: a bookmark and the word, under the avatar (beside it in text-only mode).
-// pencil = a long answer being written (else the memory bookmark).
+// A note over the avatar's lower part (a memory saved, "Thinking back...", "Saving your reminder..."): a
+// bookmark (or a pencil, for a long answer being written) and the words in the 12 pt font, a white card
+// across the screen — 2.5x the first small one, which the user could barely read. Two lines when needed.
 void drawNote(const String &note, bool small, bool pencil = false) {
-  epd.setFont(nullptr);  // the small built-in font: 6 px a character
-  const int16_t w = 10 + 4 + 6 * note.length();
-  const int16_t x = small ? kW - 6 - w : (kW - w) / 2, y = small ? 82 : 116;
-  epd.fillRoundRect(x - 4, y - 2, w + 8, 16, 4, kWhite);  // a white strip over the avatar's edge
-  epd.drawRoundRect(x - 4, y - 2, w + 8, 16, 4, kBlack);
+  (void)small;  // the same card in text-only mode: legibility first
+  constexpr int16_t kIcon = 26, kPad = 8, kLine = 24;
+  epd.setFont(&FreeSans12pt7b);
+  const int16_t textW = kW - 2 * 4 - 2 * kPad - kIcon - 8;
+  const std::vector<String> lines = ui::wrapText(epd, ui::printable(note), textW, 2);
+  int16_t widest = 0;
+  for (const String &l : lines) {
+    int16_t bx, by;
+    uint16_t w, h;
+    epd.getTextBounds(l, 0, 0, &bx, &by, &w, &h);
+    widest = max<int16_t>(widest, w);
+  }
+  const int16_t boxW = kPad + kIcon + 8 + widest + kPad, boxH = 14 + kLine * lines.size();
+  const int16_t x = (kW - boxW) / 2, y = 132 - boxH;  // its bottom at the avatar's bottom
+  epd.fillRoundRect(x, y, boxW, boxH, 8, kWhite);
+  epd.drawRoundRect(x, y, boxW, boxH, 8, kBlack);
+  epd.drawRoundRect(x + 1, y + 1, boxW - 2, boxH - 2, 7, kBlack);
+  const int16_t ix = x + kPad, iy = y + (boxH - 30) / 2;
   if (pencil) {
-    for (int d = -1; d <= 1; d++) epd.drawLine(x + 2 + d, y + 9, x + 9 + d, y + 2, kBlack);  // the body
-    epd.fillTriangle(x, y + 12, x + 1, y + 8, x + 4, y + 11, kBlack);                      // the tip
-  } else {
-    epd.fillRect(x, y, 10, 12, kBlack);
-    epd.fillTriangle(x, y + 12, x + 9, y + 12, x + 5, y + 7, kWhite);
+    for (int d = -2; d <= 2; d++) epd.drawLine(ix + 5 + d, iy + 24, ix + 23 + d, iy + 6, kBlack);  // the body
+    epd.fillTriangle(ix, iy + 30, ix + 2, iy + 21, ix + 9, iy + 28, kBlack);                       // the tip
+  } else {  // a bookmark
+    epd.fillRect(ix + 2, iy, 22, 30, kBlack);
+    epd.fillTriangle(ix + 2, iy + 30, ix + 23, iy + 30, ix + 13, iy + 19, kWhite);
   }
   epd.setTextColor(kBlack);
-  epd.setCursor(x + 14, y + 3);
-  epd.print(note);
+  for (size_t i = 0; i < lines.size(); i++) {
+    epd.setCursor(ix + kIcon + 8, y + 7 + 17 + i * kLine);
+    epd.print(lines[i]);
+  }
 }
 
 void drawMeter(int levelDb, int16_t y) {
@@ -222,9 +239,6 @@ void draw(const ScreenInfo &shownInfo) {
   if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
   else avatar::draw(epd, (kW - kAvatarSize) / 2, 2, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
-  if (info.writing) drawNote("Writing...", small, true);
-  else if (info.recalling) drawNote("Thinking back...", small);
-  else if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
   if (info.momentIcon.length()) drawMomentIcon(info.momentIcon);
   else drawHistoryIcon();
   if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);
@@ -234,6 +248,10 @@ void draw(const ScreenInfo &shownInfo) {
     const int16_t filled = static_cast<int32_t>(w - 4) * info.replayProgress / 1000;
     if (filled > 0) epd.fillRect(x + 2, y + 2, filled, h - 4, kBlack);
   }
+  // The note last: over the avatar and the replay buttons.
+  if (info.writing) drawNote("Writing...", small, true);
+  else if (info.recalling) drawNote("Thinking back...", small);
+  else if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
 
   epd.setFont(&FreeSans9pt7b);
   // Below the 128 px avatar: two lines of text (baselines 158 and 177), the meter between them.

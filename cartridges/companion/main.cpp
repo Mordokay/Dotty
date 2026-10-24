@@ -3421,8 +3421,10 @@ void loop() {
     setState(Talk::Offline, idleStatus());
   }
   if (input.key == 'J' && live.connected()) live.sendRaw("not json");  // dev: the server closes the session
-  if (input.key == 'N') {  // dev: show the memory note
-    info.note = "Remembered";
+  if (input.key == 'N') {  // dev: show the note (each press the next: short, then two lines)
+    static int n = 0;
+    static const char *kNotes[] = {"Remembered", "Saving your reminder...", "Thinking back..."};
+    info.note = kNotes[n++ % 3];
     noteUntil = millis() + 3000;
     redraw = true;
   }
