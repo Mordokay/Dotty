@@ -21,6 +21,9 @@ on time, with the iPhone locked in your pocket.
   time** for the unexpected (the start, re-routes, arrival, your own questions).
 - **Destinations**: **saved places** (kept in the app, on an Apple Maps map with our own pins, a search
   field with suggestions as you type) and **any place by search** around you.
+- **What's nearby** (added 2026-10-25): ask about places around you ("is there an ATM nearby?", "the
+  nearest hospital") — Apple Maps' points of interest — and be taken to one. **Only when asked**: no
+  tour-guide remarks while walking (maybe later).
 
 ## The flow
 
@@ -102,6 +105,30 @@ App-wide, attached at launch like `RelayService` and `RecordingService`:
 | App → Dotty | `nav.progress` | `{step, toTurn, left, eta}` |
 | App → Dotty | `nav.arrived`, `nav.ended {why}` | |
 
+## What's nearby
+
+- **Asking**: "Is there an ATM nearby?", "Where's the nearest hospital?", "Any good coffee around here?" →
+  `find_nearby {what}`: a category or free text ("a sushi place").
+- **The iPhone**: a known category (ATM, hospital, pharmacy, café, restaurant, bakery, supermarket, petrol
+  station, EV charger, parking, park, museum, toilet, post office, bank, police, …) → Apple's points of
+  interest around you (`MKLocalPointsOfInterestRequest` with an `MKPointOfInterestFilter` of that
+  category); anything else → `MKLocalSearch` near you. Radius ~1 km on foot, 5 km driving; nothing found →
+  once more at double the radius. Up to **5 results, nearest first**: name, category, street, distance,
+  walking time (driving time when driving), a rough direction in words ("north of you"), phone number.
+- **Message**: event `nav.nearby {id, what, mode}` → `nav.places {id, ok, error?, places: [{n, name,
+  category, street, distance, minutes, direction, phone?}]}` (in pieces if long). The app keeps the last
+  results, so "take me to the second one" works: `navigate_to {place: "nearby 2"}`.
+- **The companion** answers in character from the result (a spoken tool result, like recall's): "There's
+  a Millennium ATM 150 metres away on Rua Augusta, two minutes on foot, my lord. Shall I take you?"
+- **On Dotty**: after the reply a **"Nearby: ATM"** list opens (the recordings list's look: 38 px rows,
+  name + "150 m · 2 min", 4 a page); a tap starts directions to that place; back closes it; it closes by
+  itself after 2 minutes untouched.
+- **During a trip**: "is there a pharmacy on the way?" searches around where you are now (MapKit can't
+  search along a route); picking one makes it the new destination (a re-route).
+- **Limits**: Apple gives apps **no opening hours**, so the companion never says a place is open. Nothing
+  calls an emergency number: asked for a hospital it gives the information, and with an urgent request it
+  says plainly to call the emergency services (112).
+
 ## Dotty's side
 
 ### Tools and instruction
@@ -110,6 +137,7 @@ App-wide, attached at launch like `RelayService` and `RecordingService`:
   comes back — the destination, distance and time to confirm, `choices` to ask, or the error — as a spoken
   tool result (like recall's).
 - `stop_navigation {}`: ends the trip, answered silently.
+- `find_nearby {what}`: see "What's nearby".
 - The instruction lists the saved places; a session opened during a trip also gets where you're going,
   the mode, the next step and the distance and time left. Within an open session, each question you ask
   on the way goes with a short "(Dotty, not the user:) navigation now: …" note of the current progress,
@@ -175,6 +203,7 @@ It replaces the companion's screen during a trip:
 | Writer fails, or the Gemini allowance runs out | missing clips are said live if possible, else two beeps at the trigger distance with the arrow |
 | No SD card | live lines only |
 | GPS jumping in narrow streets | re-routes at most every 20 s; a spoken re-route at most once a minute |
+| Nothing nearby (even at double the radius) | the companion says so; no list opens |
 
 **Privacy**: your location stays on the iPhone; only step instructions, street names and the
 destination's name go to Gemini (within the user's red line).
@@ -182,7 +211,7 @@ destination's name go to Gemini (within the user's red line).
 ## Out of scope
 
 Public transport; several stops in one trip; offline maps; lane guidance; speed limits and cameras; a map
-on Dotty (arrows only).
+on Dotty (arrows only); tour-guide remarks about places you pass; opening hours.
 
 ## Testing
 
@@ -190,7 +219,8 @@ on Dotty (arrows only).
   clip to record next (≥ 3 ahead), play / wait / drop decisions, the writer request and parsing its
   answer, the instruction's navigation section.
 - **iPhone, Swift checks** (like `tools/relay_swift_check`) with recorded GPS tracks: arrows from the
-  polyline, metres to the turn along the route, off-route and arrival detection, saved-place matching.
+  polyline, metres to the turn along the route, off-route and arrival detection, saved-place matching,
+  the nearby category mapping ("ATM", "cash machine" → .atm), directions in words, "the second one".
 - **At the desk**: a Dotty dev key plays a fake route without the phone (screen, clips); the app's
   Simulate walk runs the whole chain.
 - **Probe first**: "Always" location started from the background with the iPhone locked.
