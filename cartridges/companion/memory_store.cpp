@@ -181,11 +181,13 @@ std::string MemoryStore::save(ArduinoJson::Allocator *allocator) const {
   return out;
 }
 
-bool MemoryStore::load(const std::string &json) {
+bool MemoryStore::load(const std::string &json, ArduinoJson::Allocator *allocator) {
   memories_.clear();
   next_ = 1;
-  JsonDocument doc;
-  if (deserializeJson(doc, json) != DeserializationError::Ok || !doc["memories"].is<JsonArrayConst>()) return false;
+  JsonDocument doc(allocator ? allocator : ArduinoJson::detail::DefaultAllocator::instance());
+  const DeserializationError err = deserializeJson(doc, json);
+  outOfMemory_ = err == DeserializationError::NoMemory || doc.overflowed();
+  if (err != DeserializationError::Ok || outOfMemory_ || !doc["memories"].is<JsonArrayConst>()) return false;
   for (JsonObjectConst o : doc["memories"].as<JsonArrayConst>()) {
     Memory m;
     m.id = o["id"] | 0;

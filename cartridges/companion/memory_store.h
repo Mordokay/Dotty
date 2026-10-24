@@ -28,8 +28,10 @@ class MemoryStore {
   };
 
   // {"next": N, "memories": [{id, group, text, by, added, changed}]}. A broken file → false and
-  // an empty store.
-  bool load(const std::string &json);
+  // an empty store; so is running out of memory while reading, which outOfMemory() tells apart (the
+  // file is fine: keep it). `allocator`: where ArduinoJson reads it (tests).
+  bool load(const std::string &json, ArduinoJson::Allocator *allocator = nullptr);
+  bool outOfMemory() const { return outOfMemory_; }
   // "" when the document couldn't be built (out of memory): never a file with memories missing.
   // `allocator`: where ArduinoJson builds it (PSRAM on Dotty: a save happens mid-session).
   std::string save(ArduinoJson::Allocator *allocator = nullptr) const;
@@ -53,5 +55,6 @@ class MemoryStore {
 
  private:
   std::vector<Memory> memories_;
+  bool outOfMemory_ = false;
   int next_ = 1;
 };

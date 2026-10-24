@@ -47,7 +47,7 @@ int main() {
   }
   CHECK_EQ("setup: the tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"
                                                   "set_moment,cancel_moment,list_moments,start_timer,stop_timer,"
-                                                  "start_recording,play_recording,delete_recording,show_recordings,"));
+                                                  "start_recording,play_recording,delete_recording,show_recordings,new_conversation,"));
   CHECK("setup declares start_recording, play_recording, delete_recording",
         fns[15]["parameters"]["required"][0] == "title" && fns[16]["parameters"]["required"][0] == "query" &&
             fns[17]["parameters"]["required"][0] == "query");
@@ -178,6 +178,8 @@ int main() {
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
+  CHECK("instruction: a new conversation when asked", noPlace.find("call new_conversation") != std::string::npos &&
+                                                         noPlace.find("switch tape") != std::string::npos);
   CHECK("instruction: the recordings list", noPlace.find("call show_recordings") != std::string::npos);
   CHECK("instruction: recordings", noPlace.find("call start_recording") != std::string::npos &&
                                         noPlace.find("only after they confirmed") != std::string::npos);

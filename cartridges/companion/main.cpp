@@ -31,6 +31,7 @@
 #include "adpcm_recorder.h"
 #include "job_slot.h"
 #include "macro_store.h"
+#include "conversation.h"
 #include "recall.h"
 #include "relay_link.h"
 #include "relay_path.h"
@@ -66,7 +67,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.6.4");
+DOTTY_CARTRIDGE("companion", "Companion", "0.7.0");
 
 namespace {
 
@@ -158,7 +159,7 @@ std::string historyNewsCompanion;  // turns appended to history, and when talksT
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
 // moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
 MacroList macroList;  // the user's macros (data/macros.json), shared by every companion
-enum class Job { Write, Recall, Line, Plan };
+enum class Job { Write, Recall, Line, Plan, Fold };
 Job jobKind = Job::Write;
 std::string jobCallId;           // recall's function call, answered with what was found
 bool writing = false;            // a job asked, its follow-up not sent yet
@@ -181,6 +182,16 @@ bool evolvedThisChat = false;  // one change per chat (session): companions evol
 std::vector<std::string> evolveKept;  // the last evolve's pinned lines that stayed (it's told why)
 bool evolveRefused = false;           // the last evolve came after this chat's one change
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
+// The open conversation (conversation.h): read into the instruction at connect, folded at the review,
+// set aside by new_conversation.
+bool newConversationPending = false;  // new_conversation: the boundary goes after this exchange's history line
+bool restartAfterReply = false;       // ...and the chat closes once the reply has played (the next press is fresh)
+bool reviewDone = false;              // the review's turn has ended; a fold may still be running
+bool freshStart = false;              // a new conversation began: the next session doesn't resume Google's old one
+bool foldRunning = false;
+uint32_t foldStartedAt = 0;
+int64_t foldNewFrom = 0;
+std::string foldCompanion;
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
 int peakDb = -60;
@@ -267,6 +278,7 @@ uint32_t pendingTypedSince = 0;
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 void dropPending();
+void saveConversation(const std::string &id, const Conversation &c);
 void openListLater(const std::string &companion, const std::string &name);
 void listPlay(int i);
 bool jobsDue();
@@ -875,10 +887,9 @@ GeminiLive::Callbacks callbacks() {
     if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
       usage::addTokens(tokens, sessionKey);
       LOGI("companion", "memory review done (%d tokens)", tokens);
-      if (live.overRelay()) live.keepResume();  // the next press carries on this conversation
-      disconnect("idle");
-      reviewStart = 0;
-      setState(Talk::Offline, idleStatus());
+      // The next press carries on this conversation (unless a new one was asked for: it opens clean).
+      if (live.overRelay() && !restartAfterReply) live.keepResume();
+      reviewDone = true;  // the loop closes the chat (after a fold, if one runs)
       return;
     }
     if (writing) {  // the question's turn ("Give me a moment"): the reading follows (writerPoll)
@@ -902,6 +913,15 @@ GeminiLive::Callbacks callbacks() {
     for (const TextPiece &p : textQueue) full += p.text;
     const uint32_t ms = firstAudioAt ? firstAudioAt - releasedAt : millis() - releasedAt;
     history::append(heard, full, turnMood.c_str(), ms, tokens, turnMemory);
+    if (newConversationPending) {  // new_conversation: everything up to this exchange is set aside
+      newConversationPending = false;
+      Conversation fresh;
+      fresh.start = fresh.from = time(nullptr) + 1;
+      saveConversation(sessionCompanion, fresh);
+      restartAfterReply = true;
+      freshStart = true;
+      LOGI("conversation", "a new conversation starts");
+    }
     historyTurns++;  // the lock screen counts its talks again
     historyNews = true;
     historyNewsCompanion = sessionCompanion;
@@ -1043,8 +1063,88 @@ void connectLoop(void *) {
   vTaskDelete(nullptr);
 }
 
+// ---------- the open conversation (conversation.h) ----------
+
+String conversationPath(const std::string &id) {
+  return companions::folder(id) + "/conversation.json";
+}
+
+Conversation storedConversation(const std::string &id) {
+  Conversation c;
+  parseConversation(companions::readText(conversationPath(id)), c);
+  return c;
+}
+
+void saveConversation(const std::string &id, const Conversation &c) {
+  companions::writeText(conversationPath(id), conversationJson(c));
+}
+
+// The active companion's last three days of history as one text (a conversation runs until 6 hours of
+// silence; a longer one keeps its summary), indexed.
+std::string recentLog() {
+  std::string log;
+  const int64_t now = time(nullptr);
+  for (int d = 2; d >= 0; d--) log += history::raw(dayFile(now - d * 86400).substr(0, 10).c_str());
+  return log;
+}
+
+// The conversation as it stands now (the stored one, or a new one after 6 hours of silence).
+Conversation openConversation(const std::string &id, const std::vector<TurnRef> &turns) {
+  return current(storedConversation(id), runStart(turns, time(nullptr)));
+}
+
+// At the review: past 2,000 words word for word, the older half goes to the text model to be folded
+// into the summary (pollFold), while the review runs; the chat closes once both are done.
+void startFold() {
+  if (jobs.busy() || writing || planRunning || lineJob.busy() || relayFetch.active) return;
+  const std::string id = companions::active().id;
+  const std::string log = recentLog();
+  const std::vector<TurnRef> turns = indexTurns(log);
+  const Conversation c = openConversation(id, turns);
+  const Fold f = foldPlan(turns, c.from);
+  if (!f.due) return;
+  const Profile &who = companions::active();
+  writerBody = foldRequest(who.awake() ? who.name : "the companion", c.summary, log, turns, f);
+  jobKind = Job::Fold;
+  foldRunning = true;
+  foldStartedAt = millis();
+  foldNewFrom = f.newFrom;
+  foldCompanion = id;
+  LOGI("conversation", "folding %u exchanges into the summary (%u bytes)", static_cast<unsigned>(f.end - f.first),
+       static_cast<unsigned>(writerBody.size()));
+  launchJob();
+}
+
+void pollFold() {
+  if (!foldRunning) return;
+  Written w;
+  if (!jobs.take(w)) {
+    if (millis() - foldStartedAt > 70000) {  // the request never came back: try at the next review
+      jobs.cancel();
+      foldRunning = false;
+      LOGW("conversation", "fold: no answer");
+    }
+    return;
+  }
+  foldRunning = false;
+  if (w.tokens) usage::addTokens(w.tokens, sessionKey);
+  if (!w.ok || w.text.empty()) return LOGW("conversation", "fold failed: %s", w.error.c_str());
+  const std::string log = recentLog();
+  Conversation c = openConversation(foldCompanion, indexTurns(log));
+  c.summary = w.text;
+  while (!c.summary.empty() && (c.summary.back() == '\n' || c.summary.back() == ' ')) c.summary.pop_back();
+  c.from = foldNewFrom;
+  saveConversation(foldCompanion, c);
+  LOGI("conversation", "folded in %lu ms: summary %d words", static_cast<unsigned long>(millis() - foldStartedAt),
+       countWords(c.summary));
+}
+
 void connect() {
   if (connecting || live.connected()) return;
+  if (freshStart) {  // new_conversation: no resuming the old session
+    live.forgetResume();
+    freshStart = false;
+  }
   if (!live.resumeHandle().empty() && millis() - resumeKeptAt > kResumeKeepMs) live.forgetResume();  // too old
   if (settings.keys.empty()) return setState(Talk::Error, "Key missing. Add it in the app.");
   // One key per session, in turn; a goAway resume stays on the key that holds the conversation.
@@ -1085,6 +1185,16 @@ void connect() {
     if (!section.empty()) personaSection += "\n\n" + section;
   }
   if (!macroList.all().empty()) personaSection += "\n\n" + macrosSection(macroList);  // its phrases → run_macro
+  {  // the conversation so far: unlocking again carries it on (conversation.h)
+    const Profile &who = companions::active();
+    const std::string log = recentLog();
+    const std::vector<TurnRef> turns = indexTurns(log);
+    const Conversation c = openConversation(who.id, turns);
+    const std::string section = conversationSection(c, log, turns, who.awake() ? who.name : "You", time(nullptr));
+    if (!section.empty()) personaSection += "\n\n" + section;
+    LOGI("conversation", "since %s: %d-word summary, %u bytes in the instruction", dayFile(c.start).substr(0, 10).c_str(),
+         countWords(c.summary), static_cast<unsigned>(section.size()));
+  }
   sessionCompanion = companions::active().id;
   evolvedThisChat = false;
   connectError = "";
@@ -1408,6 +1518,14 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
          c.text.empty() ? "" : ", then: ", c.text.c_str());
     doc["endsAt"] = localTimeText(timer.endsAt);
     return {jsonText(doc), false};
+  }
+  if (c.name == "new_conversation") {  // after this exchange; the chat then closes and reopens clean
+    if (!ours) return toolError("unavailable");
+    newConversationPending = true;
+    info.note = "New chat";
+    noteUntil = millis() + 3000;
+    redraw = true;
+    return {"ok", false};
   }
   if (c.name == "evolve") {  // applied like a memory; pinned lines and a second change get an answer to talk about
     applyMemory(c);
@@ -3271,6 +3389,7 @@ void dropPending() {
   if (listOpen) closeList();
   reaction.waiting = false;
   pendingTypedText.clear();
+  restartAfterReply = false;  // the chat is closing anyway
 }
 
 void onLock() {
@@ -4663,6 +4782,7 @@ void loop() {
     setState(Talk::Error, "Connection lost");
   }
   writerPoll();
+  pollFold();
   pollLines();
   pollPhoneWake();
   pollList();
@@ -4707,15 +4827,23 @@ void loop() {
   // Idle: disconnect (Bluetooth back on), and let Dotty lock as usual.
   // Before closing, a silent review: Gemini goes over the chat and saves what it missed (it once
   // kept "likes popcorn" but not "my name is Peter"). Closed when it's done, or after 20 s.
+  // new_conversation: the chat closes (review first) once the reply has played; the next press opens clean.
   const uint32_t idleMs = live.overRelay() ? kRelayIdleMs : kIdleMs;
-  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs && !bgSession && !deckOpen &&
-      pendingTypedText.empty()) {
+  const bool restartNow = restartAfterReply && info.state == Talk::After && !voice::playing() && !live.inTurn() &&
+                          !writing && !reading;
+  if ((info.state == Talk::Ready || info.state == Talk::After) && (millis() - lastTurnAt > idleMs || restartNow) &&
+      !bgSession && !deckOpen && pendingTypedText.empty()) {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
+      reviewDone = false;
       LOGI("companion", "chat over: memory review");
       live.sendText(reviewPrompt(companions::active()));  // memories, then maybe one change to itself
-    } else if (!reviewStart || millis() - reviewStart > 20000) {
+      startFold();  // a long conversation's older half into its summary, meanwhile
+    } else if (!reviewStart || ((reviewDone || millis() - reviewStart > 20000) && !foldRunning) ||
+               millis() - reviewStart > 75000) {
       reviewStart = 0;
+      reviewDone = false;
+      restartAfterReply = false;
       disconnect("idle");
       setState(Talk::Offline, idleStatus());
     }
@@ -4749,6 +4877,10 @@ void loop() {
 
   // Developer aids.
   if (input.key == 'r') simulatedHold = !simulatedHold;
+  if (input.key == '#') {  // the next session starts without Google's resume (tests the conversation text)
+    live.forgetResume();
+    LOGI("conversation", "resume handle dropped");
+  }
   if (input.key == 't') onTap(10, 10);
   if (input.key == 'X') live.close();
   if (input.key == 'K') {  // dev: the saved last line's text, piece by piece with its time (read with `d`)
@@ -4897,6 +5029,10 @@ void loop() {
                       : input.key == 'b' ? "I want to record something about eating bananas in space."
                       : input.key == 'j' ? "Play my bananas recording."
                       : input.key == 'v' ? "What have I recorded lately?"
+                      : input.key == '(' ? "Let's play a little game. I'm thinking of a fruit that's yellow and curvy, and "
+                                           "I'm calling it my lucky charm for today. Don't guess, just say you're ready."
+                      : input.key == ')' ? "So, what was the fruit I said I'm thinking of?"
+                      : input.key == '~' ? "Let's switch tape and start a new conversation."
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     const std::string text = *typed ? typed

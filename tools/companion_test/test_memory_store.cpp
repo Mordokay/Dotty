@@ -132,5 +132,20 @@ int main() {
 
   CHECK("groups: valid ones", MemoryStore::validGroup("plans") && !MemoryStore::validGroup("Plans"));
   CHECK_EQ("groups: label", std::string(MemoryStore::label("likes")), std::string("Likes & dislikes"));
+  {  // Out of memory while reading is not a broken file (it was set aside as broken: the user's memories went
+     // missing during a tight Wi-Fi + Bluetooth + TLS moment).
+    struct NoRoom : ArduinoJson::Allocator {
+      void *allocate(size_t) override { return nullptr; }
+      void deallocate(void *) override {}
+      void *reallocate(void *, size_t) override { return nullptr; }
+    } noRoom;
+    MemoryStore m;
+    const std::string json = R"({"next":3,"memories":[{"id":1,"group":"you","text":"Likes tea","by":"dotty","added":1}]})";
+    const bool noRoomLoaded = m.load(json, &noRoom);
+    CHECK("load: out of memory says so (not broken)", !noRoomLoaded && m.outOfMemory());
+    const bool brokenLoaded = m.load("{x");
+    CHECK("load: broken is not out of memory", !brokenLoaded && !m.outOfMemory());
+    CHECK("load: fine", m.load(json) && !m.outOfMemory() && m.all().size() == 1);
+  }
   return failures ? 1 : 0;
 }

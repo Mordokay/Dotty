@@ -170,6 +170,8 @@ std::string liveSetup(const LiveConfig &config) {
   JsonObject del = declare("delete_recording", "Delete one of the user's voice notes (only after they confirmed)");
   param(del, "query", "STRING", true)["description"] = "a title word, a date or \"the last one\"";
   declare("show_recordings", "Show the list of the user's voice notes on Dotty's screen, where they can tap one to play it");
+  // The open conversation (conversation.h) carries on across unlocks until this or 6 hours of silence.
+  declare("new_conversation", "Set the conversation so far aside and start a fresh one, when the user asks for that");
   return serialize(doc);
 }
 
@@ -303,6 +305,9 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "afterwards. To play one, call play_recording; to delete one, only after they confirmed, delete_recording. "
       "When they want to see or browse their recordings (\"show me my recordings\", \"what have I recorded lately\"), "
       "call show_recordings and say a few words: the list opens on the screen after your reply. "
+      "When the user wants to start afresh (\"let's start a new conversation\", \"switch tape\", \"let's change topic\", "
+      "\"new chat\"), call new_conversation and mark the fresh start in a few words of your own; what was said stays in "
+      "your summaries. Don't call it just because the subject drifts by itself. "
       "You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "

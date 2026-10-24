@@ -112,7 +112,7 @@ void GeminiLive::close() {
 static bool isMomentTool(const std::string &name) {
   return name == "evolve" || name == "set_moment" || name == "cancel_moment" || name == "list_moments" || name == "start_timer" ||
          name == "stop_timer" || name == "start_recording" || name == "play_recording" || name == "delete_recording" ||
-         name == "show_recordings";
+         name == "show_recordings" || name == "new_conversation";
 }
 
 void GeminiLive::onMessage(const std::string &message) {

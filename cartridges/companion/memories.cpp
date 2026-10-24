@@ -22,6 +22,17 @@ struct PsramAllocator : ArduinoJson::Allocator {
 } psram;
 
 String folder_;  // the active companion's folder
+bool readable_ = true;  // false: memories.json couldn't be read (out of memory): never saved over
+
+std::string readAll(const String &path) {
+  File f = SD_MMC.open(path);
+  std::string json;
+  if (!f) return json;
+  json.reserve(f.size());
+  for (int n; (n = f.read(chunk, sizeof(chunk))) > 0;) json.append(reinterpret_cast<const char *>(chunk), n);
+  f.close();
+  return json;
+}
 
 String dir() {
   return folder_ + "/memory";
@@ -35,15 +46,22 @@ void begin(const String &companionFolder) {
   store_.load("{\"memories\":[]}");  // a fresh, empty store (next id 1) before reading this companion's
   available_ = storage::available();
   if (!available_) return LOGW("memories", "no card: chats go on without memories");
+  readable_ = true;
   storage::makeDirs(dir());
-  const String path = dir() + "/memories.json";
-  File f = SD_MMC.open(path);
-  if (!f) return LOGI("memories", "none yet");
-  std::string json;
-  json.reserve(f.size());
-  for (int n; (n = f.read(chunk, sizeof(chunk))) > 0;) json.append(reinterpret_cast<const char *>(chunk), n);
-  f.close();
-  if (!store_.load(json)) {
+  const String path = dir() + "/memories.json", bad = dir() + "/memories.bad.json";
+  // Set aside earlier but readable: back in place (before 0.7.0 a read that ran out of memory was taken
+  // for a broken file, and a companion's memories went missing).
+  if (!SD_MMC.exists(path) && SD_MMC.exists(bad)) {
+    if (store_.load(readAll(bad), &psram) && SD_MMC.rename(bad, path))
+      return LOGW("memories", "memories.bad.json reads fine: restored, %u remembered", static_cast<unsigned>(store_.all().size()));
+    store_.load("{\"memories\":[]}");
+  }
+  if (!SD_MMC.exists(path)) return LOGI("memories", "none yet");
+  if (!store_.load(readAll(path), &psram)) {
+    if (store_.outOfMemory()) {  // the file is fine: keep it, and never write an empty store over it
+      readable_ = false;
+      return LOGW("memories", "couldn't read memories.json (out of memory): kept, not saved over");
+    }
     LOGW("memories", "memories.json doesn't parse: kept as memories.bad.json, starting empty");
     SD_MMC.remove(dir() + "/memories.bad.json");
     SD_MMC.rename(path, dir() + "/memories.bad.json");
@@ -61,7 +79,7 @@ bool available() {
 }
 
 bool save() {
-  if (!available_) return false;
+  if (!available_ || !readable_) return false;
   const std::string json = store_.save(&psram);
   if (json.empty()) {  // out of memory: keep the file as it is rather than write one missing memories
     LOGW("memories", "couldn't build the file (out of memory): not saved");

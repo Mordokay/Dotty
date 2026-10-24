@@ -1181,6 +1181,28 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   a back arrow and opens by itself in the last minute. Relay log has a "Background speech test" (the probe).
   Dev keys: b (typed "record … bananas in space"), j (typed "play my bananas recording"), n (a 10 s test note), w
   (the newest note over serial, `#WAV`), `civil_time.h` replaces timegm (newlib has none).
+- **The open conversation** (0.7.0, the user's ask: unlocking forgot the chat; "like Claude Code"): `conversation.*`
+  (host-tested). A conversation runs until **6 hours of silence** (the user's pick) or `new_conversation` ("let's
+  start a new conversation", "switch tape", "let's change topic"; not for a subject drifting by itself). Every
+  session's instruction ends with "The conversation so far…": a summary of its older part + the latest exchanges
+  word for word (≤ 3,000 words), read from the last 3 days of the companion's history — **indexed** (time, offset,
+  words per line), never a string per exchange (internal RAM). At the end-of-chat review, past **2,000 words** the
+  older half is **folded** into the summary (≤ 200 words) by the text model (`Job::Fold`, through the phone or
+  Wi-Fi, alongside the review; the chat closes once both are done, ≤ 75 s). Card `companions/<id>/conversation.json`
+  {start, from, summary}; a stored one that began before the current run is stale. `new_conversation`: the boundary
+  goes after that exchange's history line, a "New chat" note, then the chat closes once the reply has played
+  (review first) and the next session doesn't resume Google's handle (`freshStart`); the old chat stays in the
+  review summaries. Measured: ~5.7 KB of conversation = +1,500 tokens a turn; after a reboot (no resume) "what was
+  the fruit?" → "You asked me not to guess, my king…"; after "let's switch tape" → 0 bytes carried. Google's 10-min
+  relay resume still applies when it's there. Dev keys `(` (the fruit game), `)` (ask for it), `~` (switch tape),
+  `#` (drop the resume handle).
+- **Memories and running out of RAM** (0.7.0): `CompanionScope` (the app's per-companion commands) reloads
+  memories; one read during a Wi-Fi + Bluetooth + TLS moment (13 KB internal free) ran out of memory and was taken
+  for a broken file — a companion's 11 memories were set aside as `memories.bad.json`. Now `MemoryStore::load`
+  tells `outOfMemory()` apart (the file stays, `save` refuses until it reads), reads go through the PSRAM
+  allocator, and a set-aside file that parses is restored at the next load (it was: "restored, 11 remembered").
+  The same press had failed to connect ("connect: no answer", the phone came back 2 s after Wi-Fi won the race):
+  the known thin Wi-Fi + Bluetooth path.
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
