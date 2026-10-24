@@ -77,6 +77,18 @@ int main() {
     CHECK("transcriptBlock has the date and title", has(b, "Fri 23 Oct") && has(b, "Bananas in space") && has(b, "plant a tree"));
   }
   {
+    RecordingMeta m = rec("Bananas in space", local(2026, 10, 24, 15, 30), "");
+    m.ms = 77000;
+    RecordingMeta longOne = m;
+    longOne.ms = 3725000;
+    RecordingMeta empty = m;
+    empty.title = "";
+    CHECK_EQ("row detail", recordingRowDetail(m), std::string("Sat 24 Oct - 1:17"));
+    CHECK_EQ("row detail: over an hour", recordingRowDetail(longOne), std::string("Sat 24 Oct - 1:02:05"));
+    CHECK_EQ("row title: untitled", recordingRowTitle(empty), std::string("Voice note"));
+    CHECK_EQ("row title", recordingRowTitle(m), std::string("Bananas in space"));
+  }
+  {
     const HeaderFix cut = headerFix(44 + 32000, 16000);
     const HeaderFix tiny = headerFix(30, 0);
     const HeaderFix odd = headerFix(44 + 32001, 0);

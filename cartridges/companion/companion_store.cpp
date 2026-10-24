@@ -160,7 +160,8 @@ std::string fieldText(const Profile &p, const std::string &field) {
   return "";
 }
 
-bool applyEvolution(Profile &p, const std::string &field, const std::string &value) {
+bool applyEvolution(Profile &p, const std::string &field, const std::string &value, std::vector<std::string> *keptPinned) {
+  if (keptPinned) keptPinned->clear();
   const bool list = field == "traits" || field == "quirks";
   const int limit = field == "personality" ? kPersonalityMax : field == "speaking" ? kSpeakingMax
                     : field == "backstory" ? kBackstoryMax : 0;
@@ -180,6 +181,7 @@ bool applyEvolution(Profile &p, const std::string &field, const std::string &val
   // Each pinned line it dropped goes back right after the old line before it that's still there.
   for (size_t i = 0; i < old.size(); i++) {
     if (!contains(pinned, old[i]) || contains(out, old[i])) continue;
+    if (keptPinned) keptPinned->push_back(old[i]);
     size_t at = 0;
     for (size_t j = i; j-- > 0;) {
       const auto it = std::find(out.begin(), out.end(), old[j]);

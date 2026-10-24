@@ -15,6 +15,15 @@ int main() {
   p.traits = {"stubborn", "curious"};
   p.backstory = "";
   const std::string awake = personaText(p);
+  {
+    Profile k = p;
+    k.quirks = {"calls you my king", "hums when thinking"};
+    k.pins["quirks"] = {"calls you my king"};
+    const std::string s = personaText(k);
+    CHECK("awake: pinned lines marked", has(s, "calls you my king (pinned); hums when thinking.") && !has(awake, "(pinned)"));
+    CHECK("awake: pinned lines can't change, said in character",
+          has(s, "locked") && has(s, "something holds you back") && !has(awake, "something holds you back"));
+  }
   CHECK("awake: the name first", awake.rfind("You are Luna,", 0) == 0);
   CHECK("awake: personality", has(awake, p.personality.c_str()));
   CHECK("awake: traits", has(awake, "Traits: stubborn, curious."));

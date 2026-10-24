@@ -174,6 +174,24 @@ std::string transcriptBlock(const RecordingMeta &m, const std::string &transcrip
   return std::string(when) + " - Recording '" + m.title + "': " + transcript;
 }
 
+std::string recordingRowTitle(const RecordingMeta &m) {
+  return m.title.empty() ? "Voice note" : m.title;
+}
+
+std::string recordingRowDetail(const RecordingMeta &m) {
+  static const char *kDays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char *kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  const tm t = parts(m.created);
+  const unsigned s = static_cast<unsigned>(m.ms / 1000);
+  char out[40];
+  if (s >= 3600)
+    std::snprintf(out, sizeof(out), "%s %d %s - %u:%02u:%02u", kDays[t.tm_wday], t.tm_mday, kMonths[t.tm_mon], s / 3600,
+                  s / 60 % 60, s % 60);
+  else
+    std::snprintf(out, sizeof(out), "%s %d %s - %u:%02u", kDays[t.tm_wday], t.tm_mday, kMonths[t.tm_mon], s / 60, s % 60);
+  return out;
+}
+
 HeaderFix headerFix(uint32_t fileBytes, uint32_t headerDataBytes) {
   HeaderFix f;
   if (fileBytes < 44) return f;

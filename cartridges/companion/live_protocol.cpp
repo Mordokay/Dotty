@@ -169,6 +169,7 @@ std::string liveSetup(const LiveConfig &config) {
   param(play, "query", "STRING", true)["description"] = "a title word, a date or \"the last one\"";
   JsonObject del = declare("delete_recording", "Delete one of the user's voice notes (only after they confirmed)");
   param(del, "query", "STRING", true)["description"] = "a title word, a date or \"the last one\"";
+  declare("show_recordings", "Show the list of the user's voice notes on Dotty's screen, where they can tap one to play it");
   return serialize(doc);
 }
 
@@ -300,6 +301,8 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "When the user wants to record something (a voice note, an idea, a story), call start_recording with a short "
       "title and tell them to start whenever they're ready; the recording itself never comes to you, only its text "
       "afterwards. To play one, call play_recording; to delete one, only after they confirmed, delete_recording. "
+      "When they want to see or browse their recordings (\"show me my recordings\", \"what have I recorded lately\"), "
+      "call show_recordings and say a few words: the list opens on the screen after your reply. "
       "You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "

@@ -49,6 +49,18 @@ struct DeckView {
   int levelDb = -60;
 };
 enum class DeckHit { None, Back, Undo, Done, Discard, Yes, No };
+// The recordings list (show_recordings): 4 rows a page, newest first; or the one playing.
+struct RecordingRow {
+  String title, detail;  // "Bananas in space", "Sat 24 Oct - 1:17"
+};
+struct RecordingsView {
+  std::vector<RecordingRow> rows;  // this page's
+  int page = 0, pages = 1;
+  bool playing = false;            // one is playing: its title, detail and summary instead of the rows
+  RecordingRow now;
+  String summary;
+};
+enum class RecordingsHit { None, Back, NextPage, Row };
 enum class SettingsHit { None, Back, CompanionPrev, CompanionNext, VolumeDown, VolumeUp, Speak, VoicePrev, VoiceNext };
 
 namespace screens {
@@ -64,6 +76,9 @@ ReplayHit replayHit(uint16_t x, uint16_t y);
 TimerHit timerHit(uint16_t x, uint16_t y);  // the cancel question's buttons
 void drawDeck(const DeckView &v);
 DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v);
+void drawRecordings(const RecordingsView &v);
+// Row: `row` = the row on this page (0..3).
+RecordingsHit recordingsHit(uint16_t x, uint16_t y, int rows, int &row);
 // Pages a reply takes (for swiping through it).
 int replyPages(const ScreenInfo &info);
 

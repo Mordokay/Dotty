@@ -10,14 +10,48 @@ std::string join(const std::vector<std::string> &items, const char *sep) {
   return out;
 }
 
+bool anyPins(const Profile &p) {
+  for (const auto &f : p.pins)
+    if (!f.second.empty()) return true;
+  return false;
+}
+
+// A field's lines, the pinned ones marked " (pinned)" (the user locked them in the app).
+std::vector<std::string> markedLines(const Profile &p, const char *field) {
+  std::vector<std::string> out;
+  const auto pins = p.pins.find(field);
+  const std::string text = fieldText(p, field);
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t nl = text.find('\n', start);
+    if (nl == std::string::npos) nl = text.size();
+    const std::string line = text.substr(start, nl - start);
+    const bool pinned = pins != p.pins.end() && std::find(pins->second.begin(), pins->second.end(), line) != pins->second.end();
+    if (!line.empty()) out.push_back(line + (pinned ? " (pinned)" : ""));
+    start = nl + 1;
+  }
+  return out;
+}
+
 // The character fields, each only when it says something.
 std::string character(const Profile &p) {
   std::string s;
-  if (!p.personality.empty()) s += " " + p.personality;
-  if (!p.traits.empty()) s += " Traits: " + join(p.traits, ", ") + ".";
-  if (!p.quirks.empty()) s += " Quirks: " + join(p.quirks, "; ") + ".";
-  if (!p.speaking.empty()) s += " How you speak: " + p.speaking;
-  if (!p.backstory.empty()) s += " Your story: " + p.backstory;
+  if (!anyPins(p)) {
+    if (!p.personality.empty()) s += " " + p.personality;
+    if (!p.traits.empty()) s += " Traits: " + join(p.traits, ", ") + ".";
+    if (!p.quirks.empty()) s += " Quirks: " + join(p.quirks, "; ") + ".";
+    if (!p.speaking.empty()) s += " How you speak: " + p.speaking;
+    if (!p.backstory.empty()) s += " Your story: " + p.backstory;
+    return s;
+  }
+  if (!p.personality.empty()) s += " " + join(markedLines(p, "personality"), " ");
+  if (!p.traits.empty()) s += " Traits: " + join(markedLines(p, "traits"), ", ") + ".";
+  if (!p.quirks.empty()) s += " Quirks: " + join(markedLines(p, "quirks"), "; ") + ".";
+  if (!p.speaking.empty()) s += " How you speak: " + join(markedLines(p, "speaking"), " ");
+  if (!p.backstory.empty()) s += " Your story: " + join(markedLines(p, "backstory"), " ");
+  s += " Parts marked (pinned) were locked by the user in the Dotty app: you can't change them, even when asked "
+       "(evolve keeps them as they are). If the user asks you to change one, play along in character: say you'd love "
+       "to, but something holds you back, in your own way, and that they can unlock it in the app.";
   return s;
 }
 

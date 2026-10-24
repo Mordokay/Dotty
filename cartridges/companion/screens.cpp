@@ -249,6 +249,55 @@ DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v) {
   return x < 67 ? DeckHit::Undo : x < 133 ? DeckHit::Done : DeckHit::Discard;
 }
 
+// The recordings list: like Dotty's other lists (38 px rows, 4 a page, the page in the nav's right corner).
+void drawRecordings(const RecordingsView &v) {
+  epd.fillScreen(kWhite);
+  epd.setTextColor(kBlack);
+  if (v.playing) {  // the one playing: title, when and how long, its summary; a tap stops it
+    nav::draw(epd, "Playing", nav::Icon::Back, nav::Icon::None);
+    epd.setFont(&FreeSansBold9pt7b);
+    int16_t y = nav::kHeight + 20;
+    for (const String &l : ui::wrapText(epd, ui::printable(v.now.title), kW - 16, 2)) {
+      ui::drawCentered(epd, l, y);
+      y += kLineH;
+    }
+    epd.setFont(&FreeSans9pt7b);
+    ui::drawCentered(epd, v.now.detail, y);
+    y += 6;
+    epd.drawFastHLine(8, y, kW - 16, kBlack);
+    y += kLineH;
+    const int lines = max(0, (kW - 26 - y) / kLineH + 1);
+    for (const String &l : ui::wrapText(epd, ui::printable(v.summary), kW - 16, lines)) {
+      epd.setCursor(8, y);
+      epd.print(l);
+      y += kLineH;
+    }
+    ui::drawCentered(epd, "Tap to stop", kW - 6);
+    return;
+  }
+  nav::draw(epd, "Recordings", nav::Icon::Back, nav::Icon::None, nav::pageLabel(v.page, v.pages));
+  for (size_t i = 0; i < v.rows.size() && i < 4; i++) {
+    const int16_t top = nav::kHeight + i * 38;
+    epd.setFont(&FreeSansBold9pt7b);
+    const std::vector<String> title = ui::wrapText(epd, ui::printable(v.rows[i].title), kW - 16, 1);
+    epd.setCursor(8, top + 15);
+    if (!title.empty()) epd.print(title[0]);
+    epd.setFont(&FreeSans9pt7b);
+    epd.setCursor(8, top + 31);
+    epd.print(v.rows[i].detail);
+    if (i + 1 < v.rows.size()) epd.drawFastHLine(8, top + 37, kW - 16, kBlack);
+  }
+}
+
+RecordingsHit recordingsHit(uint16_t x, uint16_t y, int rows, int &row) {
+  if (y < nav::kHeight) {
+    const int corner = nav::hit(x, y);
+    return corner < 0 ? RecordingsHit::Back : corner > 0 ? RecordingsHit::NextPage : RecordingsHit::None;
+  }
+  row = (y - nav::kHeight) / 38;
+  return row < rows ? RecordingsHit::Row : RecordingsHit::None;
+}
+
 TimerHit timerHit(uint16_t x, uint16_t y) {
   if (nav::hit(x, y) < 0) return TimerHit::Back;
   if (y < 148) return TimerHit::None;

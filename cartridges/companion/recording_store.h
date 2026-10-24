@@ -36,6 +36,10 @@ std::string recordingsSection(const std::vector<RecordingMeta> &newestFirst, int
 // For recall: "Fri 23 Oct 18:00 - Recording 'Bananas in space': <transcript>".
 std::string transcriptBlock(const RecordingMeta &m, const std::string &transcript);
 
+// The recordings list on Dotty: a row's title ("Voice note" when untitled) and "Sat 24 Oct - 1:17".
+std::string recordingRowTitle(const RecordingMeta &m);
+std::string recordingRowDetail(const RecordingMeta &m);
+
 struct HeaderFix {
   bool needed = false;
   uint32_t dataBytes = 0;  // the samples actually in the file (whole ones)

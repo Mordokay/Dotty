@@ -88,6 +88,19 @@ int main() {
   CHECK("evolve: pinned lines put back",
         ev.traits == (std::vector<std::string>{"affectionate", "supportive", "witty", "brave", "thoughtful", "horny"}));
   CHECK("evolve: the new one is there", std::find(ev.traits.begin(), ev.traits.end(), "brave") != ev.traits.end());
+  {
+    Profile k = presetProfile("partner");
+    k.quirks = {"Calls you my king", "Hums when thinking"};
+    k.pins["quirks"] = {"Calls you my king"};
+    std::vector<std::string> kept;
+    const bool ok = applyEvolution(k, "quirks", "Calls you Peter the Wise\nHums when thinking", &kept);
+    CHECK("evolve: the pinned lines it couldn't change are reported",
+          ok && kept == std::vector<std::string>{"Calls you my king"} &&
+              k.quirks == (std::vector<std::string>{"Calls you my king", "Calls you Peter the Wise", "Hums when thinking"}));
+    std::vector<std::string> none = {"stale"};
+    applyEvolution(k, "quirks", "Calls you my king\nHums when thinking\nLaughs at puns", &none);
+    CHECK("evolve: nothing pinned touched -> nothing reported", none.empty());
+  }
   Profile prose = presetProfile("friend");
   prose.backstory = "Grew up by the sea.\nWorked in a bakery.";
   prose.pins["backstory"] = {"Grew up by the sea."};

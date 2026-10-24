@@ -108,9 +108,11 @@ void GeminiLive::close() {
   turns_ = TurnTracker();
 }
 
+// Tools whose answer Dotty writes (cb_.tool): silent "ok" or a result the model talks about.
 static bool isMomentTool(const std::string &name) {
-  return name == "set_moment" || name == "cancel_moment" || name == "list_moments" || name == "start_timer" ||
-         name == "stop_timer" || name == "start_recording" || name == "play_recording" || name == "delete_recording";
+  return name == "evolve" || name == "set_moment" || name == "cancel_moment" || name == "list_moments" || name == "start_timer" ||
+         name == "stop_timer" || name == "start_recording" || name == "play_recording" || name == "delete_recording" ||
+         name == "show_recordings";
 }
 
 void GeminiLive::onMessage(const std::string &message) {

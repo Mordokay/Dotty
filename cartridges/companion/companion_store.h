@@ -39,8 +39,10 @@ bool setField(Profile &p, const std::string &field, const std::string &value);
 std::string fieldText(const Profile &p, const std::string &field);
 // The end-of-chat review's change: the whole new field, one line per item/sentence. Pinned lines
 // it dropped go back at their old place; over the limit, the last unpinned lines give way.
-// false = not one of personality, traits, quirks, speaking, backstory.
-bool applyEvolution(Profile &p, const std::string &field, const std::string &value);
+// false = not one of personality, traits, quirks, speaking, backstory. `keptPinned` (optional) gets the
+// pinned lines the new text dropped or changed (they stay: the model is told why).
+bool applyEvolution(Profile &p, const std::string &field, const std::string &value,
+                    std::vector<std::string> *keptPinned = nullptr);
 // Pins over BLE go as line numbers of the field as it is now (a pinned sentence can be longer than
 // a 512-byte command); the profile keeps their text. setPins replaces that field's pins.
 std::vector<int> pinnedLines(const Profile &p, const std::string &field);

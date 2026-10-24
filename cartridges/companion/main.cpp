@@ -66,7 +66,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.6.1");
+DOTTY_CARTRIDGE("companion", "Companion", "0.6.2");
 
 namespace {
 
@@ -178,6 +178,8 @@ bool keepBle = false;  // dev T: Bluetooth stays on during sessions (the soak te
 size_t lowFree = SIZE_MAX, lowLargest = SIZE_MAX;
 uint32_t lastHeapSample = 0;
 bool evolvedThisChat = false;  // one change per chat (session): companions evolve slowly
+std::vector<std::string> evolveKept;  // the last evolve's pinned lines that stayed (it's told why)
+bool evolveRefused = false;           // the last evolve came after this chat's one change
 uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = not reviewing)
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
@@ -237,6 +239,12 @@ bool deckPending = false;
 uint32_t deckPendingAt = 0;  // a deck that hasn't opened within 2 minutes (the reply never ended) is dropped
 std::string pendingPlayCompanion, pendingPlayName, pendingPlayTitle;
 bool notePlaying = false;
+// show_recordings: the list opens once the reply has ended; a row plays that recording.
+bool listPending = false, listOpen = false;
+uint32_t listPendingAt = 0, listTouchedAt = 0;
+std::string listCompanion;
+std::vector<RecordingMeta> listItems;  // newest first, read when it opens
+int listPage = 0, listPlaying = -1;    // the row playing (-1 = none)
 struct NoteReaction {
   bool waiting = false, gotText = false;
   std::string companion, name, title, transcript;
@@ -535,7 +543,9 @@ int applyMemory(const ToolCall &c) {
   } else if (c.name == "evolve") {  // once a chat: mid-chat when told it changed, or in the review
     Profile p = companions::active();
     const std::string before = fieldText(p, c.field);
-    if (!evolvedThisChat && applyEvolution(p, c.field, c.text) && fieldText(p, c.field) != before &&
+    evolveKept.clear();
+    evolveRefused = evolvedThisChat;
+    if (!evolvedThisChat && applyEvolution(p, c.field, c.text, &evolveKept) && fieldText(p, c.field) != before &&
         companions::save(p)) {
       evolvedThisChat = true;
       companions::logEvolution(p.id, evolutionLine(time(nullptr), c.field, before, fieldText(p, c.field), c.why));
@@ -1394,8 +1404,30 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
     doc["endsAt"] = localTimeText(timer.endsAt);
     return {jsonText(doc), false};
   }
-  if (c.name == "start_recording" || c.name == "play_recording" || c.name == "delete_recording") {
+  if (c.name == "evolve") {  // applied like a memory; pinned lines and a second change get an answer to talk about
+    applyMemory(c);
+    if (reviewStart || !ours) return {"ok", false};  // the review is silent
+    if (evolveRefused) return toolError("you already changed once in this chat: it can wait for another chat");
+    if (evolveKept.empty()) return {"ok", false};
+    JsonDocument doc;
+    for (const std::string &line : evolveKept) doc["pinned"].add(line);
+    doc["note"] = "These lines are pinned by the user in the Dotty app, so they stayed as they are. Tell the user, in "
+                  "character, that you'd love to change it but something holds you back; they can unlock it in the app.";
+    return {jsonText(doc), true};
+  }
+  if (c.name == "start_recording" || c.name == "play_recording" || c.name == "delete_recording" ||
+      c.name == "show_recordings") {
     if (!ours || !storage::available()) return toolError("unavailable");
+    if (c.name == "show_recordings") {
+      const size_t count = note::list(sessionCompanion).size();
+      if (!count) return toolError("they have no recordings yet");
+      listPending = true;
+      listPendingAt = millis();
+      LOGI("note", "show_recordings: %u, the list opens after this reply", static_cast<unsigned>(count));
+      JsonDocument doc;
+      doc["recordings"] = count;
+      return {jsonText(doc), false};
+    }
     if (c.name == "start_recording") {
       const uint64_t freeMb = (SD_MMC.totalBytes() - SD_MMC.usedBytes()) / (1024 * 1024);
       if (freeMb < 50) return toolError("no room on the card");
@@ -2878,6 +2910,103 @@ void deckTap(uint16_t x, uint16_t y) {
   redraw = true;
 }
 
+// ---------- the recordings list (show_recordings) ----------
+constexpr uint32_t kListIdleMs = 120000;  // closes itself after 2 minutes untouched
+
+int listPages() {
+  return max(1, (static_cast<int>(listItems.size()) + 3) / 4);
+}
+
+void openList() {
+  listCompanion = sessionCompanion.empty() ? companions::active().id : sessionCompanion;
+  listItems = note::list(listCompanion);
+  if (listItems.empty()) return;
+  stopReplay();
+  listOpen = true;
+  listPage = 0;
+  listPlaying = -1;
+  listTouchedAt = millis();
+  redraw = true;
+  LOGI("note", "recordings list open: %u", static_cast<unsigned>(listItems.size()));
+}
+
+void closeList() {
+  if (listPlaying >= 0) player.stop();
+  listOpen = false;
+  listPlaying = -1;
+  listItems.clear();
+  listItems.shrink_to_fit();
+  redraw = true;
+}
+
+RecordingsView recordingsView() {
+  RecordingsView v;
+  v.page = listPage;
+  v.pages = listPages();
+  if (listPlaying >= 0 && listPlaying < static_cast<int>(listItems.size())) {
+    const RecordingMeta &m = listItems[listPlaying];
+    v.playing = true;
+    v.now = {recordingRowTitle(m).c_str(), recordingRowDetail(m).c_str()};
+    v.summary = m.summary.empty() ? "No summary yet." : m.summary.c_str();
+    return v;
+  }
+  for (int i = listPage * 4; i < static_cast<int>(listItems.size()) && i < listPage * 4 + 4; i++)
+    v.rows.push_back({recordingRowTitle(listItems[i]).c_str(), recordingRowDetail(listItems[i]).c_str()});
+  return v;
+}
+
+void listTurnPage(int step) {
+  listPage = (listPage + step + listPages()) % listPages();
+  listTouchedAt = millis();
+  redraw = true;
+}
+
+void listTap(uint16_t x, uint16_t y) {
+  listTouchedAt = millis();
+  if (listPlaying >= 0) {  // a tap stops it: back to the list
+    player.stop();
+    return;
+  }
+  int row = 0;
+  const RecordingsHit hit = screens::recordingsHit(x, y, static_cast<int>(recordingsView().rows.size()), row);
+  if (hit == RecordingsHit::Back) return closeList();
+  if (hit == RecordingsHit::NextPage) return listTurnPage(1);
+  if (hit != RecordingsHit::Row) return;
+  const int i = listPage * 4 + row;
+  const String wav = note::path(listCompanion, listItems[i].name, "wav");
+  if (!player.play(wav.c_str())) {
+    LOGW("note", "couldn't play %s", listItems[i].name.c_str());
+    return;
+  }
+  listPlaying = i;
+  redraw = true;
+  LOGI("note", "playing %s from the list", listItems[i].name.c_str());
+}
+
+void pollList() {
+  if (listPending && millis() - listPendingAt > 120000) {
+    listPending = false;
+    LOGW("note", "the recordings list didn't open in time: dropped");
+  }
+  if (listPending && !listOpen && !deckOpen && (info.state == Talk::After || info.state == Talk::Ready) &&
+      !voice::playing() && !live.inTurn() && !writing && !reading) {
+    listPending = false;
+    openList();
+  }
+  if (!listOpen) return;
+  if (listPlaying >= 0) {
+    listTouchedAt = millis();  // listening counts as using it
+    shell::wake();
+    if (!player.isPlaying()) {
+      listPlaying = -1;
+      redraw = true;
+    }
+  } else if (millis() - listTouchedAt > kListIdleMs) {
+    LOGI("note", "recordings list: closed after 2 minutes untouched");
+    closeList();
+  }
+}
+
 // play_recording: after the reply that announced it.
 void pollNotePlay() {
   if (notePlaying && !player.isPlaying()) {
@@ -2965,6 +3094,8 @@ bool idleScreen() {
 void drawApp() {
   if (deckOpen) {
     screens::drawDeck(deckView());
+  } else if (listOpen) {
+    screens::drawRecordings(recordingsView());
   } else if (settingsOpen) {
     screens::drawSettings(settingsView());
   } else if (historyOpen) {
@@ -2990,6 +3121,7 @@ void drawApp() {
 
 void onTap(uint16_t x, uint16_t y) {
   if (deckOpen) return deckTap(x, y);
+  if (listOpen) return listTap(x, y);
   if (notePlaying) {  // a tap stops a voice note playing
     player.stop();
     return;
@@ -3026,6 +3158,8 @@ void onTap(uint16_t x, uint16_t y) {
 // What a chat left to do later doesn't outlive it (a deck days later, a note playing at the next unlock).
 void dropPending() {
   deckPending = false;
+  listPending = false;
+  if (listOpen) closeList();
   pendingPlayName.clear();
   reaction.waiting = false;
   pendingTypedText.clear();
@@ -4365,6 +4499,14 @@ void loop() {
   if (deckOpen) pollDeck(held, bootUpSince && millis() - bootUpSince >= 40);
   if (notePlaying && held) player.stop();
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
+  if (held && listOpen) {  // BOOT stops the one playing (back to the list), else closes the list and talks
+    if (listPlaying >= 0) {
+      player.stop();
+      answeredPress = downAt;
+    } else {
+      closeList();
+    }
+  }
   if (held && firing.active && static_cast<int32_t>(downAt - firing.startedMs) >= 0) {
     const bool ringing = firing.kind == "alarm" || firing.kind == "timer";  // BOOT only stops those
     answerFiring();
@@ -4417,6 +4559,7 @@ void loop() {
   pollLines();
   pollPhoneWake();
   pollNotePlay();
+  pollList();
   pollNoteSend();
   pollReaction();
   pollTypedTurn();
@@ -4479,7 +4622,10 @@ void loop() {
     timerConfirm = true;
     redraw = true;
   }
-  if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
+  if (listOpen && listPlaying < 0 && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
+      input.gesture != Touch::Gesture::LongPress) {  // left / up = the next page, right / down = the one before
+    listTurnPage(input.gesture == Touch::Gesture::SwipeLeft || input.gesture == Touch::Gesture::SwipeUp ? 1 : -1);
+  } else if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
     const int step = input.gesture == Touch::Gesture::SwipeUp ? 3 : -3;
     if (historyOpen) historyScroll = max(0, historyScroll - step);
     else if (info.state == Talk::After) {  // up = the next page, down = the one before
@@ -4644,6 +4790,7 @@ void loop() {
                       : input.key == 'u' ? "What reminders do I have?"
                       : input.key == 'b' ? "I want to record something about eating bananas in space."
                       : input.key == 'j' ? "Play my bananas recording."
+                      : input.key == 'v' ? "What have I recorded lately?"
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     const std::string text = *typed ? typed
@@ -4651,6 +4798,8 @@ void loop() {
                                                   "word for word, in a calm, slow voice. Don't add, skip or change "
                                                   "anything, don't call write_long, and say nothing else.\n\n") + kScript;
     typedTurn(text, text);
+  } else if (typed && *typed && pendingTypedText.empty()) {
+    queueTypedTurn(typed, typed);  // no session yet: one opens for it
   }
   if (input.key == 'E' && (info.state == Talk::Ready || info.state == Talk::After)) lastTurnAt = millis() - kIdleMs - 1;
   if (input.key == 'm') {

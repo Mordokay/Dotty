@@ -1157,7 +1157,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   app logs each step's seconds (memories, Gemini, sending) — the first runs took 13 s and 38 s end to end with
   two requests. The latest 10
   summaries join the instruction; recall adds those days' transcripts. Tools `play_recording {query}`,
-  `delete_recording {query}` (after a confirmation). BLE `companion.recordings`, `.recording.text/.piece/
+  `delete_recording {query}` (after a confirmation), `show_recordings` (0.6.2, the user's ask — the spec had no list
+  on Dotty: "show me my recordings", "what have I recorded lately"; no recordings = a spoken error): once the reply
+  ends a "Recordings" list opens (38 px rows, 4 a page, title bold + "Sat 24 Oct - 1:17", the page in the nav's
+  right corner, swipes turn pages; `recordingRowTitle/Detail`, host-tested); a row plays it ("Playing": title,
+  date, summary, "Tap to stop"; tap or BOOT = back to the list), back / a BOOT press (then talks) / 2 minutes
+  untouched / lock / a switch close it. Dev key `v` ("What have I recorded lately?"; typed keys now open a
+  session themselves). BLE `companion.recordings`, `.recording.text/.piece/
   .rename/.delete/.play`, `rec.fetch {companion, id}` (the whole file back, 4 frames a pass); the phone wake's
   sync job tells the app (`companion.recordings` event), ≤ 3 asks per recording per boot. App: Companion ›
   Recordings (list, a page with play, summary, Final / Apple transcript tabs, share, rename, delete, Play on
@@ -1183,7 +1189,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `companion.evolution.undo {id, t}` (puts `before` back). App: every character field is edited line
   by line (`LinesField`: pin at the left, ✕, "Add line"; prose split into sentences), Suggest keeps
   pinned lines, and "How {name} has changed" (`EvolutionView`: why, − / + lines, Undo). Device run:
-  Debug's way of speaking became surf slang (left for the user to try Undo).
+  Debug's way of speaking became surf slang (left for the user to try Undo). **Pins in chats** (0.6.2, the user's
+  ask: "call me Peter the Wise" with "my king" pinned): the character sheet marks pinned lines "(pinned)" and says
+  they're locked in the app — asked to change one, the companion says in character that something holds it back
+  and that the app can unlock it. `evolve` is answered by Dotty: the pinned lines it had to keep
+  (`applyEvolution(…, &kept)`) come back as a spoken result; a second change in the same chat is a spoken error
+  (silent in the review). Unpinned, "call me X instead" should both `remember` it and evolve the quirk.
 - Google refuses a new session within ~40 s of the previous one ("exceeded your current quota"),
   even after a proper close: the 1-minute wait handles it. Bluetooth comes back 1 s after a
   session's Wi-Fi is off (one BT-controller interrupt-watchdog crash, in ROM
