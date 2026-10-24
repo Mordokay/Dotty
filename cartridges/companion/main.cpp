@@ -1539,10 +1539,68 @@ void pollFiring() {
   }
 }
 
+String lastPath(const std::string &id, const char *ext);
+void loadLast();
+
+// A copy of a repeating moment's recording (it plays again tomorrow), on a task: a minute is ~3 MB.
+struct LastCopy {
+  String from, to;
+};
+
+void lastCopyTask(void *arg) {
+  LastCopy *c = static_cast<LastCopy *>(arg);
+  File in = SD_MMC.open(c->from);
+  File out = SD_MMC.open(c->to + ".part", FILE_WRITE);
+  static uint8_t buf[4096];
+  bool ok = in && out;
+  for (int n; ok && (n = in.read(buf, sizeof(buf))) > 0;) ok = out.write(buf, n) == static_cast<size_t>(n);
+  in.close();
+  out.close();
+  if (ok) {
+    SD_MMC.remove(c->to);
+    ok = SD_MMC.rename(c->to + ".part", c->to);
+  }
+  LOGI("moments", "replay copy %s", ok ? "saved" : "NOT saved");
+  delete c;
+  vTaskDelete(nullptr);
+}
+
+// The moment's words become its companion's last line, so ▶ replays them like a reply (the user, 2026-10-24).
+void keepAsLastLine() {
+  const Clip *kept = nullptr;
+  for (const Clip &c : firing.clips)
+    if (!c.wav.isEmpty()) kept = &c;  // several recordings: the last one
+  if (!kept || firing.delivery != Delivery::Voice) return;
+  const std::string who = firing.group.companion;
+  LastLine line = kept->timing;
+  line.mood = "neutral";
+  line.t = time(nullptr);
+  const std::string json = lastLineJson(line);
+  if (!companions::writeText(lastPath(who, "json"), json)) return;
+  // A one-off's recording is deleted next anyway: moved, at once. A repeating one's is copied.
+  bool repeating = false;  // the kept file is a repeating moment's own recording
+  if (MomentList *list = moments::of(who))
+    for (const int id : firing.group.ids)
+      if (const Moment *m = list->find(id))
+        repeating = repeating || (m->repeat != Repeat::Once && kept->wav == moments::recordingPath(who, std::to_string(id), "wav"));
+  if (!repeating) {
+    SD_MMC.remove(lastPath(who, "wav"));
+    if (!SD_MMC.rename(kept->wav, lastPath(who, "wav"))) return;
+  } else {
+    LastCopy *c = new LastCopy{kept->wav, lastPath(who, "wav")};
+    if (xTaskCreatePinnedToCore(lastCopyTask, "last-copy", 6144, c, 1, nullptr, 0) != pdPASS) delete c;
+  }
+  if (who == companions::active().id) {
+    lastLine = line;
+    hasLast = true;
+  }
+}
+
 void endFiring() {
   player.stop();
   player.setVolume(settings.volume);
   ringing.stop();
+  keepAsLastLine();
   if (MomentList *list = moments::of(firing.group.companion)) {
     for (const int id : firing.group.ids) {  // one-offs are done: they go with their recordings (the history keeps them)
       const Moment *m = list->find(id);
