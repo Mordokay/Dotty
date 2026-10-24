@@ -108,6 +108,11 @@ void GeminiLive::close() {
   turns_ = TurnTracker();
 }
 
+static bool isMomentTool(const std::string &name) {
+  return name == "set_moment" || name == "cancel_moment" || name == "list_moments" || name == "start_timer" ||
+         name == "stop_timer";
+}
+
 void GeminiLive::onMessage(const std::string &message) {
   lastMessageAt_ = millis();
   const LiveEvent e = liveParse(message);
@@ -124,7 +129,7 @@ void GeminiLive::onMessage(const std::string &message) {
   std::vector<std::string> names;
   for (const ToolCall &c : e.calls) names.push_back(c.name);
   const TurnTracker::Out o = turns_.message(content, names, e.turnComplete, e.totalTokens);
-  std::vector<ToolCall> answered;
+  std::vector<ToolCall> answered, spoken;
   std::vector<ToolCall> calls = e.calls;
   for (size_t i = 0; i < calls.size(); i++) {
     ToolCall &c = calls[i];
@@ -133,6 +138,13 @@ void GeminiLive::onMessage(const std::string &message) {
     if (o.apply[i]) {
       if (c.name == "set_mood") {
         if (!c.mood.empty() && cb_.mood) cb_.mood(c.mood);
+      } else if (isMomentTool(c.name)) {
+        const ToolAnswer a = cb_.tool ? cb_.tool(c) : ToolAnswer();
+        c.result = a.result;
+        if (a.speak) {
+          spoken.push_back(c);
+          continue;
+        }
       } else if (cb_.memory) {
         c.resultId = cb_.memory(c);
       }
@@ -142,6 +154,10 @@ void GeminiLive::onMessage(const std::string &message) {
   if (!answered.empty()) {
     t_->sendText(liveToolsOk(answered));
     if (!t_->connected()) return;  // the send failed and dropped the connection
+  }
+  for (const ToolCall &c : spoken) {  // a result to talk about (WHEN_IDLE): its reply belongs to the question
+    answerTool(c.id, c.name, c.result);
+    if (!t_->connected()) return;
   }
   if (o.deliver) {
     if (!e.outputText.empty() && cb_.said) cb_.said(e.outputText);

@@ -136,6 +136,28 @@ std::string liveSetup(const LiveConfig &config) {
   param(summary, "text", "STRING", true);
   JsonObject macro = declare("run_macro", "Run one of the user's macros (listed in your instructions) by its number");
   param(macro, "id", "INTEGER", true);
+  // Scheduled moments (moment_store.h, timer_beeps.h): Dotty says it by itself at that minute.
+  JsonObject moment = declare("set_moment", "Set a reminder or an alarm the user asked for: you'll say it by yourself "
+                                            "at that time");
+  JsonObject kind = param(moment, "kind", "STRING", true);
+  for (const char *k : {"reminder", "alarm"}) kind["enum"].add(k);
+  param(moment, "at", "STRING", true)["description"] = "local time, YYYY-MM-DDTHH:MM";
+  param(moment, "what", "STRING", true)["description"] = "what it's about, in a few words";
+  JsonObject style = param(moment, "style", "STRING", false);
+  for (const char *s : {"spoken", "sung", "whispered", "excited", "calm"}) style["enum"].add(s);
+  JsonObject repeat = param(moment, "repeat", "STRING", false);
+  for (const char *r : {"once", "daily", "weekdays", "days"}) repeat["enum"].add(r);
+  JsonObject days = param(moment, "days", "ARRAY", false);
+  days["items"]["type"] = "STRING";  // (no enum: one level deeper passes ArduinoJson's nesting limit of 10)
+  days["description"] = "with repeat days: the days, as mon, tue, wed, thu, fri, sat, sun";
+  JsonObject cancel = declare("cancel_moment", "Cancel a reminder or an alarm (by its number)");
+  param(cancel, "id", "INTEGER", true);
+  declare("list_moments", "List the reminders and alarms the user has set");
+  JsonObject timer = declare("start_timer", "Start a countdown timer the user asked for");
+  param(timer, "seconds", "INTEGER", true);
+  param(timer, "label", "STRING", false)["description"] = "what it's for, a word or two";
+  param(timer, "tickEvery", "INTEGER", false)["description"] = "a soft tick every this many seconds, if asked";
+  declare("stop_timer", "Stop the running timer");
   return serialize(doc);
 }
 
@@ -159,7 +181,7 @@ std::string liveToolsOk(const std::vector<ToolCall> &answered) {
     JsonObject response = responses.add<JsonObject>();
     response["id"] = call.id;
     response["name"] = call.name;
-    response["response"]["result"] = "ok";
+    response["response"]["result"] = call.result.empty() ? std::string("ok") : call.result;
     response["response"]["scheduling"] = "SILENT";
     if (call.resultId >= 0) response["response"]["memoryId"] = call.resultId;
   }
@@ -197,6 +219,14 @@ LiveEvent liveParse(const std::string &message) {
     c.group = args["group"] | (args["topic"] | "");  // recall's topic travels as the group
     c.from = args["from"] | "";
     c.to = args["to"] | "";
+    c.kind = args["kind"] | "";
+    c.at = args["at"] | "";
+    c.repeat = args["repeat"] | "";
+    c.style = args["style"] | "";
+    c.label = args["label"] | "";
+    c.tickEvery = args["tickEvery"] | 0;
+    for (JsonVariant d : args["days"].as<JsonArray>())
+      if (d.is<const char *>()) c.days.push_back(d.as<const char *>());
     if (args["id"].is<int>()) c.memoryId = args["id"];
     else if (args["id"].is<float>()) c.memoryId = static_cast<int>(args["id"].as<float>());  // 12.0
     e.calls.push_back(c);
@@ -250,6 +280,10 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "bananas the other day?\"), call recall with their question, the days it points to (from and to, YYYY-MM-DD; "
       "today's date is below; leave them out when unsure) and a topic word if there is one, and say at most a few "
       "words like \"Let me think back\". Then tell the user what comes back, or honestly that you don't remember. "
+      "You can say things by yourself later: only when the user asks for a reminder or an alarm (\"remind me at 6 to "
+      "cook dinner\", \"wake me at 7\"), call set_moment with the local time worked out from the date and time below "
+      "(\"in 20 minutes\" too) and what it's about; for a countdown (\"a 10-minute timer\") call start_timer (at most "
+      "24 hours). Then confirm it briefly in your own words. To cancel or change one, list_moments gives their numbers. "
       "You are on a "
       "tiny screen with a speaker: never use lists, markdown or "
       "emoji. Always speak English, even when the user's words are unclear or sound like another language. "

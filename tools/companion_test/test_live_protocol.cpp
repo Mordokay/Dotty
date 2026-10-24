@@ -45,7 +45,12 @@ int main() {
     names += std::string(f["name"] | "") + ",";
     allNonBlocking &= std::string(f["behavior"] | "") == "NON_BLOCKING";
   }
-  CHECK_EQ("setup: the seven tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"));
+  CHECK_EQ("setup: the tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"
+                                                  "set_moment,cancel_moment,list_moments,start_timer,stop_timer,"));
+  CHECK("setup declares set_moment, cancel_moment, list_moments, start_timer, stop_timer",
+        fns[10]["parameters"]["required"].size() == 3 && fns[10]["parameters"]["properties"]["kind"]["enum"][1] == "alarm" &&
+            !fns[10]["parameters"]["properties"]["days"].isNull() && fns[11]["parameters"]["required"][0] == "id" &&
+            fns[13]["parameters"]["required"][0] == "seconds" && allNonBlocking);
   CHECK("run_macro: needs its number", fns[9]["parameters"]["required"][0] == "id");
   CHECK("recall: needs the question; dates and topic optional",
         fns[7]["parameters"]["required"].size() == 1 && fns[7]["parameters"]["required"][0] == "question" &&
@@ -90,6 +95,22 @@ int main() {
            int(ok["toolResponse"]["functionResponses"][1]["response"]["memoryId"] | -1), 7);
   CHECK("tools ok: no number when there's none", ok["toolResponse"]["functionResponses"][0]["response"]["memoryId"].isNull());
   CHECK_EQ("tools ok: one response per call", responses.size(), size_t(2));
+  {
+    ToolCall m;
+    m.id = "s1", m.name = "set_moment", m.result = "{\"id\":4}";
+    JsonDocument r;
+    deserializeJson(r, liveToolsOk({m}));
+    CHECK("toolsOk carries a result", std::string(r["toolResponse"]["functionResponses"][0]["response"]["result"] | "") == "{\"id\":4}");
+  }
+  {
+    const LiveEvent sm = liveParse(R"({"toolCall":{"functionCalls":[{"name":"set_moment","args":{"kind":"alarm","at":"2026-10-25T07:30","what":"gym","style":"excited","repeat":"days","days":["mon","wed"]},"id":"a1"}]}})");
+    CHECK("parse set_moment args", sm.calls.size() == 1 && sm.calls[0].kind == "alarm" && sm.calls[0].at == "2026-10-25T07:30" &&
+                                       sm.calls[0].text == "gym" && sm.calls[0].style == "excited" && sm.calls[0].repeat == "days" &&
+                                       sm.calls[0].days.size() == 2 && sm.calls[0].days[1] == "wed");
+    const LiveEvent st = liveParse(R"({"toolCall":{"functionCalls":[{"name":"start_timer","args":{"seconds":600,"label":"pasta","tickEvery":60},"id":"t1"}]}})");
+    CHECK("parse start_timer: seconds 600, label pasta, tickEvery 60",
+          st.calls.size() == 1 && st.calls[0].seconds == 600 && st.calls[0].label == "pasta" && st.calls[0].tickEvery == 60);
+  }
   CHECK("tools ok: ids, names, silent", std::string(responses[0]["id"] | "") == "call_1" &&
                                             std::string(responses[1]["name"] | "") == "remember" &&
                                             std::string(responses[1]["response"]["scheduling"] | "") == "SILENT");
@@ -150,6 +171,8 @@ int main() {
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
+  CHECK("instruction: moments only when asked", noPlace.find("call set_moment") != std::string::npos &&
+                                                    noPlace.find("only when the user asks") != std::string::npos);
   CHECK("instruction: memory guidance always there", noPlace.find("Never remember passwords") != std::string::npos);
   CHECK("instruction: no memories, no memory list", noPlace.find("What you remember") == std::string::npos);
   const std::string section = "What you remember about the user:\nPeople: [12] Your sister is called Ana.";

@@ -53,7 +53,7 @@ struct TurnTracker {
     }
     for (size_t i = 0; i < toolNames.size() && turn; i++) {
       o.apply[i] = true;
-      if (toolNames[i] == "recall") continue;  // Dotty answers it later, with what it found
+      if (toolNames[i] == "recall" || toolNames[i] == "list_moments") continue;  // Dotty answers it with what it found
       if (toolNames[i] != "set_mood") o.answer[i] = true;
       else if (!moodAnswered_) o.answer[i] = moodAnswered_ = true;
     }

@@ -16,6 +16,10 @@
 // conversation. Knows nothing about the screen or the audio hardware.
 class GeminiLive {
  public:
+  struct ToolAnswer {
+    std::string result;
+    bool speak = false;
+  };
   struct Callbacks {
     std::function<void()> ready;                                // setup done: a turn can start
     std::function<void(const int16_t *pcm, size_t frames)> audio;  // reply audio, 24 kHz mono
@@ -24,6 +28,9 @@ class GeminiLive {
     std::function<void(const std::string &mood)> mood;          // set_mood
     // remember / update_memory / forget_memory; returns the memory's id (remember) or -1
     std::function<int(const ToolCall &call)> memory;
+    // set_moment / cancel_moment / list_moments / start_timer / stop_timer: the answer, sent silently with
+    // the others, or (speak) as a result the model talks about (an error to put right, the list).
+    std::function<ToolAnswer(const ToolCall &call)> tool;
     std::function<void(int tokens)> turnDone;                   // the reply ended
     std::function<void(int tokens)> spent;                      // tokens outside a question
     // The connection failed or closed: why, a retry delay if the server gave one (-1), and

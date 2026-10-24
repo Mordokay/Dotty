@@ -37,9 +37,15 @@ struct ToolCall {
   int memoryId = -1;
   int seconds = 0;  // long_reply
   int resultId = -1;  // set by Dotty: the memory remember created, sent back so the model can name it
+  // Moments (moment_store.h): set_moment {kind, at, what (as text), style, repeat, days}, start_timer
+  // {seconds, label, tickEvery}, cancel_moment {id (as memoryId)}.
+  std::string kind, at, repeat, style, label;
+  std::vector<std::string> days;
+  int tickEvery = 0;
+  std::string result;  // set by Dotty: the call's answer ("ok" when empty)
 };
 
-// Dotty's answer to function calls: done, and don't start a new reply because of them.
+// Dotty's answer to function calls: done (or each call's result), and don't start a new reply because of them.
 std::string liveToolsOk(const std::vector<ToolCall> &answered);
 // A tool answered with content the model should talk about (recall): spoken once it's idle.
 std::string liveToolResult(const std::string &id, const std::string &name, const std::string &result);

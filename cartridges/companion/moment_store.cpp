@@ -61,6 +61,18 @@ uint8_t repeatDays(const Moment &m) {
   }
 }
 
+// Seconds since 1970 for a calendar date and time, with no zone (newlib has no timegm). Days from the
+// civil date: Howard Hinnant's algorithm.
+int64_t civilEpoch(int y, int m, int d, int h, int mi, int s) {
+  y -= m <= 2;
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const int64_t yoe = y - era * 400;
+  const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const int64_t days = era * 146097 + doe - 719468;
+  return days * 86400 + h * 3600 + mi * 60 + s;
+}
+
 int clampInt(int v, int lo, int hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -107,14 +119,7 @@ bool parseLocalTime(const std::string &iso, int64_t &local) {
   int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
   const int n = std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d", &y, &mo, &d, &h, &mi, &s);
   if (n < 5 || mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59) return false;
-  tm t = {};
-  t.tm_year = y - 1900;
-  t.tm_mon = mo - 1;
-  t.tm_mday = d;
-  t.tm_hour = h;
-  t.tm_min = mi;
-  t.tm_sec = s;
-  const time_t v = timegm(&t);
+  const time_t v = static_cast<time_t>(civilEpoch(y, mo, d, h, mi, s));
   tm back;
   gmtime_r(&v, &back);
   if (back.tm_mday != d || back.tm_mon != mo - 1) return false;  // 31 April
