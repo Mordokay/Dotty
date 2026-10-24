@@ -25,6 +25,11 @@ int main() {
               std::string(e["how"] | "") == "discard" && std::string(e["id"] | "") == "20261024-153012");
   }
   {
+    JsonDocument f = parse(recBeginEvent("A", "c1", "T", 32000));
+    JsonDocument n = parse(recBeginEvent("A", "c1", "T"));
+    CHECK("rec.begin carries from (a resumed fetch)", (f["from"] | 0) == 32000 && n["from"].isNull());
+  }
+  {
     uint8_t h[3];
     CHECK("frame header", recFrameHeader(h, 7) == 3 && h[0] == 0x1F && h[1] == 0x02 && h[2] == 7);
   }

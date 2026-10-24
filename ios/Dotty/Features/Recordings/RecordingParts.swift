@@ -13,6 +13,13 @@ struct RecordingParts {
 
     mutating func startPart() { parts.append([]) }
 
+    /// A fetch picking up where an interrupted one stopped: what came before, as one part.
+    mutating func prefill(_ samples: [Int16]) {
+        parts = [samples]
+        lastSeq = nil
+        gap = false
+    }
+
     /// A raw value from Dotty: 0x1F 0x02 seq + an ADPCM frame (its own start state).
     mutating func add(_ frame: Data) {
         guard frame.count > 3, frame[frame.startIndex] == 0x1F, frame[frame.startIndex + 1] == 0x02 else { return }
@@ -38,5 +45,19 @@ struct RecordingParts {
         d.append(contentsOf: Array("data".utf8)); u32(bytes)
         samples.withUnsafeBytes { d.append(contentsOf: $0) }
         return d
+    }
+}
+
+/// When Gemini may be asked again for a recording's final transcript and summary: at once the first time,
+/// then an hour later, then a day apart, never after 5 tries (a silent note, a refused file) — every try
+/// re-uploads the audio and spends the free allowance.
+enum RecordingRetry {
+    static let maxAttempts = 5
+
+    static func shouldTry(attempts: Int, last: Date?, now: Date) -> Bool {
+        guard attempts < maxAttempts else { return false }
+        guard attempts > 0, let last else { return true }
+        let wait: TimeInterval = attempts == 1 ? 3600 : 86400
+        return now.timeIntervalSince(last) >= wait
     }
 }

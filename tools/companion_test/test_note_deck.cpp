@@ -96,5 +96,24 @@ int main() {
     d.discard(false);
     CHECK("BOOT on the discard question records again", d.hold(true, 2000) == E::PartStart && d.state() == S::Recording);
   }
+  {
+    NoteDeck d;
+    d.open(0);
+    d.hold(true, 0);
+    d.hold(false, 2000);
+    d.discard(false, 2000);
+    CHECK("the discard question goes away after 10 s (then the 5 minutes apply)",
+          d.tick(11999) == E::None && d.state() == S::ConfirmDiscard && d.tick(12000) == E::None && d.state() == S::Paused &&
+              d.tick(311999) == E::None && d.tick(312000) == E::Done);
+  }
+  {
+    NoteDeck d;
+    d.open(0);
+    d.hold(true, 1000);
+    const E bounce = d.hold(false, 1150);
+    d.hold(true, 2000);
+    d.hold(false, 5000);
+    CHECK("a hold under 200 ms is dropped (a bounce)", bounce == E::PartDropped && d.parts() == 1 && d.lastPartMs() == 3000);
+  }
   return failures ? 1 : 0;
 }

@@ -98,6 +98,7 @@ bool parseRecordingMeta(const std::string &json, RecordingMeta &out) {
   m.synced = doc["synced"] | false;
   m.isDraft = doc["isDraft"] | false;
   m.textAt = doc["textAt"] | (int64_t)0;
+  m.open = doc["open"] | false;
   m.summary = doc["summary"] | "";
   for (JsonVariantConst p : doc["points"].as<JsonArrayConst>()) m.points.push_back(p | "");
   out = m;
@@ -114,6 +115,7 @@ std::string recordingMetaJson(const RecordingMeta &m) {
   doc["synced"] = m.synced;
   doc["isDraft"] = m.isDraft;
   doc["textAt"] = m.textAt;
+  if (m.open) doc["open"] = true;
   doc["summary"] = m.summary;
   JsonArray points = doc["points"].to<JsonArray>();
   for (const std::string &p : m.points) points.add(p);

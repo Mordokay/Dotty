@@ -13,8 +13,11 @@ struct LocalRecording: Codable, Identifiable, Hashable {
     var final = ""          // Gemini's, from the audio
     var summary = ""
     var points: [String] = []
-    var needsFinal = false  // Gemini couldn't do it yet (quota, offline): tried again later
+    var needsFinal = false  // Gemini couldn't do it yet (quota, offline): tried again later (RecordingRetry)
     var textSent = false    // Dotty has the final text (or the draft, while needsFinal)
+    var finalAttempts = 0
+    var lastFinalAttempt: Date?
+    var nothingSaid = false // Gemini heard no words: nothing more to try
 }
 
 enum RecordingStore {

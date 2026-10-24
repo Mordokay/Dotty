@@ -49,6 +49,10 @@ class PhoneWake {
     if (failures >= 2) return true;
     return !planDue && !lineLeft;
   }
+  // Progress (a recording still going to the phone): the 3 minutes start again from now.
+  void extend(uint32_t nowMs) {
+    if (stage_ == Stage::Phone || stage_ == Stage::Wifi) jobsAt_ = nowMs;
+  }
   bool bluetoothOn() const { return stage_ == Stage::WaitingForPhone || stage_ == Stage::Phone; }
   Stage stage() const { return stage_; }
   void end() { stage_ = Stage::Idle; }  // a chat, BOOT or a firing moment cancels a wake; or it's over

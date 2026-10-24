@@ -230,8 +230,11 @@ uint32_t noteTestUntil = 0;  // dev n: a test voice note is recording until then
 // Voice notes (voice_note.h): the deck, a recording to play once the reply ends, the reaction after Done.
 NoteDeck deck;
 bool deckOpen = false;
+int16_t noteChunk[voice::kChunkFrames];  // one 100 ms buffer for every voice-note path (internal RAM is tight)
+int16_t *noteSendBuf = nullptr;          // rec.fetch's frame buffer (PSRAM, made on first use)
 std::string deckPendingTitle;  // start_recording: the deck opens once the reply has ended
 bool deckPending = false;
+uint32_t deckPendingAt = 0;  // a deck that hasn't opened within 2 minutes (the reply never ended) is dropped
 std::string pendingPlayCompanion, pendingPlayName, pendingPlayTitle;
 bool notePlaying = false;
 struct NoteReaction {
@@ -252,6 +255,7 @@ uint32_t lastSyncActivity = 0;
 uint32_t pendingTypedSince = 0;
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
+void dropPending();
 bool jobsDue();
 bool syncWanted();
 bool recordingNeedsSync(const RecordingMeta &m);
@@ -434,6 +438,7 @@ void notifyChanged();
 
 // Another companion: its own persona, voice, avatar, memories and history from the next session.
 void switchCompanion(const std::string &id) {
+  dropPending();
   if (id == companions::active().id || !companions::find(id)) return;
   if (live.connected() || connecting) disconnect("companion changed");
   live.forgetResume();  // a goAway handle holds the old companion's conversation (and its memory numbers)
@@ -1396,6 +1401,7 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
       if (freeMb < 50) return toolError("no room on the card");
       deckPendingTitle = c.label.empty() ? "Voice note" : c.label;
       deckPending = true;
+      deckPendingAt = millis();
       LOGI("note", "start_recording \"%s\": the deck opens after this reply", deckPendingTitle.c_str());
       return {"ok", false};
     }
@@ -2612,6 +2618,9 @@ void pollPhoneWake() {
     wakeVia = "nothing";
     phoneWake.start(millis());
     bgFailures = 0;
+    for (const std::string &id : companions::list().order())  // each recording asked about ≤ 3 wakes a boot
+      for (const RecordingMeta &m : note::list(id))
+        if (recordingNeedsSync(m)) syncTries[m.name]++;
     bgOpenedAt = millis();
     lastWake = now;
     saveWakeTimes();
@@ -2644,9 +2653,6 @@ void pollPhoneWake() {
     if (!syncAsked) {
       syncAsked = true;
       lastSyncActivity = millis();
-      for (const std::string &id : companions::list().order())
-        for (const RecordingMeta &m : note::list(id))
-          if (recordingNeedsSync(m)) syncTries[m.name]++;
       notifyRecordings();
       LOGI("wake", "asking the phone to sync recordings");
     }
@@ -2724,6 +2730,12 @@ DeckView deckView() {
 }
 
 void openDeck(const std::string &title) {
+  if (noteSend.active) {  // a fetch on the same channel: stopped, the phone asks again later
+    noteSend.file.close();
+    noteSend.active = false;
+    ble::notify(recEndEvent(noteSend.name, false));
+    LOGI("note", "sending %s stopped: a new recording", noteSend.name.c_str());
+  }
   if (!note::begin(sessionCompanion.empty() ? companions::active().id : sessionCompanion, title)) {
     LOGW("note", "the deck didn't open (no card?)");
     return;
@@ -2773,9 +2785,8 @@ void pollTypedTurn() {
 }
 
 void finishDeck(bool keep) {
-  static int16_t chunk[voice::kChunkFrames];
   size_t frames = 0;
-  while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+  while (voice::nextChunk(noteChunk, frames)) note::add(noteChunk, frames);
   voice::stopListening();
   const bool streamed = note::streaming();
   const RecordingMeta m = note::current();
@@ -2784,7 +2795,7 @@ void finishDeck(bool keep) {
   lastTurnAt = millis();
   setState(live.connected() ? Talk::Ready : Talk::Offline, idleStatus());
   if (name.empty()) return;
-  notifyRecordings();
+  if (!streamed) notifyRecordings();  // the phone streamed it: telling it now made it fetch the file again
   reaction = NoteReaction();
   reaction.waiting = true;
   reaction.companion = sessionCompanion.empty() ? companions::active().id : sessionCompanion;
@@ -2812,26 +2823,27 @@ void pollReaction() {
   queueTypedTurn(text, "(recording) " + reaction.title + " - " + clockText(reaction.ms).c_str());
 }
 
-void pollDeck(bool bootDown) {
+// held: BOOT down ≥ kHoldMs (a part starts on a real hold); up: released for 40 ms (no bounce ends it).
+void pollDeck(bool held, bool up) {
   shell::wake();  // the deck keeps Dotty unlocked
   lastTurnAt = millis();  // and the chat open (no review meanwhile)
-  NoteDeck::Event e = deck.hold(bootDown, millis());
+  const bool recording = deck.state() == NoteDeck::State::Recording;
+  NoteDeck::Event e = deck.hold(recording ? !up : held, millis());
   if (e == NoteDeck::Event::PartStart) {
     voice::startListening();
     note::partStart();
     redraw = true;
-  } else if (e == NoteDeck::Event::PartEnd) {
-    static int16_t chunk[voice::kChunkFrames];
+  } else if (e == NoteDeck::Event::PartEnd || e == NoteDeck::Event::PartDropped) {
     size_t frames = 0;
-    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    while (voice::nextChunk(noteChunk, frames)) note::add(noteChunk, frames);
     voice::stopListening();
     note::partEnd();
+    if (e == NoteDeck::Event::PartDropped) note::undo();  // a bounce, not a part: off the card and the phone
     redraw = true;
   }
   if (deck.state() == NoteDeck::State::Recording) {
-    static int16_t chunk[voice::kChunkFrames];
     size_t frames = 0;
-    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    while (voice::nextChunk(noteChunk, frames)) note::add(noteChunk, frames);
     static uint32_t lastDraw = 0;
     if (millis() - lastDraw > 1000) {
       lastDraw = millis();
@@ -3011,7 +3023,16 @@ void onTap(uint16_t x, uint16_t y) {
   }
 }
 
+// What a chat left to do later doesn't outlive it (a deck days later, a note playing at the next unlock).
+void dropPending() {
+  deckPending = false;
+  pendingPlayName.clear();
+  reaction.waiting = false;
+  pendingTypedText.clear();
+}
+
 void onLock() {
+  dropPending();
   // Locking turns Bluetooth off at once: a relay chat is over even though nothing reported it yet.
   if (live.overRelay() && live.connected() == false && !live.latestHandle().empty()) live.keepResume();
   if (live.connected() || connecting || live.overRelay()) disconnect("locked");
@@ -3417,27 +3438,38 @@ bool syncWanted() {  // read from the card at most every 5 s
 // rec.fetch: the whole recording, as when it was recorded (rec.begin, 0x02 frames, rec.end).
 void pollNoteSend() {
   if (!noteSend.active) return;
-  static int16_t samples[2048];
-  const size_t per = std::min(relay::recordingFrameSamples(), sizeof(samples) / 2);
-  for (int i = 0; i < 4; i++) {
-    const size_t got = noteSend.file.read(reinterpret_cast<uint8_t *>(samples), per * 2) / 2;
-    if (got == 0 || !relay::sendRecordingFrame(samples, got)) {
-      const bool whole = got == 0;
-      noteSend.file.close();
-      noteSend.active = false;
-      ble::notify(recEndEvent(noteSend.name, whole));
-      LOGI("note", "%s %s to the phone", noteSend.name.c_str(), whole ? "sent" : "NOT sent (the phone went)");
-      lastSyncActivity = millis();
+  if (!noteSendBuf) noteSendBuf = static_cast<int16_t *>(heap_caps_malloc(2048 * 2, MALLOC_CAP_SPIRAM));
+  if (!noteSendBuf) return;
+  const size_t per = std::min<size_t>(relay::recordingFrameSamples(), 2048);
+  lastSyncActivity = millis();
+  phoneWake.extend(millis());                // progress: the wake goes on (30 minutes take ~10)
+  if (!shell::locked()) shell::wake();       // and no auto-lock (it would turn Bluetooth off)
+  for (int i = 0; i < 16; i++) {             // as fast as the link takes them (~3x realtime)
+    const size_t at = noteSend.file.position();
+    const size_t got = noteSend.file.read(reinterpret_cast<uint8_t *>(noteSendBuf), per * 2) / 2;
+    const bool end = got == 0;
+    if (!end && relay::sendRecordingFrame(noteSendBuf, got)) continue;
+    if (!end && ble::connected()) {          // the link is busy: the same frame next pass
+      noteSend.file.seek(at);
       return;
     }
+    noteSend.file.close();
+    noteSend.active = false;
+    ble::notify(recEndEvent(noteSend.name, end));
+    LOGI("note", "%s %s to the phone", noteSend.name.c_str(), end ? "sent" : "NOT sent (the phone went)");
+    return;
   }
 }
 
 void registerRecordingCommands() {
   ble::on("companion.recordings", [](JsonObjectConst args, JsonObject reply) {
     const std::string who = args["companion"] | companions::active().id;
+    const int offset = args["offset"] | 0, limit = std::min(args["limit"] | 50, 50);
+    const std::vector<RecordingMeta> all = note::list(who);
+    reply["total"] = all.size();
     JsonArray list = reply["recordings"].to<JsonArray>();
-    for (const RecordingMeta &m : note::list(who)) {
+    for (int i = offset; i < static_cast<int>(all.size()) && i < offset + limit; i++) {
+      const RecordingMeta &m = all[i];
       JsonObject o = list.add<JsonObject>();
       o["name"] = m.name;
       o["title"] = m.title;
@@ -3499,18 +3531,24 @@ void registerRecordingCommands() {
   // The phone wants a whole recording (it missed it, joined late, or a frame was lost).
   ble::on("rec.fetch", [](JsonObjectConst args, JsonObject reply) {
     const std::string who = args["companion"] | "", name = args["id"] | "";
+    const uint32_t from = args["from"] | 0u;  // samples the phone already has (an interrupted fetch)
+    if (who.empty() || name.empty() || name.find('/') != std::string::npos || name.find("..") != std::string::npos) {
+      reply["ok"] = false;
+      reply["error"] = "bad name";
+      return;
+    }
     File f = SD_MMC.open(note::path(who, name, "wav"));
     if (!f || noteSend.active || note::active()) {
       reply["ok"] = false;
       reply["error"] = !f ? "no such recording" : "busy";
       return;
     }
-    f.seek(44);
+    f.seek(44 + static_cast<size_t>(from) * 2 < f.size() ? 44 + static_cast<size_t>(from) * 2 : 44);
     std::string title = name;
     for (const RecordingMeta &m : note::list(who))
       if (m.name == name) title = m.title;
     relay::resetRecording();
-    ble::notify(recBeginEvent(name, who, title));
+    ble::notify(recBeginEvent(name, who, title, f.position() > 44 ? (f.position() - 44) / 2 : 0));
     noteSend.active = true;
     noteSend.file = f;
     noteSend.companion = who;
@@ -4134,6 +4172,13 @@ void setup() {
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
   config.wakeApp = [] { player.powerUp(); };
+  config.beforeLock = [] {  // a recording ends (Done) while Bluetooth is still on: the phone hears its end
+    if (deckOpen) finishDeck(deck.lockOrPower(millis()) == NoteDeck::Event::Done);
+  };
+  config.beforePowerOff = [] {  // PWR held or the battery empty: the part being recorded is kept
+    if (deckOpen) finishDeck(deck.lockOrPower(millis()) == NoteDeck::Event::Done);
+    else if (note::active()) note::finish(true);
+  };
   config.nowPlaying = [] {  // the lock screen's bottom line: a missed alarm, else a running timer
     if (missedAlarmLine.length()) return missedAlarmLine;
     const TimerState &t = moments::timer();
@@ -4320,7 +4365,10 @@ void loop() {
   if (!bootDown) downAt = 0;
   else if (!downAt) downAt = millis();
   const bool held = bootDown && millis() - downAt >= kHoldMs;
-  if (deckOpen) pollDeck(bootDown);
+  static uint32_t bootUpSince = 0;  // the release, debounced for the deck
+  if (bootDown) bootUpSince = 0;
+  else if (!bootUpSince) bootUpSince = millis();
+  if (deckOpen) pollDeck(held, bootUpSince && millis() - bootUpSince >= 40);
   if (notePlaying && held) player.stop();
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
   if (held && firing.active && static_cast<int32_t>(downAt - firing.startedMs) >= 0) {
@@ -4378,6 +4426,10 @@ void loop() {
   pollNoteSend();
   pollReaction();
   pollTypedTurn();
+  if (deckPending && millis() - deckPendingAt > 120000) {
+    deckPending = false;
+    LOGW("note", "the deck didn't open in time: dropped");
+  }
   if (deckPending && !deckOpen && (info.state == Talk::After || info.state == Talk::Ready) && !voice::playing() &&
       !live.inTurn() && !writing && !reading) {
     deckPending = false;
@@ -4464,9 +4516,8 @@ void loop() {
     }
   }
   if (noteTestUntil) {
-    static int16_t chunk[voice::kChunkFrames];
     size_t frames = 0;
-    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    while (voice::nextChunk(noteChunk, frames)) note::add(noteChunk, frames);
     if (millis() > noteTestUntil) {
       noteTestUntil = 0;
       voice::stopListening();

@@ -57,6 +57,14 @@ int main() {
     CHECK("end() -> Idle, Bluetooth off", p.stage() == PhoneWake::Stage::Idle && !p.bluetoothOn() &&
                                               p.poll(2000, true, true, false) == PhoneWake::Stage::Idle);
   }
+  {
+    PhoneWake p;
+    p.start(0);
+    p.poll(5000, true, true, false);
+    p.extend(170000);  // a recording still on its way to the phone
+    CHECK("progress extends the 3 minutes", p.poll(200000, true, true, false) == PhoneWake::Stage::Phone &&
+                                                p.poll(350000, true, true, false) == PhoneWake::Stage::Done);
+  }
   CHECK("jobs done: nothing left", PhoneWake::jobsDone(false, false, false, false, 0));
   CHECK("jobs done: a line or a plan left", !PhoneWake::jobsDone(true, false, false, false, 0) &&
                                                 !PhoneWake::jobsDone(false, false, false, true, 0));

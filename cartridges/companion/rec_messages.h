@@ -19,7 +19,8 @@
 // and a closing {id, done: true}. Matched by id, so texts for older recordings land where they belong.
 // Plain C++ (host-tested).
 
-std::string recBeginEvent(const std::string &id, const std::string &companion, const std::string &title);
+// from: a fetch picking up where an interrupted one stopped (samples already with the phone; 0 = none).
+std::string recBeginEvent(const std::string &id, const std::string &companion, const std::string &title, uint32_t from = 0);
 std::string recPartEvent(const std::string &id, int n);
 std::string recUndoEvent(const std::string &id);
 std::string recEndEvent(const std::string &id, bool done);

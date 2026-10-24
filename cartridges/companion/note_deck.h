@@ -12,8 +12,10 @@
 class NoteDeck {
  public:
   static constexpr uint32_t kIdleCloseMs = 120000, kPausedDoneMs = 300000, kMaxMs = 1800000, kWarnMs = 1770000;
+  static constexpr uint32_t kConfirmMs = 10000;  // the discard question goes away (as Tape's)
+  static constexpr uint32_t kMinPartMs = 200;    // shorter holds are a bounce, not a part
   enum class State { Closed, Waiting, Recording, Paused, ConfirmDiscard };
-  enum class Event { None, PartStart, PartEnd, Undo, Warn, Done, Discard, CloseEmpty };
+  enum class Event { None, PartStart, PartEnd, PartDropped, Undo, Warn, Done, Discard, CloseEmpty };
 
   void open(uint32_t now) {
     *this = NoteDeck();
@@ -27,6 +29,11 @@ class NoteDeck {
       return Event::PartStart;
     }
     if (!down && state_ == State::Recording) {
+      if (now - partStart_ < kMinPartMs) {  // a bounce: main.cpp cuts it off the card (note::undo)
+        state_ = parts_.empty() ? State::Waiting : State::Paused;
+        pausedAt_ = now;
+        return Event::PartDropped;
+      }
       endPart(now);
       return Event::PartEnd;
     }
@@ -38,10 +45,11 @@ class NoteDeck {
     return Event::Undo;
   }
   Event done() { return finish(); }
-  Event discard(bool confirmed) {
+  Event discard(bool confirmed, uint32_t now = 0) {
     if (parts_.empty() && state_ != State::Recording) return close(Event::CloseEmpty);
     if (!confirmed) {
       state_ = State::ConfirmDiscard;
+      askedAt_ = now ? now : pausedAt_;
       return Event::None;
     }
     return close(Event::Discard);
@@ -49,7 +57,7 @@ class NoteDeck {
   void keep() {  // "No" to the discard question
     if (state_ == State::ConfirmDiscard) state_ = parts_.empty() ? State::Waiting : State::Paused;
   }
-  Event cancel() { return discard(false); }
+  Event cancel(uint32_t now = 0) { return discard(false, now); }
   Event lockOrPower(uint32_t now) {
     if (state_ == State::Recording) endPart(now);
     return finish();
@@ -60,6 +68,12 @@ class NoteDeck {
         return now - openedAt_ >= kIdleCloseMs ? close(Event::CloseEmpty) : Event::None;
       case State::Paused:
         return now - pausedAt_ >= kPausedDoneMs ? finish() : Event::None;
+      case State::ConfirmDiscard:
+        if (now - askedAt_ >= kConfirmMs) {  // unanswered: back to paused, its 5 minutes start again
+          state_ = parts_.empty() ? State::Waiting : State::Paused;
+          pausedAt_ = openedAt_ = now;
+        }
+        return Event::None;
       case State::Recording: {
         const uint32_t total = recordedMs() + (now - partStart_);
         if (total >= kMaxMs) {
@@ -101,6 +115,6 @@ class NoteDeck {
   }
   State state_ = State::Closed;
   std::vector<uint32_t> parts_;  // each part's length
-  uint32_t openedAt_ = 0, partStart_ = 0, pausedAt_ = 0;
+  uint32_t openedAt_ = 0, partStart_ = 0, pausedAt_ = 0, askedAt_ = 0;
   bool warned_ = false;
 };

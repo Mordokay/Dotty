@@ -42,11 +42,12 @@ int main() {
     m.isDraft = true;
     m.textAt = now;
     m.points = {"bananas", "the moon", "a rocket", "a squire"};
+    m.open = true;
     RecordingMeta back;
     const bool ok = parseRecordingMeta(recordingMetaJson(m), back);
     CHECK("meta round trip", ok && back.name == m.name && back.title == m.title && back.created == m.created &&
                                  back.ms == 134000 && back.parts == 3 && back.synced && back.isDraft && back.textAt == now &&
-                                 back.summary == m.summary && back.points.size() == 4 && back.points[3] == "a squire");
+                                 back.summary == m.summary && back.points.size() == 4 && back.points[3] == "a squire" && back.open);
     CHECK("broken meta is false", !parseRecordingMeta("{x", back));
   }
   const std::vector<RecordingMeta> list = {

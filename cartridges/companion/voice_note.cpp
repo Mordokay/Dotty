@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <map>
 
 #include "companions.h"
 #include "core_ble.h"
@@ -33,6 +34,8 @@ bool active_ = false, inPart = false, streaming_ = false;
 std::string companion_;
 RecordingMeta meta;
 std::vector<int16_t> pending;  // samples waiting to fill a frame for the phone
+// Each companion's list, read once (every read opened and parsed every .json): dropped on any change.
+std::map<std::string, std::vector<RecordingMeta>> cache;
 
 void header(uint8_t *h, uint32_t bytes) {
   auto put32 = [&](int at, uint32_t v) { memcpy(h + at, &v, 4); };
@@ -116,6 +119,7 @@ String path(const std::string &companion, const std::string &name, const char *e
 }
 
 bool saveMeta(const std::string &companion, const RecordingMeta &m) {
+  cache.erase(companion);
   return companions::writeText(path(companion, m.name, "json"), recordingMetaJson(m));
 }
 
@@ -127,6 +131,7 @@ bool begin(const std::string &companion, const std::string &title) {
   meta.created = time(nullptr);
   meta.name = recordingName(meta.created);
   meta.title = title.empty() ? "Voice note" : title;
+  meta.open = true;  // until finish: a power cut leaves it open, and boot repairs it
   file = SD_MMC.open(path(companion, meta.name, "wav"), FILE_WRITE);
   if (!file) return false;
   uint8_t h[kHeaderBytes];
@@ -203,8 +208,10 @@ std::string finish(bool keep) {
   file.close();
   xSemaphoreGive(fileLock);
   active_ = false;
-  if (streaming_) ble::notify(recEndEvent(meta.name, keep));
-  if (!keep || dataBytes == 0) {
+  const bool kept = keep && dataBytes > 0;  // nothing recorded: the phone drops it too
+  if (streaming_) ble::notify(recEndEvent(meta.name, kept));
+  meta.open = false;
+  if (!kept) {
     remove(companion_, meta.name);
     LOGI("note", "%s discarded", meta.name.c_str());
     return "";
@@ -228,6 +235,8 @@ const RecordingMeta &current() {
 }
 
 std::vector<RecordingMeta> list(const std::string &companion) {
+  const auto hit = cache.find(companion);
+  if (hit != cache.end()) return hit->second;
   std::vector<RecordingMeta> out;
   File d = SD_MMC.open(dir(companion));
   if (!d || !d.isDirectory()) return out;
@@ -242,10 +251,12 @@ std::vector<RecordingMeta> list(const std::string &companion) {
   }
   d.close();
   std::sort(out.begin(), out.end(), [](const RecordingMeta &a, const RecordingMeta &b) { return a.created > b.created; });
+  cache[companion] = out;
   return out;
 }
 
 bool remove(const std::string &companion, const std::string &name) {
+  cache.erase(companion);
   bool any = false;
   for (const char *ext : {"wav", "json", "txt"}) any = SD_MMC.remove(path(companion, name, ext)) || any;
   return any;
@@ -254,6 +265,7 @@ bool remove(const std::string &companion, const std::string &name) {
 void repairAll() {
   for (const std::string &id : companions::list().order()) {
     for (const RecordingMeta &m : list(id)) {
+      if (!m.open) continue;  // closed properly: its header is right (only an interrupted one needs a look)
       File f = SD_MMC.open(path(id, m.name, "wav"), "r+");
       if (!f || f.size() < kHeaderBytes) continue;
       uint8_t h[kHeaderBytes];
@@ -261,13 +273,15 @@ void repairAll() {
       uint32_t stated;
       memcpy(&stated, h + 40, 4);
       const HeaderFix fix = headerFix(f.size(), stated);
-      if (memcmp(h, "RIFF", 4) != 0 || !fix.needed) continue;
-      header(h, fix.dataBytes);
-      f.seek(0);
-      f.write(h, sizeof(h));
-      f.close();
       RecordingMeta fixed = m;
+      fixed.open = false;
       fixed.ms = fix.dataBytes / (kRate * 2 / 1000);
+      if (memcmp(h, "RIFF", 4) == 0 && fix.needed) {
+        header(h, fix.dataBytes);
+        f.seek(0);
+        f.write(h, sizeof(h));
+      }
+      f.close();
       saveMeta(id, fixed);
       LOGI("note", "repaired %s/%s (%.1f s)", id.c_str(), m.name.c_str(), fixed.ms / 1000.0f);
     }

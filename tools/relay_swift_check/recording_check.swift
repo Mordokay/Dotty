@@ -45,4 +45,16 @@ check("a part after an undo carries on (no gap)", undone.partCount == 2 && undon
 
 let wav = RecordingParts.wav(Array(repeating: Int16(0), count: 16000))
 check("a WAV of 1 s at 16 kHz", wav.count == 44 + 32000 && wav.prefix(4) == Data("RIFF".utf8))
+var resumed = RecordingParts()
+resumed.prefill(Array(repeating: Int16(7), count: 1140))
+resumed.add(frame(5, ramp))
+check("a resumed fetch keeps what came before", resumed.samples.count == 1140 + 570 && resumed.samples.first == 7 && !resumed.gap)
+
+let now = Date(timeIntervalSince1970: 1_800_000_000)
+check("retry: the first try at once", RecordingRetry.shouldTry(attempts: 0, last: nil, now: now))
+check("retry: the second after an hour", !RecordingRetry.shouldTry(attempts: 1, last: now.addingTimeInterval(-3000), now: now) &&
+      RecordingRetry.shouldTry(attempts: 1, last: now.addingTimeInterval(-3700), now: now))
+check("retry: then a day apart", !RecordingRetry.shouldTry(attempts: 2, last: now.addingTimeInterval(-80000), now: now) &&
+      RecordingRetry.shouldTry(attempts: 2, last: now.addingTimeInterval(-90000), now: now))
+check("retry: never after 5", !RecordingRetry.shouldTry(attempts: 5, last: now.addingTimeInterval(-9_000_000), now: now))
 exit(failed == 0 ? 0 : 1)

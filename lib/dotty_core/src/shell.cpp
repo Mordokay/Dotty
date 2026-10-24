@@ -780,6 +780,7 @@ void wake() {
 void lock() {
   if (isLocked) return;
   lastLockToggle = millis();
+  if (cfg.beforeLock) cfg.beforeLock();
   isLocked = true;
   nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
   if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock

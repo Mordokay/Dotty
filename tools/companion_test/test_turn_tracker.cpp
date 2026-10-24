@@ -20,7 +20,8 @@ int main() {
   o = t.message(false, Names{"list_moments", "set_moment"}, false, 0);
   CHECK("list_moments applied, not answered", o.apply.at(0) && !o.answer.at(0) && o.apply.at(1) && o.answer.at(1));
   o = t.message(false, Names{"play_recording", "start_recording", "delete_recording"}, false, 0);
-  CHECK("play_recording applied, not answered", o.apply.at(0) && !o.answer.at(0) && o.answer.at(1) && !o.answer.at(2));
+  CHECK("play_recording and delete_recording applied and answered (their result goes back silently)",
+        o.apply.at(0) && o.answer.at(0) && o.answer.at(1) && o.answer.at(2));
   o = t.message(false, Names{"set_name"}, false, 0);
   CHECK("set_name in a question: applied and answered", o.apply.at(0) && o.answer.at(0));
   o = t.message(false, Names{}, true, 800);  // its own turn, no speech yet

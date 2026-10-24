@@ -20,6 +20,7 @@ struct RecordingMeta {
   bool synced = false;   // the iPhone has the whole recording
   bool isDraft = false;  // the transcript is Apple's draft (the final one hasn't come yet)
   int64_t textAt = 0;    // when the transcript arrived (0 = none yet)
+  bool open = false;     // still being recorded (a power cut leaves it so: boot repairs only these)
   std::string summary;
   std::vector<std::string> points;
 };

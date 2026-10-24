@@ -21,13 +21,20 @@ final class RecordingService {
     private weak var link: DottyLink?
     private var current: Live?
     private var syncing = false
-    private var background: UIBackgroundTaskIdentifier = .invalid
+    /// Recordings being finished, transcribed or fetched: nothing starts the same work twice (a sync
+    /// arriving while one is still being handled used to fetch the whole file again).
+    private var inFlight: Set<String> = []
+    /// What an interrupted fetch had received (the next fetch asks Dotty to go on from there).
+    private var partial: [String: [Int16]] = [:]
+    private var lastFrameAt = Date.distantPast
     /// Up to this length the final transcript is made from the audio itself: the request (base64) must stay
     /// under Gemini's 20 MB; longer ones get the draft corrected without the audio.
     private static let audioLimit: Double = 6 * 60
 
     private struct Live {
         var id: String, companion: String, title: String
+        var fetch = false  // a whole file Dotty resends (rec.fetch), not one being recorded
+        var background: UIBackgroundTaskIdentifier = .invalid
         var parts = RecordingParts()
         var drafts: [String] = []  // one per part
         var request: SFSpeechAudioBufferRecognitionRequest?
@@ -53,15 +60,23 @@ final class RecordingService {
     private func event(_ m: DottyMessage) {
         switch m.event {
         case "rec.begin":
+            if let old = current { UIApplication.shared.endBackgroundTask(old.background) }
             stopRecognition()
-            current = Live(id: m["id"] as? String ?? "", companion: m["companion"] as? String ?? "",
-                           title: m["title"] as? String ?? "Voice note")
-            if background == .invalid {
-                background = UIApplication.shared.beginBackgroundTask(withName: "voice-note") { [weak self] in
-                    Task { @MainActor in self?.endBackground() }
-                }
+            let id = m["id"] as? String ?? ""
+            var live = Live(id: id, companion: m["companion"] as? String ?? "", title: m["title"] as? String ?? "Voice note")
+            live.fetch = inFlight.contains(id)
+            let from = m["from"] as? Int ?? 0
+            if from > 0, let before = partial[id], before.count == from {
+                live.parts.prefill(before)
+                live.drafts = [""]
             }
-            log("recording \(current?.title ?? "")")
+            partial[id] = nil
+            live.background = Self.beginBackground("voice-note")
+            current = live
+            lastFrameAt = Date()
+            log("\(live.fetch ? "receiving" : "recording") \(live.title)\(from > 0 ? " from \(from / 16000) s" : "")")
+        case _ where (m["id"] as? String) != current?.id && (m.event?.hasPrefix("rec.") ?? false):
+            break  // about another recording (an old fetch's end after a new recording began)
         case "rec.part":
             finishPartRecognition()
             current?.parts.startPart()
@@ -78,8 +93,13 @@ final class RecordingService {
             current = nil
             if m["how"] as? String != "done" {
                 live.task?.cancel()
-                log("discarded on Dotty")
-                endBackground()
+                if live.fetch && !live.parts.gap {  // the link went: the next fetch goes on from here
+                    partial[live.id] = live.parts.samples
+                } else {
+                    inFlight.remove(live.id)
+                }
+                log(live.fetch ? "\(live.title): the transfer stopped, it goes on later" : "discarded on Dotty")
+                UIApplication.shared.endBackgroundTask(live.background)
                 return
             }
             live.request?.endAudio()
@@ -93,6 +113,7 @@ final class RecordingService {
 
     private func frame(_ data: Data) {
         guard current != nil else { return }
+        lastFrameAt = Date()
         if current?.parts.partCount == 0 {  // a whole file resent (rec.fetch): one part, no rec.part
             current?.parts.startPart()
             current?.drafts.append("")
@@ -150,37 +171,86 @@ final class RecordingService {
     // MARK: - After Done
 
     private func finished(_ live: Live) async {
-        finishedDrafts[live.id] = live.drafts
-        try? await Task.sleep(nanoseconds: 1_500_000_000)  // the last part's final words
-        let draft = (finishedDrafts.removeValue(forKey: live.id) ?? live.drafts).filter { !$0.isEmpty }.joined(separator: " ")
+        inFlight.insert(live.id)
+        defer {
+            inFlight.remove(live.id)
+            UIApplication.shared.endBackgroundTask(live.background)
+        }
         if live.parts.gap {
             log("\(live.title): frames were lost, asking Dotty for the whole recording")
-            _ = try? await link?.send("rec.fetch", ["companion": live.companion, "id": live.id], timeout: 10)
+            await fetch(companion: live.companion, id: live.id)
             return
         }
+        // Saved at once: a sync arriving meanwhile finds it (and doesn't fetch it again).
         let samples = live.parts.samples
         var r = RecordingStore.find(companion: live.companion, id: live.id)
             ?? LocalRecording(id: live.id, companion: live.companion, title: live.title,
                               created: RecordingStore.date(fromName: live.id), duration: 0)
         r.duration = Double(samples.count) / 16000
-        r.draft = draft
         RecordingStore.saveAudio(r, wav: RecordingParts.wav(samples))
+        RecordingStore.save(r)
+        finishedDrafts[live.id] = live.drafts
+        try? await Task.sleep(nanoseconds: 1_500_000_000)  // the last part's final words
+        var draft = (finishedDrafts.removeValue(forKey: live.id) ?? live.drafts).filter { !$0.isEmpty }.joined(separator: " ")
+        if draft.isEmpty { draft = await fileDraft(RecordingStore.wavURL(r)) }  // no live words (the background, a fetch)
+        r.draft = draft
         RecordingStore.save(r)
         log("\(r.title): \(Int(r.duration)) s, Apple's draft \(draft.split(separator: " ").count) words")
         if !draft.isEmpty { await sendText(r, transcript: draft, isDraft: true) }  // the reaction needs it now
         await makeFinal(r)
-        endBackground()
+    }
+
+    /// Apple's draft from the saved file (when nothing came live).
+    private func fileDraft(_ url: URL) async -> String {
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized,
+              let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable else { return "" }
+        let request = SFSpeechURLRecognitionRequest(url: url)
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        var text = ""
+        var done = false
+        let task = SpeechAuth.recognize(recognizer, request, onText: { t, final in
+            text = t
+            if final { done = true }
+        }, onError: { _ in done = true })
+        for _ in 0..<600 where !done { try? await Task.sleep(nanoseconds: 100_000_000) }
+        task.cancel()
+        return text
+    }
+
+    /// Asks Dotty for the whole recording (or the rest of an interrupted transfer) and waits while it comes.
+    private func fetch(companion: String, id: String) async {
+        let from = partial[id]?.count ?? 0
+        inFlight.insert(id)
+        log("fetching \(id) from Dotty\(from > 0 ? " (from \(from / 16000) s)" : "")")
+        guard (try? await link?.send("rec.fetch", ["companion": companion, "id": id, "from": from], timeout: 10)) != nil else {
+            inFlight.remove(id)
+            return
+        }
+        lastFrameAt = Date()
+        // As long as frames keep coming (a 30-minute note takes ~10 minutes), not a fixed time.
+        while current?.id == id || (inFlight.contains(id) && Date().timeIntervalSince(lastFrameAt) < 15) {
+            if current?.id != id && partial[id] != nil { break }  // stopped: it goes on next time
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
     }
 
     /// Gemini's transcript (from the audio when short enough) and the summary, then to Dotty.
     private func makeFinal(_ start: LocalRecording) async {
         var r = start
+        guard !r.nothingSaid, RecordingRetry.shouldTry(attempts: r.finalAttempts, last: r.lastFinalAttempt, now: Date()) else { return }
+        let task = Self.beginBackground("voice-note-final")
+        defer { UIApplication.shared.endBackgroundTask(task) }
+        r.finalAttempts += 1
+        r.lastFinalAttempt = Date()
+        RecordingStore.save(r)
         let memories = await memoryHints(r.companion)
         do {
             let transcriptSchema: [String: Any] = ["type": "OBJECT", "properties": ["transcript": ["type": "STRING"]], "required": ["transcript"]]
             let hints = "Hints: the note's title is \"\(r.title)\"; names and places the speaker knows: \(memories.isEmpty ? "none" : memories)."
-            let answer: [String: Any]
-            if r.duration <= Self.audioLimit, let wav = try? Data(contentsOf: RecordingStore.wavURL(r)) {
+            var answer: [String: Any] = ["transcript": r.final]  // a transcript from an earlier try is kept
+            if !r.final.isEmpty {
+                // the summary alone failed last time
+            } else if r.duration <= Self.audioLimit, let wav = try? Data(contentsOf: RecordingStore.wavURL(r)) {
                 answer = try await GeminiText.generateWithAudio(
                     "Transcribe this voice note exactly as spoken, in English. The speaker is fluent but not a native speaker and has an " +
                     "accent: use the hints to resolve words that are hard to hear. \(hints) An automatic draft (it may contain " +
@@ -193,6 +263,14 @@ final class RecordingService {
                     "\n\nTranscript: \(r.draft)", schema: transcriptSchema)
             }
             r.final = (answer["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if r.final.isEmpty {  // nothing was said: no summary, no more tries
+                r.nothingSaid = true
+                r.needsFinal = false
+                RecordingStore.save(r)
+                log("\(r.title): no words in it")
+                return
+            }
+            RecordingStore.save(r)
             let summarySchema: [String: Any] = ["type": "OBJECT", "properties": [
                 "summary": ["type": "STRING"], "points": ["type": "ARRAY", "items": ["type": "STRING"]], "title": ["type": "STRING"],
             ], "required": ["summary", "points", "title"]]
@@ -276,34 +354,38 @@ final class RecordingService {
     func sync() async {
         guard !syncing, let link else { return }
         syncing = true
-        defer { syncing = false }
+        let task = Self.beginBackground("voice-note-sync")
+        defer {
+            syncing = false
+            UIApplication.shared.endBackgroundTask(task)
+        }
         guard let list = try? await link.send("companion.list") else { return }
         for c in list["companions"] as? [[String: Any]] ?? [] {
             guard let companion = c["id"] as? String,
                   let r = try? await link.send("companion.recordings", ["companion": companion]) else { continue }
             for item in r["recordings"] as? [[String: Any]] ?? [] {
-                guard let id = item["name"] as? String else { continue }
+                guard let id = item["name"] as? String, !inFlight.contains(id), current?.id != id else { continue }
                 let synced = item["synced"] as? Bool ?? false, hasText = item["text"] as? Bool ?? false
                 let isDraft = item["isDraft"] as? Bool ?? false
                 if let local = RecordingStore.find(companion: companion, id: id),
                    FileManager.default.fileExists(atPath: RecordingStore.wavURL(local).path) {
-                    if local.needsFinal || local.final.isEmpty { await makeFinal(local) }
+                    if local.nothingSaid { continue }
+                    if local.needsFinal || local.final.isEmpty || local.summary.isEmpty { await makeFinal(local) }
                     else if !hasText || isDraft || !local.textSent { await sendText(local, transcript: local.final, isDraft: false) }
                 } else if !synced || !hasText {
-                    log("fetching \(id) from Dotty")
-                    _ = try? await link.send("rec.fetch", ["companion": companion, "id": id], timeout: 10)
-                    for _ in 0..<120 where current != nil || RecordingStore.find(companion: companion, id: id) == nil {
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)  // the file comes back as a recording
-                    }
+                    await fetch(companion: companion, id: id)
                 }
             }
         }
     }
 
-    private func endBackground() {
-        if background != .invalid {
-            UIApplication.shared.endBackgroundTask(background)
-            background = .invalid
+    /// A background task that ends itself if iOS runs out of patience (the expiry handler runs on main).
+    private static func beginBackground(_ name: String) -> UIBackgroundTaskIdentifier {
+        final class Box: @unchecked Sendable { var id: UIBackgroundTaskIdentifier = .invalid }
+        let box = Box()
+        box.id = UIApplication.shared.beginBackgroundTask(withName: name) {
+            UIApplication.shared.endBackgroundTask(box.id)
         }
+        return box.id
     }
 }

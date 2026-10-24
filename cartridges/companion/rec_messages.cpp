@@ -22,12 +22,13 @@ void readFields(JsonObjectConst args, RecText &t) {
 
 }  // namespace
 
-std::string recBeginEvent(const std::string &id, const std::string &companion, const std::string &title) {
+std::string recBeginEvent(const std::string &id, const std::string &companion, const std::string &title, uint32_t from) {
   JsonDocument d;
   d["event"] = "rec.begin";
   d["id"] = id;
   d["companion"] = companion;
   d["title"] = title;
+  if (from) d["from"] = from;
   return serialize(d);
 }
 

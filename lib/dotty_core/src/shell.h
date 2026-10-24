@@ -29,6 +29,9 @@ struct Config {
   String (*nowPlaying)() = nullptr;
   // Last chance to stop things before the power-off picture is drawn.
   void (*beforePowerOff)() = nullptr;
+  // Called as Dotty locks (by PWR or the auto-lock), before Bluetooth goes off: e.g. finishing a recording
+  // whose end the phone still needs to hear.
+  void (*beforeLock)() = nullptr;
   // Periodic work while locked (e.g. fetch the weather). Every lockedWakeSeconds the
   // shell wakes the firmware (even from sleep) and calls onLockedWake on the main loop;
   // return true if the lock screen should be redrawn. 0 = no extra wake-ups (the lock
