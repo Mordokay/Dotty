@@ -11,6 +11,14 @@ struct RelayLogView: View {
                 VStack(alignment: .leading, spacing: Spacing.s) {
                     PageHeader(title: "Relay log", subtitle: "Chats with Dotty going through this iPhone.")
                         .padding(.top, Spacing.l)
+                    Button {
+                        Task { relay.log(await SpeechProbe.run { relay.log($0) }) }
+                    } label: {
+                        Label("Background speech test", systemImage: "waveform")
+                    }
+                    .buttonStyle(.quiet())
+                    Text("Tap it, lock the iPhone at once, unlock after 30 s: the lines below say whether Apple's speech recognition kept going in the background.")
+                        .font(.lpCaption).foregroundStyle(Color.inkFaint)
                     if relay.lines.isEmpty {
                         Text("Nothing yet. Hold BOOT on Dotty with this iPhone connected.").font(.lpCaption).foregroundStyle(Color.inkFaint)
                     }

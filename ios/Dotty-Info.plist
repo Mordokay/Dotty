@@ -8,6 +8,9 @@
 	<array>
 		<string>bluetooth-central</string>
 	</array>
+	<!-- Voice notes recorded on Dotty become text on this iPhone (Apple's on-device recognition). -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Dotty turns your voice notes into text on this iPhone.</string>
 	<!-- Songs go to Dotty over the home Wi-Fi (plain HTTP to its local address). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
