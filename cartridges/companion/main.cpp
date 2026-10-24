@@ -41,6 +41,7 @@
 #include "moment_lines.h"
 #include "moments.h"
 #include "line_job.h"
+#include "phone_wake.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -205,6 +206,19 @@ LastLine linePending;      // its text pieces, timed
 size_t lineFrames = 0;     // 24 kHz frames received
 uint32_t lineCooldownUntil = 0, lineReadingAt = 0, lastLineScan = 0;
 void abortLine(const char *why);
+// The phone wake (phone_wake.h): a session opened only to record lines (no chat), and the daily plan.
+PhoneWake phoneWake;
+bool bgSession = false;     // the open (or opening) session records lines: no chat, the recording instruction
+bool planRunning = false;   // the day's plan is with the text model
+bool forcePlan = false;     // dev z: plan now, whatever the time
+int bgFailures = 0;         // lines that failed in this wake: it gives up after two
+int64_t lastWake = -1, plannedDay = -1;  // NVS companion/lastWake, plannedDay (read on first use)
+uint32_t bgOpenedAt = 0;
+const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
+bool jobsDue();
+void loadWakeTimes();
+void pollPhoneWake();
+void backgroundPoll();
 
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
@@ -310,6 +324,7 @@ uint32_t resumeKeptAt = 0;  // when a conversation was kept to resume (kResumeKe
 void disconnect(const char *why) {
   reviewStart = 0;
   abortLine(why);
+  bgSession = false;
   ble::advertiseSlowly(false);
   if (!live.resumeHandle().empty()) resumeKeptAt = millis();
   path.end();
@@ -577,7 +592,8 @@ void launchJob() {
     return;
   }
   jobPending = false;
-  if (live.overRelay() && live.connected()) {
+  // Through the phone: in a relay chat, or with no session at all (a phone wake's plan or line).
+  if ((live.overRelay() && live.connected()) || (!live.connected() && relay::phoneReady())) {
     relayFetch = {true, jobs.start(), relay::fetch(kWriterModel, writerBody), millis()};
     LOGI(jobKind == Job::Recall ? "recall" : "writer", "through the iPhone (%u bytes)", static_cast<unsigned>(writerBody.size()));
     return;
@@ -867,6 +883,11 @@ GeminiLive::Callbacks callbacks() {
 
 LiveConfig sessionConfig() {
   LiveConfig config;
+  if (bgSession) {  // recording lines: the companion's voice and character, nothing else
+    config.voice = sessionVoice.c_str();
+    config.systemInstruction = recordingInstruction(personaSection);
+    return config;
+  }
   config.resumeHandle = live.resumeHandle();  // after a goAway: carry on the conversation
   config.voice = sessionVoice.c_str();
   config.textOnly = settings.textOnly;
@@ -1822,6 +1843,11 @@ void armLockedWake() {
   int64_t next = nextDue(moments::all());
   const TimerState &t = moments::timer();
   if (t.running && !t.paused && (!next || t.endsAt - 60 < next)) next = t.endsAt - 60;  // the last minute
+  if (jobsDue()) {  // the next phone wake
+    loadWakeTimes();
+    const int64_t wake = phoneWake.nextWakeAt(lastWake, moments::rules().wakeEvery, true);
+    if (!next || wake < next) next = wake;
+  }
   shell::wakeLockedAt(static_cast<time_t>(next));
 }
 
@@ -2178,12 +2204,17 @@ void lineSaved() {
 void pollLines() {
   lineSaved();
   if (lineJob.step() == LineJob::Step::Done || lineJob.step() == LineJob::Step::Failed) {
-    if (lineJob.step() == LineJob::Step::Failed) lineCooldownUntil = millis() + 60000;
+    if (lineJob.step() == LineJob::Step::Failed) {
+      lineCooldownUntil = millis() + 60000;
+      if (bgSession) bgFailures++;
+    }
     lineJob.reset();
     capturingLine = false;
   }
-  const bool idleChat = live.ready() && !connecting && (info.state == Talk::After || info.state == Talk::Ready) &&
-                        !writing && !reading && !reviewStart && !live.inTurn() && !voice::playing() && !firing.active;
+  const bool idleChat = (bgSession ? live.ready() && !live.inTurn()
+                                   : live.ready() && !connecting && (info.state == Talk::After || info.state == Talk::Ready) &&
+                                         !writing && !reading && !reviewStart && !live.inTurn() && !voice::playing()) &&
+                        !firing.active;
   if (lineJob.busy()) {
     lastTurnAt = millis();  // the chat stays open (its review waits) until the line is done
     info.note = lineNote;
@@ -2191,7 +2222,7 @@ void pollLines() {
   }
   switch (lineJob.step()) {
     case LineJob::Step::Idle: {
-      if (!idleChat || jobs.busy() || static_cast<int32_t>(millis() - lineCooldownUntil) < 0) return;
+      if (!idleChat || jobs.busy() || planRunning || static_cast<int32_t>(millis() - lineCooldownUntil) < 0) return;
       if (millis() - lastLineScan < 3000) return;
       lastLineScan = millis();
       LineWork w;
@@ -2202,6 +2233,18 @@ void pollLines() {
       for (const Topic &t : w.topics)
         if (t.kind == "alarm") lineNote = "Saving your alarm...";
       lineJob.start(w);
+      if (w.ids.size() == 1 && w.key != "timer") {  // the companion's own lines come written (the plan)
+        const MomentList *list = moments::of(w.companion);
+        const Moment *m = list ? list->find(w.ids[0]) : nullptr;
+        if (m && m->kind == MomentKind::Spontaneous && !m->line.empty()) {
+          Written given;
+          given.ok = true;
+          given.text = m->line;
+          lineJob.written(given);
+          LOGI("line", "%s's %s: written by the plan", w.companion.c_str(), w.key.c_str());
+          return;
+        }
+      }
       writerBody = lineRequest(*who, w.companion == sessionCompanion ? memorySection : std::string(), w.topics, w.at, w.words);
       jobKind = Job::Line;
       LOGI("line", "writing %s's %s (%u topic(s), %d words at most)", w.companion.c_str(), w.key.c_str(),
@@ -2243,6 +2286,221 @@ void pollLines() {
     default:
       return;
   }
+}
+
+// ---------- the phone wake (phone_wake.h) and the daily plan ----------
+// While locked, every wakeEvery minutes when a job is due (a line to record, the day's plan), Bluetooth
+// comes on for the phone; the jobs run through it, or over Wi-Fi when it doesn't come. Unlocked, they
+// run whenever the phone is there and Dotty is idle (an app-made moment records at once).
+
+void loadWakeTimes() {
+  if (lastWake >= 0) return;
+  Preferences p;
+  p.begin("companion", true);
+  lastWake = p.getLong64("lastWake", 0);
+  plannedDay = p.getLong64("plannedDay", 0);
+  p.end();
+}
+
+void saveWakeTimes() {
+  Preferences p;
+  p.begin("companion", false);
+  p.putLong64("lastWake", lastWake);
+  p.putLong64("plannedDay", plannedDay);
+  p.end();
+}
+
+bool planIsDue() {
+  loadWakeTimes();
+  if (!moments::available() || !companions::active().awake()) return false;
+  return forcePlan || planDue(time(nullptr), plannedDay, moments::rules());
+}
+
+bool canRecord() {
+  return !settings.keys.empty() && !usage::outUntilUtc();
+}
+
+// Is there anything for a wake to do? Read from the card at most every 30 s.
+bool jobsDue() {
+  static uint32_t checkedAt = 0;
+  static bool due = false;
+  if (checkedAt && millis() - checkedAt < 30000) return due;
+  checkedAt = millis();
+  LineWork w;
+  due = canRecord() && (planIsDue() || nextLineWork(w, ""));
+  return due;
+}
+
+// A session only for recording: that companion's voice and character, no chat.
+bool startBackgroundSession(const std::string &companion, bool viaPhone) {
+  const Profile *p = companions::find(companion);
+  const int key = ring.pick(nowUtc());
+  if (!p || key < 0) return false;
+  sessionKey = key;
+  sessionKeyText = settings.keys[key];
+  sessionVoice = p->voice.c_str();
+  sessionCompanion = companion;
+  personaSection = personaText(*p);
+  memorySection = companion == companions::active().id ? memories::store().promptSection() : std::string();
+  bgSession = true;
+  awaitingConnect = true;
+  bgOpenedAt = millis();
+  power::setWakeLock(power::kWakeLockNetwork, true);
+  LOGI("wake", "recording session for %s %s", companion.c_str(), viaPhone ? "through the iPhone" : "over Wi-Fi");
+  if (viaPhone) {
+    relayOpenAt = millis();
+    if (live.begin(sessionKeyText.c_str(), sessionConfig(), callbacks(), relayTransport)) return true;
+    disconnect("the phone didn't take it");
+    return false;
+  }
+  wifiBegan = false;
+  cancelConnect = false;
+  connecting = true;
+  connectError = "";
+  if (xTaskCreatePinnedToCore(connectLoop, "companion-connect", 12288, nullptr, 2, &connectTask, 1) != pdPASS) {
+    connecting = false;
+    disconnect("no task");
+    return false;
+  }
+  return true;
+}
+
+// The day's spontaneous lines: written by the text model (through the phone or Wi-Fi), checked, added.
+void pollPlan() {
+  if (planRunning) {
+    Written w;  // parsePlan reads the raw answer: the job hands it over as the text
+    if (!jobs.take(w)) return;
+    planRunning = false;
+    forcePlan = false;
+    const int64_t now = time(nullptr), day = now - now % 86400;
+    std::vector<int64_t> taken;
+    for (const CompanionMoments &c : moments::all())
+      for (const Moment &m : c.list->all())
+        if (m.state == MomentState::Upcoming && m.at - m.at % 86400 == day) taken.push_back(m.at);
+    JsonDocument body;  // parsePlan wants generateContent's answer
+    body["candidates"][0]["content"]["parts"][0]["text"] = w.text;
+    std::string raw;
+    serializeJson(body, raw);
+    const std::vector<PlannedLine> plan = parsePlan(w.ok ? 200 : 500, raw, day, moments::rules(), taken, moments::rules().perDay);
+    MomentList *list = moments::of(companions::active().id);
+    int added = 0;
+    for (const PlannedLine &l : plan) {
+      if (!list || l.at <= now) continue;
+      Moment m;
+      m.kind = MomentKind::Spontaneous;
+      m.at = l.at;
+      m.what = l.what;
+      m.line = l.line;
+      m.style = l.style;
+      m.source = "companion";
+      m.created = now;
+      if (list->add(m) > 0) added++;
+    }
+    if (added) moments::save(companions::active().id);
+    plannedDay = day;  // once a day, even when nothing came back
+    saveWakeTimes();
+    LOGI("wake", "today's plan: %d line(s) (%s)", added, w.ok ? "planned" : w.error.c_str());
+    notifyMoments();
+    return;
+  }
+  if (!planIsDue() || jobs.busy() || lineJob.busy()) return;
+  const bool through = relay::phoneReady() && (!live.connected() || live.overRelay());
+  if (!through && !(bgSession && live.ready())) return;  // over Wi-Fi it needs the session's connection
+  const Profile &who = companions::active();
+  std::string sums = companions::readText(companions::folder(who.id) + "/summaries.jsonl");
+  const int64_t now = time(nullptr), day = now - now % 86400;
+  std::vector<int64_t> taken;
+  for (const CompanionMoments &c : moments::all())
+    for (const Moment &m : c.list->all())
+      if (m.state == MomentState::Upcoming && m.at - m.at % 86400 == day) taken.push_back(m.at);
+  writerBody = planRequest(who, memories::store().promptSection(), summariesSection(sums, 10), day, moments::rules(),
+                           moments::rules().perDay, taken);
+  jobKind = Job::Plan;
+  planRunning = true;
+  LOGI("wake", "planning today's lines (%d)", moments::rules().perDay);
+  launchJob();
+}
+
+void endPhoneWake(const char *how) {
+  if (bgSession || live.connected() || connecting) disconnect("phone wake done");
+  shell::endBluetoothWindow();
+  LOGI("wake", "phone wake: done in %lu s via %s", static_cast<unsigned long>((millis() - bgOpenedAt) / 1000), how);
+  phoneWake.end();
+  bgSession = false;
+  planRunning = false;
+}
+
+void pollPhoneWake() {
+  const int64_t now = time(nullptr);
+  const bool chatting = !bgSession && (live.connected() || connecting || info.state == Talk::Listening);
+  if (phoneWake.stage() == PhoneWake::Stage::Idle) {
+    if (chatting || firing.active || !moments::available() || !jobsDue()) return;
+    loadWakeTimes();
+    if (shell::locked()) {
+      if (now < phoneWake.nextWakeAt(lastWake, moments::rules().wakeEvery, true)) return;
+      shell::bluetoothWindow(40);
+    } else if (!relay::phoneReady() || (info.state != Talk::Offline && info.state != Talk::Error) || now - lastWake < 120) {
+      return;  // unlocked: only with the phone there and nothing else going on (and not over and over)
+    }
+    wakeVia = "nothing";
+    phoneWake.start(millis());
+    bgFailures = 0;
+    bgOpenedAt = millis();
+    lastWake = now;
+    saveWakeTimes();
+    LOGI("wake", "phone wake: %s%s", planIsDue() ? "plan " : "", "record");
+    return;
+  }
+  if (chatting) {  // the user wants to talk: the wake gives way
+    phoneWake.end();
+    shell::endBluetoothWindow();
+    return;
+  }
+  const bool phone = relay::phoneReady();
+  LineWork work;
+  const bool lineLeft = nextLineWork(work, "") && bgFailures < 2;
+  const bool done = !planRunning && !planIsDue() && !lineJob.busy() && !lineLeft;
+  const PhoneWake::Stage stage = phoneWake.poll(millis(), phone, true, done);
+  if (stage == PhoneWake::Stage::Done) return endPhoneWake(wakeVia);
+  if (stage == PhoneWake::Stage::Phone && shell::locked()) shell::bluetoothWindow(30);  // kept open while it works
+  if (stage == PhoneWake::Stage::Wifi && shell::bluetoothWindowOpen()) shell::endBluetoothWindow();
+  // A session that didn't open, or a phone that didn't answer its setup in 10 s.
+  if (bgSession && awaitingConnect && !connecting && !live.connected()) {
+    LOGW("wake", "the recording session didn't open: %s", connectError.c_str());
+    awaitingConnect = false;
+    bgSession = false;
+    bgFailures++;
+  }
+  if (bgSession && awaitingConnect && live.overRelay() && !live.ready() && millis() - relayOpenAt > 10000) {
+    disconnect("the phone didn't answer");
+    bgFailures++;
+  }
+  if (bgSession && live.ready()) awaitingConnect = false;
+  if (stage == PhoneWake::Stage::Phone) wakeVia = "phone";
+  if (stage == PhoneWake::Stage::Wifi) wakeVia = "wifi";
+  pollPlan();
+  if (planRunning || lineJob.busy() || bgFailures >= 2) return;
+  if (stage != PhoneWake::Stage::Phone && stage != PhoneWake::Stage::Wifi) return;
+  // Over Wi-Fi even the plan needs a session (its connection); through the phone it goes first, alone.
+  const bool planOverWifi = planIsDue() && stage == PhoneWake::Stage::Wifi;
+  if (planIsDue() && !planOverWifi) return;
+  const std::string want = planOverWifi ? companions::active().id : lineLeft ? work.companion : std::string();
+  if (want.empty()) return;
+  if (bgSession && live.ready() && want != sessionCompanion) disconnect("next companion");  // its own voice
+  if (!bgSession && !connecting) startBackgroundSession(want, stage == PhoneWake::Stage::Phone);
+}
+
+// Locked: what the loop does while a wake runs (the chat's own polling only runs unlocked).
+void backgroundPoll() {
+  if (!connecting || live.overRelay()) live.poll();
+  if (!(live.overRelay() && live.connected())) relay::poll();
+  if (cancelConnect && !connecting) {
+    cancelConnect = false;
+    power::setWakeLock(power::kWakeLockNetwork, false);
+  }
+  writerPoll();  // collects a fetch through the phone
+  pollLines();
+  pollPhoneWake();
 }
 
 // ---------- measurement (dev key Y): a text-model request while the Live session is open ----------
@@ -3368,6 +3626,8 @@ void loop() {
     wasLocked = true;
     pollMoments();  // one due unlocks Dotty (shell::wake) and plays from the next pass
     pollTimer();
+    if (phoneWake.stage() != PhoneWake::Stage::Idle || bgSession || connecting || lineJob.busy()) backgroundPoll();
+    else pollPhoneWake();  // is one due?
     armLockedWake();
     return;
   }
@@ -3401,7 +3661,7 @@ void loop() {
   lastSavePoll();
 
   // The background connect finished (the screen may already be listening).
-  if (awaitingConnect && !connecting && !live.connected() && !resumeRetryAt) {
+  if (awaitingConnect && !connecting && !live.connected() && !resumeRetryAt && !bgSession) {
     awaitingConnect = awaitingSend = false;
     early.clear();
     voice::stopListening();
@@ -3416,7 +3676,7 @@ void loop() {
   }
 
   // A session nobody is using (left by a cancelled connect): close it, Bluetooth comes back.
-  if (!connecting && !awaitingConnect && live.connected() && (info.state == Talk::Offline || info.state == Talk::Error)) {
+  if (!connecting && !awaitingConnect && live.connected() && !bgSession && (info.state == Talk::Offline || info.state == Talk::Error)) {
     disconnect("not in use");
   }
   // The session ended without a word (closed here, or the socket died quietly).
@@ -3445,7 +3705,7 @@ void loop() {
 
   // The phone took a chat's setup but never answered (a lost piece, an app without its relay…):
   // after 10 s the chat goes over Wi-Fi instead, the recording kept, and the phone sits out a minute.
-  if (awaitingConnect && live.overRelay() && live.connected() && !live.ready() && millis() - relayOpenAt > 10000) {
+  if (awaitingConnect && live.overRelay() && live.connected() && !live.ready() && millis() - relayOpenAt > 10000 && !bgSession) {
     LOGW("companion", "the phone didn't answer the chat's setup: Wi-Fi instead");
     relayDistrustUntil = millis() + 60000;
     live.close();
@@ -3506,6 +3766,12 @@ void loop() {
     answerFiring();
     if (ringing) answeredPress = downAt;
   }
+  if (held && (bgSession || phoneWake.stage() != PhoneWake::Stage::Idle)) {  // talking beats recording lines
+    LOGI("wake", "BOOT: the recording session gives way");
+    phoneWake.end();
+    shell::endBluetoothWindow();
+    if (bgSession) disconnect("a chat");
+  }
   if (held && !historyOpen && !settingsOpen && !awaitingSend && answeredPress != downAt) {
     static uint32_t triedAt = 0;  // one connect per press (an error screen would retry every pass)
     if ((info.state == Talk::Offline || info.state == Talk::Error) && triedAt != downAt) {
@@ -3544,6 +3810,7 @@ void loop() {
   }
   writerPoll();
   pollLines();
+  pollPhoneWake();
   if (info.state == Talk::Thinking && !awaitingSend && !writing && !reading && millis() - releasedAt > 20000)
     setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
@@ -3574,7 +3841,7 @@ void loop() {
   // Before closing, a silent review: Gemini goes over the chat and saves what it missed (it once
   // kept "likes popcorn" but not "my name is Peter"). Closed when it's done, or after 20 s.
   const uint32_t idleMs = live.overRelay() ? kRelayIdleMs : kIdleMs;
-  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs) {
+  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs && !bgSession) {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
       LOGI("companion", "chat over: memory review");
@@ -3617,6 +3884,40 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == 'y') {  // dev: an app-made reminder 40 minutes out (recorded at the next chance)
+    const std::string r = ble::runHere("{\"cmd\":\"companion.moment.save\",\"kind\":\"reminder\",\"at\":" +
+                                       std::to_string(time(nullptr) + 2400) + ",\"what\":\"stretch your back\",\"style\":\"calm\"}");
+    LOGI("dev", "%s", r.c_str());
+  }
+  if (input.key == 'z' || input.key == '!') {  // dev: plan today's lines now, in hours around now (! puts them back)
+    const int64_t now = time(nullptr);
+    const int minute = static_cast<int>(now % 86400 / 60);
+    if (input.key == '!') {  // and the test moments go (every companion's upcoming ones)
+      for (const CompanionMoments &c : moments::all()) {
+        std::vector<int> ids;
+        for (const Moment &m : c.list->all()) ids.push_back(m.id);
+        for (const int id : ids) {
+          c.list->remove(id);
+          moments::dropRecording(c.companion, std::to_string(id));
+        }
+        moments::save(c.companion);
+        if (!ids.empty()) LOGI("dev", "%s: %u test moments removed", c.companion.c_str(), static_cast<unsigned>(ids.size()));
+      }
+      loadWakeTimes();
+      plannedDay = 0;  // today's real plan still happens
+      saveWakeTimes();
+    }
+    const std::string hours = input.key == '!' ? "\"from\":600,\"to\":1260,\"perDay\":2"
+                                               : "\"from\":" + std::to_string((minute + 5) % 1440) + ",\"to\":" +
+                                                     std::to_string(std::min(minute + 300, 1439));
+    LOGI("dev", "%s", ble::runHere("{\"cmd\":\"companion.moment.rules\"," + hours + "}").c_str());
+    if (input.key == 'z') {
+      forcePlan = true;
+      loadWakeTimes();
+      lastWake = 0;  // the next locked pass wakes
+      LOGI("dev", "plan forced, phone wake due");
+    }
+  }
   if (input.key == '@') {  // dev: the app's moment commands, run here (an alarm + a reminder at one minute)
     const int64_t at = time(nullptr) + 120;
     const std::string who = companions::active().id;
