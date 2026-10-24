@@ -179,6 +179,13 @@ uint32_t reviewStart = 0;      // the end-of-chat memory review was sent (0 = no
 uint32_t longestPause = 0;     // the longest loop pass while speaking (choppy replies: was the loop stuck?)
 size_t sentFrames = 0;  // this turn's voice, for the log
 int peakDb = -60;
+// Nobody spoke (the user, 2026-10-24: an empty press came back as "¿Qué?" — Gemini's guess at near-silence):
+// the turn only opens once ~0.3 s of sound has been heard (the voice before it waits in `early`); a press
+// without it isn't sent and the screen says "I didn't hear anything". One loud 100 ms (the button's click,
+// -17 dBFS once) isn't speech.
+// -35 let a room's background through (-29 dBFS for seconds); a voice near Dotty peaks well above -28.
+constexpr int kVoiceDb = -28, kVoiceChunks = 3;
+int loudChunks = 0;
 
 // Which way the chat goes (relay_path.h): through the iPhone, or Wi-Fi raced against it. The Wi-Fi
 // task claims the session (wifiBegan) under a short lock before its WebSocket opens; a phone that wins
@@ -1067,24 +1074,32 @@ void startTalking() {
   replyFrames = 0;
   sentFrames = 0;
   peakDb = -60;
+  loudChunks = 0;
   early.clear();
   earlyAt = 0;
   turnSent = awaitingSend = false;
   if (!voice::startListening()) return;
-  if (live.ready()) openTurn();
-  else info.heard = "Listening... I'll send it once I'm connected.";
+  if (!live.ready()) info.heard = "Listening... I'll send it once I'm connected.";  // the turn opens on speech
   setState(Talk::Listening);
 }
 
 void finishTurn() {
   live.endTurn();
-  LOGI("companion", "sent %.1f s of voice, peak %d dBFS; heap %u KB internal (largest %u), %u KB PSRAM",
-       sentFrames / float(voice::kInRate), peakDb, heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+  LOGI("companion", "sent %.1f s of voice, peak %d dBFS, %d loud chunks; heap %u KB internal (largest %u), %u KB PSRAM",
+       sentFrames / float(voice::kInRate), peakDb, loudChunks, heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
   releasedAt = millis();
 }
 
 void stopTalking() {
+  if (loudChunks < kVoiceChunks && !turnSent) {  // nothing said: nothing sent
+    voice::stopListening();
+    early.clear();
+    earlyAt = 0;
+    LOGI("companion", "press with no voice (%d loud chunks, peak %d dBFS): not sent", loudChunks, peakDb);
+    setState(live.connected() || connecting ? Talk::Ready : Talk::Offline, "I didn't hear anything");
+    return;
+  }
   voice::stopListening();
   static int16_t chunk[voice::kChunkFrames];
   size_t frames = 0;
@@ -3668,7 +3683,7 @@ void loop() {
     disconnect("connect failed");
     setState(Talk::Error, connectError.length() ? connectError : String("Can't connect"));
   }
-  if (!turnSent && live.ready() && (info.state == Talk::Listening || awaitingSend)) openTurn();
+  if (!turnSent && live.ready() && (info.state == Talk::Listening || awaitingSend) && loudChunks >= kVoiceChunks) openTurn();
   if (turnSent && earlyPending()) flushEarly();
   if (awaitingSend && turnSent && !earlyPending()) {
     awaitingSend = false;
@@ -3791,6 +3806,7 @@ void loop() {
     while (voice::nextChunk(chunk, frames)) {
       sendVoice(chunk, frames);
       peakDb = max(peakDb, voice::levelDb());
+      if (voice::levelDb() >= kVoiceDb) loudChunks++;
     }
     if (!bootDown) stopTalking();
     static uint32_t lastMeter = 0;

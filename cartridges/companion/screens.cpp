@@ -90,13 +90,14 @@ void drawReplayButtons(bool playing, bool loop) {
 }
 
 // A note over the avatar's lower part (a memory saved, "Thinking back...", "Saving your reminder..."): a
-// bookmark (or a pencil, for a long answer being written) and the words in the 12 pt font, a white card
-// across the screen — 2.5x the first small one, which the user could barely read. Two lines when needed.
+// bookmark (or a pencil, for a long answer being written) and the words in the 9 pt font, a white card
+// over the avatar — 2x the first small one, which the user could barely read (2.5x was too big). Two
+// lines when needed.
 void drawNote(const String &note, bool small, bool pencil = false) {
   (void)small;  // the same card in text-only mode: legibility first
-  constexpr int16_t kIcon = 26, kPad = 8, kLine = 24;
-  epd.setFont(&FreeSans12pt7b);
-  const int16_t textW = kW - 2 * 4 - 2 * kPad - kIcon - 8;
+  constexpr int16_t kIcon = 20, kPad = 7, kLine = 19;
+  epd.setFont(&FreeSans9pt7b);
+  const int16_t textW = kW - 2 * 4 - 2 * kPad - kIcon - 6;
   const std::vector<String> lines = ui::wrapText(epd, ui::printable(note), textW, 2);
   int16_t widest = 0;
   for (const String &l : lines) {
@@ -105,22 +106,22 @@ void drawNote(const String &note, bool small, bool pencil = false) {
     epd.getTextBounds(l, 0, 0, &bx, &by, &w, &h);
     widest = max<int16_t>(widest, w);
   }
-  const int16_t boxW = kPad + kIcon + 8 + widest + kPad, boxH = 14 + kLine * lines.size();
+  const int16_t boxW = kPad + kIcon + 6 + widest + kPad, boxH = 12 + kLine * lines.size();
   const int16_t x = (kW - boxW) / 2, y = 132 - boxH;  // its bottom at the avatar's bottom
   epd.fillRoundRect(x, y, boxW, boxH, 8, kWhite);
   epd.drawRoundRect(x, y, boxW, boxH, 8, kBlack);
   epd.drawRoundRect(x + 1, y + 1, boxW - 2, boxH - 2, 7, kBlack);
-  const int16_t ix = x + kPad, iy = y + (boxH - 30) / 2;
+  const int16_t ix = x + kPad, iy = y + (boxH - 24) / 2;
   if (pencil) {
-    for (int d = -2; d <= 2; d++) epd.drawLine(ix + 5 + d, iy + 24, ix + 23 + d, iy + 6, kBlack);  // the body
-    epd.fillTriangle(ix, iy + 30, ix + 2, iy + 21, ix + 9, iy + 28, kBlack);                       // the tip
+    for (int d = -2; d <= 1; d++) epd.drawLine(ix + 4 + d, iy + 19, ix + 18 + d, iy + 5, kBlack);  // the body
+    epd.fillTriangle(ix, iy + 24, ix + 2, iy + 17, ix + 7, iy + 22, kBlack);                      // the tip
   } else {  // a bookmark
-    epd.fillRect(ix + 2, iy, 22, 30, kBlack);
-    epd.fillTriangle(ix + 2, iy + 30, ix + 23, iy + 30, ix + 13, iy + 19, kWhite);
+    epd.fillRect(ix + 2, iy, 17, 24, kBlack);
+    epd.fillTriangle(ix + 2, iy + 24, ix + 18, iy + 24, ix + 10, iy + 15, kWhite);
   }
   epd.setTextColor(kBlack);
   for (size_t i = 0; i < lines.size(); i++) {
-    epd.setCursor(ix + kIcon + 8, y + 7 + 17 + i * kLine);
+    epd.setCursor(ix + kIcon + 6, y + 6 + 14 + i * kLine);
     epd.print(lines[i]);
   }
 }
