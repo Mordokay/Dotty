@@ -214,7 +214,7 @@ struct WeatherView: View {
     }
 
     /// The town at a location ("Lisbon"), so Dotty's title shows a name rather than "My location".
-    private static func placeName(of location: CLLocation) async -> String? {
+    static func placeName(of location: CLLocation) async -> String? {
         guard let request = MKReverseGeocodingRequest(location: location),
               let item = try? await request.mapItems.first else { return nil }
         return item.addressRepresentations?.cityName ?? item.name

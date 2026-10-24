@@ -1,4 +1,5 @@
 import CoreBluetooth
+import CoreLocation
 import Foundation
 import Observation
 
@@ -271,6 +272,23 @@ final class DottyLink: NSObject {
         let offset = TimeZone.current.secondsFromGMT(for: now)
         let local = Int(now.timeIntervalSince1970) + offset
         _ = try? await send("core.time", ["local": local, "utcOffset": offset])  // older firmware: "unknown command"
+        await sendPlace()
+    }
+
+    /// Where this iPhone is (the town and its coordinates), so Dotty's companion knows the place
+    /// without reading another cartridge's settings. Only when Location is already allowed (never
+    /// asks), at most every 20 minutes.
+    private func sendPlace() async {
+        let status = CLLocationManager().authorizationStatus
+        guard status == .authorizedWhenInUse || status == .authorizedAlways else { return }
+        let key = "lastPlaceAt"
+        let last = UserDefaults.standard.double(forKey: key)
+        guard Date().timeIntervalSince1970 - last > 20 * 60 else { return }
+        guard let location = try? await OneShotLocation().current() else { return }
+        let name = await WeatherView.placeName(of: location) ?? ""
+        let reply = try? await send("core.place", ["name": name, "lat": location.coordinate.latitude,
+                                                    "lon": location.coordinate.longitude])
+        if reply?.ok == true { UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key) }
     }
 
     private func handle(_ message: DottyMessage) {

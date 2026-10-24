@@ -70,13 +70,33 @@ bool comboUsed = false;  // BOOT + PWR were held together: neither counts as a c
 
 // Next time onLockedWake is due (millis keeps counting through light sleep).
 uint32_t nextLockedWake = 0;
+// wakeLockedAt's one-shot time (millis), 0 = none.
+uint32_t wakeAtMs = 0;
+// bluetoothWindow: when it ends (millis), 0 = closed; when it opened.
+uint32_t windowUntil = 0, windowOpenedAt = 0;
+
+// The place (core.place), read from NVS on first use.
+bool placeRead = false, placeKnown = false;
+String placeName;
+double placeLat = 0, placeLon = 0;
 
 // Runs the firmware's periodic locked work when due. True if the lock screen changed.
 bool runLockedWake() {
-  if (!cfg.onLockedWake || cfg.lockedWakeSeconds == 0) return false;
-  if (static_cast<int32_t>(millis() - nextLockedWake) < 0) return false;
-  nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
+  if (!cfg.onLockedWake) return false;
+  const bool periodic = cfg.lockedWakeSeconds && static_cast<int32_t>(millis() - nextLockedWake) >= 0;
+  const bool timed = wakeAtMs && static_cast<int32_t>(millis() - wakeAtMs) >= 0;
+  if (!periodic && !timed) return false;
+  if (periodic) nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
+  if (timed) wakeAtMs = 0;  // the hook re-arms it if it isn't due yet (the sleep clock drifts)
   return cfg.onLockedWake();
+}
+
+void closeWindow() {
+  if (!windowUntil) return;
+  LOGI("ble", "bluetooth window closed after %lu s", static_cast<unsigned long>((millis() - windowOpenedAt) / 1000));
+  windowUntil = 0;
+  power::setWakeLock(power::kWakeLockWindow, false);
+  if (isLocked && !cfg.bluetoothWhileLocked) ble::stop();
 }
 
 // The power card (plugged in / unplugged while unlocked): when it goes away, and the power
@@ -270,6 +290,10 @@ void loopLock() {
   if (cfg.onLockedWake && cfg.lockedWakeSeconds) {
     const int32_t untilApp = static_cast<int32_t>(nextLockedWake - millis());
     sleepMs = min<uint32_t>(sleepMs, max<int32_t>(untilApp, 100));
+  }
+  if (cfg.onLockedWake && wakeAtMs) {
+    const int32_t untilAt = static_cast<int32_t>(wakeAtMs - millis());
+    sleepMs = min<uint32_t>(sleepMs, max<int32_t>(untilAt, 100));
   }
   power::setAudioRail(false);
   if (loopWatchdog) esp_task_wdt_reset();  // a minute asleep is not a stuck loop
@@ -485,7 +509,7 @@ void begin(const Config &config) {
     }
     reply["drift"] = (long)(current - local);
     if (labs((long)(current - local)) >= 2) setLocalTime(local);
-    if (args["utcOffset"].is<int32_t>()) {
+    if (args["utcOffset"].is<int32_t>()) {  // (core.place, below, sends where the phone is)
       const int32_t offset = args["utcOffset"];
       int32_t known = 0;
       if (!utcOffset(known) || known != offset) {
@@ -496,6 +520,35 @@ void begin(const Config &config) {
         cachedOffset = offset;
       }
     }
+  });
+  // Where the phone is (its town and coordinates), on every connection when the app may read its
+  // location: system data, so no cartridge reads another's settings for it (the sandbox rule).
+  ble::on("core.place", [](JsonObjectConst args, JsonObject reply) {
+    String name = args["name"] | "";
+    if (name.length() > 60) name = name.substring(0, 60);
+    if (!args["lat"].is<double>() || !args["lon"].is<double>()) {
+      reply["ok"] = false;
+      reply["error"] = "lat and lon needed";
+      return;
+    }
+    const double lat = args["lat"], lon = args["lon"];
+    tm now;
+    time_t local = 0;
+    if (rtc.read(now)) {
+      now.tm_isdst = 0;
+      local = mktime(&now);
+    }
+    Preferences p;
+    p.begin("clock", false);
+    p.putString("place", name);
+    p.putDouble("lat", lat);
+    p.putDouble("lon", lon);
+    p.putLong64("placeAt", local);
+    p.end();
+    placeRead = placeKnown = true;
+    placeName = name;
+    placeLat = lat;
+    placeLon = lon;
   });
   lastInteraction = millis();
 }
@@ -557,6 +610,7 @@ bool update(Input &input) {
   battery::poll();
   if (battery::empty()) batteryEmptyOff();
   logBattery();
+  if (windowUntil && (!isLocked || static_cast<int32_t>(millis() - windowUntil) >= 0)) closeWindow();
   if (ble::poll() > 0 && !isLocked) lastInteraction = millis();  // the app in use: no auto-lock
   handlePairing();
   power::setWakeLock(power::kWakeLockBle, ble::connected());
@@ -664,6 +718,54 @@ void setLocalTime(time_t local) {
   rtc.write(t);
   LOGI("clock", "set to %04d-%02d-%02d %02d:%02d:%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour,
        t.tm_min, t.tm_sec);
+}
+
+bool place(String &name, double &lat, double &lon) {
+  if (!placeRead) {
+    placeRead = true;
+    Preferences p;
+    p.begin("clock", true);
+    placeKnown = p.isKey("place");
+    placeName = p.getString("place", "");
+    placeLat = p.getDouble("lat", 0);
+    placeLon = p.getDouble("lon", 0);
+    p.end();
+  }
+  if (!placeKnown) return false;
+  name = placeName;
+  lat = placeLat;
+  lon = placeLon;
+  return true;
+}
+
+void wakeLockedAt(time_t local) {
+  if (!local) {
+    wakeAtMs = 0;
+    return;
+  }
+  const int64_t inMs = (static_cast<int64_t>(local) - time(nullptr)) * 1000;
+  wakeAtMs = millis() + static_cast<uint32_t>(max<int64_t>(inMs, 0));
+  if (!wakeAtMs) wakeAtMs = 1;  // 0 means none
+}
+
+void bluetoothWindow(uint32_t seconds) {
+  if (!isLocked) return;
+  if (!windowUntil) {
+    windowOpenedAt = millis();
+    LOGI("ble", "bluetooth window: %lu s", static_cast<unsigned long>(seconds));
+    power::setWakeLock(power::kWakeLockWindow, true);
+    ble::start();
+  }
+  windowUntil = millis() + seconds * 1000;
+  if (!windowUntil) windowUntil = 1;
+}
+
+void endBluetoothWindow() {
+  closeWindow();
+}
+
+bool bluetoothWindowOpen() {
+  return windowUntil != 0;
 }
 
 bool locked() {

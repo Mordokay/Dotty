@@ -276,12 +276,11 @@ String outOfWords(int64_t untilUtc) {
   return "I'm out of words for today. Back at " + localClock(untilUtc) + ".";
 }
 
+// Where the user is, as the phone said (system data: core.place); "" when no phone has said.
 String placeName() {
-  Preferences p;
-  p.begin("weather", true);
-  const String name = p.getString("name", "");
-  p.end();
-  return name;
+  String name;
+  double lat, lon;
+  return shell::place(name, lat, lon) ? name : String();
 }
 
 void cancelWriter();

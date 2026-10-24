@@ -127,10 +127,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   cartridge's files or settings, and no feature may depend on another cartridge being installed
   (it may never be, and any can leave the catalog). Shared things are **system** data, owned by
   dotty_core and set by the system or the app (e.g. `clock/utcOffset`, `wifi`, bonds, the touch
-  calibration). Only the system — the launcher, Rescue and dotty_core's own commands
-  (`storage.remove`, `storage.list`, backups' whole-card mode) — may touch every cartridge's folder.
-  Known exception to remove: the companion reads the Weather cartridge's place (NVS `weather/name`,
-  `placeName()` in `cartridges/companion/main.cpp`); it should become a system setting the app sends.
+  calibration, the place from `core.place`). Only the system — the launcher, Rescue and dotty_core's
+  own commands (`storage.remove`, `storage.list`, backups' whole-card mode) — may touch every
+  cartridge's folder.
 - Flash layout 2 (`partitions.csv`, since 2026-10-06; migrating needs one USB flash of
   launcher + rescue + a cartridge, NVS stays): `rescue` = factory 768 KB (Rescue, 593 KB),
   `launcher` = ota_1 2 MB, `ota_0` 4 MB = the active cartridge, `storage` 1.1 MB (unused
@@ -391,6 +390,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   firmware: `shell::Config::lockedWakeSeconds` + `onLockedWake` (return true to redraw the
   lock screen); the shell sleeps until the next minute or the next app wake, whichever
   comes first (e.g. Weather fetching every 10 min).
+- **The place** is system data: the app sends `core.place {name, lat, lon}` after `core.time` on a
+  connection (only when Location is already allowed, at most every 20 min; town from MapKit reverse
+  geocoding) → NVS `clock` `place/lat/lon/placeAt` → `shell::place()`. (The companion used to read
+  Weather's `weather/name`, which broke the sandbox rule.)
+- `shell::wakeLockedAt(local)`: the next locked sleep ends then (if before the next minute) and
+  `onLockedWake` runs (even with `lockedWakeSeconds` 0); one pending time, the hook re-arms it (the
+  sleep clock drifts, so a wake can come early). `shell::bluetoothWindow(s)` / `endBluetoothWindow()`:
+  Bluetooth on while locked for a while (wake lock `kWakeLockWindow`), for a phone wake; closed by
+  time, by the call, or at unlock (Bluetooth then just stays on).
 - Bluetooth while locked is per firmware: `shell::Config::bluetoothWhileLocked`.
   false (default; launcher, music, weather): locking stops BLE so Dotty sleeps; unlock
   restarts it. true (e.g. a future ANCS notifications cartridge): a connected phone stays

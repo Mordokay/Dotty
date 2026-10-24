@@ -12,6 +12,7 @@ enum WakeLock : uint32_t {
   kWakeLockAudio = 1 << 0,
   kWakeLockBle = 1 << 1,      // an app is connected
   kWakeLockNetwork = 1 << 2,  // a Wi-Fi transfer is running
+  kWakeLockWindow = 1 << 3,   // shell::bluetoothWindow: Bluetooth on while locked, for a while
 };
 
 // Latches system power on (call first thing in setup).

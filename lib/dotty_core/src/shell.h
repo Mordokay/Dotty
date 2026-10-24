@@ -67,6 +67,21 @@ void setLocalTime(time_t local);
 // in NVS. False until a phone has sent it. Dotty's clock keeps local time, so anything dated in
 // UTC (e.g. news) needs it.
 bool utcOffset(int32_t &seconds);
+// Where the user is, as the phone last said (core.time's sibling core.place {name, lat, lon}, NVS
+// clock/place…): system data, so cartridges never read each other's settings for it. False until a
+// phone has sent one.
+bool place(String &name, double &lat, double &lon);
+
+// Locked: the next sleep ends at this local time if that's sooner than the next minute, and
+// Config::onLockedWake runs then (even with lockedWakeSeconds 0). One pending time; a later call
+// replaces it, 0 clears it. The light-sleep clock drifts: check the time in the hook and re-arm.
+void wakeLockedAt(time_t local);
+
+// Locked: Bluetooth on for up to `seconds` so the phone can reconnect (a "phone wake"), holding Dotty
+// awake meanwhile; then off again so Dotty sleeps. Unlocked it does nothing (Bluetooth is on anyway).
+void bluetoothWindow(uint32_t seconds);
+void endBluetoothWindow();
+bool bluetoothWindowOpen();
 
 // Shared hardware, ready after begin().
 extern EpdDisplay epd;
