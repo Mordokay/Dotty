@@ -43,7 +43,7 @@ final class RecordingService {
             previous?()
             Task { await self?.sync() }
         }
-        SFSpeechRecognizer.requestAuthorization { _ in }
+        Task { _ = await SpeechAuth.request() }
     }
 
     private func log(_ s: String) { RelayService.shared.log("rec: " + s) }
@@ -120,10 +120,9 @@ final class RecordingService {
         let index = max(0, (current?.drafts.count ?? 1) - 1)
         let id = current?.id
         current?.request = request
-        current?.task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
-            guard let text = result?.bestTranscription.formattedString else { return }
-            Task { @MainActor in self?.setDraft(id: id, index: index, text: text) }
-        }
+        current?.task = SpeechAuth.recognize(recognizer, request, onText: { [weak self] text, _ in
+            self?.setDraft(id: id, index: index, text: text)
+        }, onError: { _ in })
     }
 
     private var finishedDrafts: [String: [String]] = [:]  // a recording's drafts after rec.end (late results)
