@@ -31,6 +31,12 @@ bool phoneHasKey(const String &keyHint);
 uint32_t fetch(const std::string &model, const std::string &body);
 // true once the answer is in (or kFetchTimeoutMs passed: status 0, body "timed out").
 bool takeFetched(uint32_t id, int &status, std::string &body);
+// A voice note's audio to the phone (0x1F 0x02 seq + an ADPCM frame, its own sequence and encoder):
+// whole frames of recordingFrameSamples(); false when the phone isn't there (the recording stops
+// streaming, the card copy goes on). resetRecording() before a new recording.
+size_t recordingFrameSamples();
+bool sendRecordingFrame(const int16_t *pcm, size_t n);
+void resetRecording();
 
 class Transport : public LiveTransport {
  public:

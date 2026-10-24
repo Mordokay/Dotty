@@ -42,6 +42,7 @@
 #include "moments.h"
 #include "line_job.h"
 #include "phone_wake.h"
+#include "voice_note.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -223,6 +224,7 @@ bool forcePlan = false;     // dev z: plan now, whatever the time
 int bgFailures = 0;         // lines that failed in this wake: it gives up after two
 int64_t lastWake = -1, plannedDay = -1;  // NVS companion/lastWake, plannedDay (read on first use)
 uint32_t bgOpenedAt = 0;
+uint32_t noteTestUntil = 0;  // dev n: a test voice note is recording until then
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 bool jobsDue();
@@ -3679,6 +3681,7 @@ void setup() {
   storage::begin();
   companions::begin();  // also points memories and history at the active companion
   moments::begin();     // reminders, alarms, the companions' own lines, the timer
+  note::repairAll();    // voice notes a power cut left with a stale header
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
   voice::begin(player);
   loadSettings();
@@ -3975,6 +3978,39 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == 'n' && !note::active()) {  // dev: a 10 s test voice note for the active companion
+    if (note::begin(companions::active().id, "Test note") && voice::startListening()) {
+      note::partStart();
+      noteTestUntil = millis() + 10000;
+    }
+  }
+  if (noteTestUntil) {
+    static int16_t chunk[voice::kChunkFrames];
+    size_t frames = 0;
+    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    if (millis() > noteTestUntil) {
+      noteTestUntil = 0;
+      voice::stopListening();
+      note::finish(true);
+    }
+  }
+  if (input.key == 'w' && HWCDC::isPlugged()) {  // dev: the newest voice note over serial (#WAV … #END, as Tape's)
+    const std::vector<RecordingMeta> all = note::list(companions::active().id);
+    File f = all.empty() ? File() : SD_MMC.open(note::path(companions::active().id, all.front().name, "wav"));
+    if (f) {
+      Serial.printf("\n#WAV %u %s.wav\n", static_cast<unsigned>(f.size()), all.front().name.c_str());
+      uint8_t buf[50];
+      char line[2 * sizeof(buf) + 2];
+      for (size_t n; (n = f.read(buf, sizeof(buf))) > 0;) {
+        size_t len = 0;
+        for (size_t j = 0; j < n; j++) len += snprintf(line + len, sizeof(line) - len, "%02x", buf[j]);
+        line[len++] = '\n';
+        Serial.write(reinterpret_cast<uint8_t *>(line), len);
+      }
+      Serial.flush();
+      Serial.print("#END\n");
+    }
+  }
   if (input.key == '%') {  // dev: internal RAM now (hunting a leak)
     LOGI("heap", "internal %u KB free, largest %u KB, min ever %u KB; PSRAM %u KB", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
          heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024,

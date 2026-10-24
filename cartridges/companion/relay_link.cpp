@@ -1,4 +1,5 @@
 #include "relay_link.h"
+#include "rec_messages.h"
 
 #include <freertos/message_buffer.h>
 
@@ -36,6 +37,9 @@ struct Fetch {
 };
 std::map<uint32_t, Fetch> fetches;
 uint32_t nextFetch = 1;
+
+adpcm::State recEncoder;
+uint8_t recSeq = 0;
 
 bool sendFrame(const int16_t *pcm, size_t count) {
   static uint8_t buf[3 + adpcm::kHeader + kRelayMaxVoiceSamples / 2 + 1];
@@ -116,6 +120,29 @@ bool phoneReady() {
 bool phoneHasKey(const String &keyHint) {
   for (const String &h : hints)
     if (h == keyHint) return true;
+  return false;
+}
+
+size_t recordingFrameSamples() {
+  return frameSamples();
+}
+
+void resetRecording() {
+  recEncoder = adpcm::State();
+  recSeq = 0;
+}
+
+bool sendRecordingFrame(const int16_t *pcm, size_t n) {
+  if (!phoneReady()) return false;
+  static uint8_t buf[3 + adpcm::kHeader + kRelayMaxVoiceSamples / 2 + 1];
+  const size_t head = recFrameHeader(buf, recSeq++);
+  const size_t len = head + adpcm::encodeFrame(pcm, n, recEncoder, buf + head);
+  for (int tries = 0; tries < 100; tries++) {
+    if (ble::notifyRaw(buf, len)) return true;
+    if (!ble::connected()) return false;
+    delay(2);
+  }
+  LOGW("relay", "recording frame dropped");
   return false;
 }
 
