@@ -44,6 +44,7 @@
 #include "phone_wake.h"
 #include "voice_note.h"
 #include "note_deck.h"
+#include "rec_messages.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -239,10 +240,22 @@ struct NoteReaction {
   uint32_t ms = 0, until = 0;
 } reaction;
 std::string pendingTypedText, pendingTypedLabel;  // a typed turn waiting for a session
+RecTextAssembler recText;  // companion.recording.text / .piece from the phone
+// A whole recording the phone asked for (rec.fetch): sent a few frames a loop pass.
+struct NoteSend {
+  bool active = false;
+  File file;
+  std::string companion, name;
+} noteSend;
+std::map<std::string, int> syncTries;  // recordings a wake asked the phone to sync, by name (no endless wakes)
+uint32_t lastSyncActivity = 0;
 uint32_t pendingTypedSince = 0;
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 bool jobsDue();
+bool syncWanted();
+bool recordingNeedsSync(const RecordingMeta &m);
+void pollNoteSend();
 void loadWakeTimes();
 void pollPhoneWake();
 void backgroundPoll();
@@ -671,7 +684,24 @@ void startRecall(const ToolCall &c) {
   const std::vector<std::string> days = recallDays(c.from, c.to, now);
   const std::vector<std::string> newestFirst(days.rbegin(), days.rend());
   // Built a day at a time, never every exchange at once (recall.h).
-  const std::string block = recallBlock(newestFirst, [](const std::string &day) { return history::raw(day.c_str()); }, name, c.group);
+  std::string block = recallBlock(newestFirst, [](const std::string &day) { return history::raw(day.c_str()); }, name, c.group);
+  // Its voice notes from those days, word for word (the topic's ones when there's a topic).
+  std::string notes;
+  std::string topic = c.group;
+  for (char &ch : topic) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+  for (const RecordingMeta &m : note::list(who.id)) {
+    const std::string day = dayFile(m.created).substr(0, 10);
+    if (std::find(days.begin(), days.end(), day) == days.end()) continue;
+    std::string text = companions::readText(note::path(who.id, m.name, "txt"));
+    if (text.empty()) continue;
+    std::string lowerText = text + " " + m.title;
+    for (char &ch : lowerText) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    if (!topic.empty() && lowerText.find(topic) == std::string::npos) continue;
+    const std::string line = transcriptBlock(m, text);
+    if (notes.size() + line.size() > 30000) break;
+    notes += (notes.empty() ? "" : "\n") + line;
+  }
+  if (!notes.empty()) block += "\n\nVoice notes the user recorded:\n" + notes;
   writerBody = recallRequest(name, c.text, now, block);
   jobKind = Job::Recall;
   jobCallId = c.id;
@@ -1022,6 +1052,8 @@ void connect() {
     f.close();
     const std::string section = summariesSection(sums, 10);
     if (!section.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + section;
+    const std::string notes = recordingsSection(note::list(companions::active().id), 10);  // its voice notes
+    if (!notes.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + notes;
   }
   personaSection = personaText(companions::active());
   if (momentReplyUntil && static_cast<int32_t>(momentReplyUntil - millis()) > 0) {  // it just said something by itself
@@ -2442,7 +2474,7 @@ bool jobsDue() {
   if (checkedAt && millis() - checkedAt < 30000) return due;
   checkedAt = millis();
   LineWork w;
-  due = canRecord() && (planIsDue() || nextLineWork(w, ""));
+  due = (canRecord() && (planIsDue() || nextLineWork(w, ""))) || syncWanted();
   return due;
 }
 
@@ -2589,7 +2621,24 @@ void pollPhoneWake() {
     scannedStep = lineJob.step();
     lineLeft = nextLineWork(work, "");
   }
-  const bool done = PhoneWake::jobsDone(planIsDue(), planRunning, lineJob.busy(), lineLeft, bgFailures);
+  // Recordings the phone lacks: it's told once it's there (companion.recordings), then fetches and
+  // transcribes them; done when nothing is left or it has been quiet for 45 s.
+  static bool syncAsked = false;
+  if (phoneWake.stage() != PhoneWake::Stage::Phone) syncAsked = false;
+  bool syncLeft = false;
+  if (phone && phoneWake.stage() == PhoneWake::Stage::Phone && syncWanted()) {
+    if (!syncAsked) {
+      syncAsked = true;
+      lastSyncActivity = millis();
+      for (const std::string &id : companions::list().order())
+        for (const RecordingMeta &m : note::list(id))
+          if (recordingNeedsSync(m)) syncTries[m.name]++;
+      notifyRecordings();
+      LOGI("wake", "asking the phone to sync recordings");
+    }
+    syncLeft = noteSend.active || millis() - lastSyncActivity < 45000;
+  }
+  const bool done = PhoneWake::jobsDone(planIsDue(), planRunning, lineJob.busy(), lineLeft, bgFailures) && !syncLeft;
   const PhoneWake::Stage stage = phoneWake.poll(millis(), phone, true, done);
   if (stage == PhoneWake::Stage::Done) return endPhoneWake(wakeVia);
   if (stage == PhoneWake::Stage::Phone && shell::locked()) shell::bluetoothWindow(30);  // kept open while it works
@@ -2635,6 +2684,7 @@ void backgroundPoll() {
   }
   writerPoll();  // collects a fetch through the phone
   pollLines();
+  pollNoteSend();
   pollPhoneWake();
 }
 
@@ -3300,6 +3350,158 @@ void registerMomentCommands() {
   });
 }
 
+// The phone's transcript (Apple's draft, Gemini's final) and summary for a recording.
+void applyRecordingText(const RecText &t) {
+  std::vector<RecordingMeta> all = note::list(t.companion);
+  auto it = std::find_if(all.begin(), all.end(), [&](const RecordingMeta &m) { return m.name == t.id; });
+  if (it == all.end()) return LOGW("note", "text for an unknown recording %s", t.id.c_str());
+  RecordingMeta m = *it;
+  companions::writeText(note::path(t.companion, m.name, "txt"), t.transcript);
+  m.summary = t.summary;
+  m.points = t.points;
+  if (!t.title.empty()) m.title = t.title;
+  m.isDraft = t.isDraft;
+  m.textAt = time(nullptr);
+  m.synced = true;
+  note::saveMeta(t.companion, m);
+  lastSyncActivity = millis();
+  LOGI("note", "%s: %s transcript, %u characters; \"%s\"", m.name.c_str(), t.isDraft ? "draft" : "final",
+       static_cast<unsigned>(t.transcript.size()), m.title.c_str());
+  // The testing phase (the user, 2026-10-24): both texts in the log, to compare Apple's with Gemini's.
+  auto logText = [](const char *what, const std::string &text) {
+    for (size_t at = 0; at < text.size(); at += 90) LOGI("transcript", "%s: %s", what, text.substr(at, 90).c_str());
+  };
+  if (!t.draft.empty()) logText("Apple", t.draft);
+  logText(t.isDraft ? "draft" : "final", t.transcript);
+  if (reaction.waiting && reaction.name == m.name) {
+    reaction.gotText = true;
+    reaction.transcript = t.transcript;
+  }
+  notifyRecordings();
+}
+
+bool recordingNeedsSync(const RecordingMeta &m) {
+  return !m.synced || m.textAt == 0;
+}
+
+bool syncWanted() {  // read from the card at most every 5 s
+  static uint32_t checkedAt = 0;
+  static bool wanted = false;
+  if (checkedAt && millis() - checkedAt < 5000) return wanted;
+  checkedAt = millis();
+  wanted = false;
+  for (const std::string &id : companions::list().order())
+    for (const RecordingMeta &m : note::list(id))
+      if (recordingNeedsSync(m) && syncTries[m.name] < 3) wanted = true;
+  return wanted;
+}
+
+// rec.fetch: the whole recording, as when it was recorded (rec.begin, 0x02 frames, rec.end).
+void pollNoteSend() {
+  if (!noteSend.active) return;
+  static int16_t samples[2048];
+  const size_t per = std::min(relay::recordingFrameSamples(), sizeof(samples) / 2);
+  for (int i = 0; i < 4; i++) {
+    const size_t got = noteSend.file.read(reinterpret_cast<uint8_t *>(samples), per * 2) / 2;
+    if (got == 0 || !relay::sendRecordingFrame(samples, got)) {
+      const bool whole = got == 0;
+      noteSend.file.close();
+      noteSend.active = false;
+      ble::notify(recEndEvent(noteSend.name, whole));
+      LOGI("note", "%s %s to the phone", noteSend.name.c_str(), whole ? "sent" : "NOT sent (the phone went)");
+      lastSyncActivity = millis();
+      return;
+    }
+  }
+}
+
+void registerRecordingCommands() {
+  ble::on("companion.recordings", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | companions::active().id;
+    JsonArray list = reply["recordings"].to<JsonArray>();
+    for (const RecordingMeta &m : note::list(who)) {
+      JsonObject o = list.add<JsonObject>();
+      o["name"] = m.name;
+      o["title"] = m.title;
+      o["created"] = m.created;
+      o["ms"] = m.ms;
+      o["synced"] = m.synced;
+      o["text"] = m.textAt > 0;
+      o["isDraft"] = m.isDraft;
+      o["summary"] = m.summary;
+    }
+    reply["companion"] = who;
+  });
+  ble::on("companion.recording.text", [](JsonObjectConst args, JsonObject reply) {
+    RecText t;
+    if (recText.command(args, t)) applyRecordingText(t);
+    else if (args["done"] | false) {
+      reply["ok"] = false;
+      reply["error"] = "incomplete";  // the phone sends it all again
+    }
+  });
+  ble::on("companion.recording.piece", [](JsonObjectConst args, JsonObject reply) {
+    if (!recText.piece(args)) {
+      reply["ok"] = false;
+      reply["error"] = "bad piece";
+    }
+  });
+  ble::on("companion.recording.rename", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | "", name = args["name"] | "", title = args["title"] | "";
+    for (RecordingMeta m : note::list(who))
+      if (m.name == name && !title.empty()) {
+        m.title = title.substr(0, 80);
+        note::saveMeta(who, m);
+        notifyRecordings();
+        return;
+      }
+    reply["ok"] = false;
+    reply["error"] = "no such recording";
+  });
+  ble::on("companion.recording.delete", [](JsonObjectConst args, JsonObject reply) {
+    if (!note::remove(args["companion"] | "", args["name"] | "")) {
+      reply["ok"] = false;
+      reply["error"] = "no such recording";
+      return;
+    }
+    notifyRecordings();
+  });
+  ble::on("companion.recording.play", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | "", name = args["name"] | "";
+    for (const RecordingMeta &m : note::list(who))
+      if (m.name == name) {
+        pendingPlayCompanion = who;
+        pendingPlayName = name;
+        pendingPlayTitle = m.title;
+        return;
+      }
+    reply["ok"] = false;
+    reply["error"] = "no such recording";
+  });
+  // The phone wants a whole recording (it missed it, joined late, or a frame was lost).
+  ble::on("rec.fetch", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | "", name = args["id"] | "";
+    File f = SD_MMC.open(note::path(who, name, "wav"));
+    if (!f || noteSend.active || note::active()) {
+      reply["ok"] = false;
+      reply["error"] = !f ? "no such recording" : "busy";
+      return;
+    }
+    f.seek(44);
+    std::string title = name;
+    for (const RecordingMeta &m : note::list(who))
+      if (m.name == name) title = m.title;
+    relay::resetRecording();
+    ble::notify(recBeginEvent(name, who, title));
+    noteSend.active = true;
+    noteSend.file = f;
+    noteSend.companion = who;
+    noteSend.name = name;
+    lastSyncActivity = millis();
+    LOGI("note", "sending %s to the phone", name.c_str());
+  });
+}
+
 void registerMacroCommands() {
   ble::on("companion.macros", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["macros"].to<JsonArray>();
@@ -3397,6 +3599,7 @@ void notifyReplay() {
 void registerCompanionCommands() {
   registerMacroCommands();
   registerMomentCommands();
+  registerRecordingCommands();
   registerKeyCommands();
   ble::on("companion.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["companions"].to<JsonArray>();
@@ -4154,6 +4357,7 @@ void loop() {
   pollLines();
   pollPhoneWake();
   pollNotePlay();
+  pollNoteSend();
   pollReaction();
   pollTypedTurn();
   if (deckPending && !deckOpen && (info.state == Talk::After || info.state == Talk::Ready) && !voice::playing() &&
