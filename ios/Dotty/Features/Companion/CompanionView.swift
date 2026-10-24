@@ -67,8 +67,10 @@ struct CompanionView: View {
                         .tag(Self.newPage)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                CompanionPager(companions: companions, selection: $selection, active: active,
+                               canAdd: companions.count < max, newPage: Self.newPage)
+                    .padding(.bottom, Spacing.s)
             }
         }
         .navigationTitle("")
@@ -236,6 +238,11 @@ struct CompanionPage: View {
                     NavigationLink { CompanionDayView(day: CompanionHistoryView.today, companion: summary.id) } label: {
                         LightRow(title: "Today's chat", subtitle: "Updates a moment after each chat on Dotty",
                                  systemImage: "bubble.left.and.bubble.right") { chevron }
+                    }
+                    .buttonStyle(.plain)
+                    NavigationLink { RecordingsView(companion: summary.id, name: displayName) } label: {
+                        LightRow(title: "Recordings", subtitle: "Voice notes you recorded with \(displayName)",
+                                 systemImage: "waveform") { chevron }
                     }
                     .buttonStyle(.plain)
                     NavigationLink { CompanionHistoryView(companion: summary.id) } label: {
@@ -919,6 +926,50 @@ enum AvatarPhotos {
                 sent += Double(end - offset)
                 progress(sent / total)
                 offset = end
+            }
+        }
+    }
+}
+
+/// The pages as avatar circles (the user, 2026-10-24): 28 px, a ring in one of the design system's colours
+/// by companion order, a full ring on the page shown, the others dimmed; a dot under the one running on
+/// Dotty; a dashed "+" for a new one. A tap jumps to that page (swiping still works).
+struct CompanionPager: View {
+    let companions: [CompanionView.Summary]
+    @Binding var selection: String
+    let active: String
+    let canAdd: Bool
+    let newPage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(Array(companions.enumerated()), id: \.element.id) { index, c in
+                let colour = DottyLight.allCases[index % DottyLight.allCases.count].color
+                let shown = selection == c.id
+                Button { withAnimation { selection = c.id } } label: {
+                    VStack(spacing: 3) {
+                        CompanionView.avatarImage(c.avatar, companion: c.id, size: 24)
+                            .clipShape(Circle())
+                            .frame(width: 28, height: 28)
+                            .overlay(Circle().strokeBorder(colour.opacity(shown ? 1 : 0.5), lineWidth: shown ? 2.5 : 1))
+                            .opacity(shown ? 1 : 0.55)
+                        Circle().fill(c.id == active ? colour : .clear).frame(width: 4, height: 4)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(c.name.isEmpty ? "Companion \(index + 1)" : c.name)
+            }
+            if canAdd {
+                Button { withAnimation { selection = newPage } } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.inkMuted)
+                            .frame(width: 28, height: 28)
+                            .overlay(Circle().strokeBorder(Color.inkMuted, style: StrokeStyle(lineWidth: selection == newPage ? 2 : 1, dash: [3, 3])))
+                        Circle().fill(.clear).frame(width: 4, height: 4)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New companion")
             }
         }
     }
