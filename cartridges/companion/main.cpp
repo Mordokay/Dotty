@@ -63,7 +63,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.5.1");
+DOTTY_CARTRIDGE("companion", "Companion", "0.5.2");
 
 namespace {
 
@@ -223,6 +223,7 @@ bool forcePlan = false;     // dev z: plan now, whatever the time
 int bgFailures = 0;         // lines that failed in this wake: it gives up after two
 int64_t lastWake = -1, plannedDay = -1;  // NVS companion/lastWake, plannedDay (read on first use)
 uint32_t bgOpenedAt = 0;
+bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 bool jobsDue();
 void loadWakeTimes();
@@ -2120,9 +2121,15 @@ bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
     w.style = timer.style.empty() ? "excited" : timer.style;
     // What they asked for at its end ("sing happy birthday"), else just that it's up — without it the
     // writer leant on memories and every timer was "the eggs".
-    w.topics.push_back({"timer", timer.what.empty() ? up : up + "; as asked when it was set: " + timer.what, w.style});
+    // Nothing asked for: the companion makes the ending its own (the user, 2026-10-24) — creative, funny,
+    // in character, still plainly "time's up".
+    w.topics.push_back({"timer", timer.what.empty() ? up + "; nothing in particular was asked for, so make it your own: "
+                                                         "creative and funny, true to your character and quirks, a "
+                                                         "sentence or two that still clearly says time's up"
+                                                    : up + "; as asked when it was set: " + timer.what,
+                        w.style});
     w.at = timer.endsAt;
-    w.words = timer.what.empty() ? 40 : 150;
+    w.words = timer.what.empty() ? 60 : 150;
     w.signature = timer.signature();
     consider(w);
   }
@@ -2458,6 +2465,7 @@ void pollPlan() {
     if (added) moments::save(companions::active().id);
     plannedDay = day;  // once a day, even when nothing came back
     saveWakeTimes();
+    lineScanStale = true;  // the plan's new lines are work for this same wake
     LOGI("wake", "today's plan: %d line(s) (%s)", added, w.ok ? "planned" : w.error.c_str());
     notifyMoments();
     return;
@@ -2525,7 +2533,8 @@ void pollPhoneWake() {
   static bool lineLeft = false;
   static uint32_t scannedAt = 0;
   static LineJob::Step scannedStep = LineJob::Step::Idle;
-  if (!scannedAt || millis() - scannedAt > 3000 || lineJob.step() != scannedStep) {
+  if (!scannedAt || lineScanStale || millis() - scannedAt > 3000 || lineJob.step() != scannedStep) {
+    lineScanStale = false;
     scannedAt = millis();
     scannedStep = lineJob.step();
     lineLeft = nextLineWork(work, "");
@@ -4071,7 +4080,7 @@ void loop() {
                       : input.key == 'R' ? "When I talked about surfing the other day, what was I saying about it?"
                       : input.key == 'D' ? "Talk dirty to me."
                       : input.key == 'L' ? "Remind me in 2 minutes to drink a glass of water, and sing it to me."
-                      : input.key == 'C' ? "Set a 1 minute timer and when it ends sing me happy birthday."
+                      : input.key == 'C' ? "Start a 1 minute timer."
                       : input.key == 'u' ? "What reminders do I have?"
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {

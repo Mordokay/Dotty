@@ -1113,7 +1113,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   Missed, `MomentEditor`, rules. Timer screen: hourglass, label, big M:SS; tap = pause, long press = "Cancel
   the timer?"; the lock line "Pasta - 7 min"; unlocks at 60 s left. `start_timer {…, what, style}`
   carries what its end says ("sing me happy birthday" → sung, 13 s): without it the writer leant on
-  memories and every timer was "the eggs" (the app's timer sheet has "When it ends").
+  memories and every timer was "the eggs" (the app's timer sheet has "When it ends"); with nothing asked
+  the companion makes the ending its own — creative, funny, in character, ≤ 60 words ("Time is up, my love!
+  … like when a startled rabbit bolts from the apple orchard…").
   **Memory**: lines are recorded in a Wi-Fi chat only once Bluetooth is off and ≥ 40 KB internal (largest
   ≥ 24 KB) are free — a timer's line recorded with Wi-Fi + Bluetooth + Live open left 7 KB, after which
   every Wi-Fi scan failed in 75 ms with "0 networks" ("No Wi-Fi") until a restart; a failed connect logs
