@@ -38,6 +38,7 @@
 #include "piece_buffer.h"
 #include "ui.h"
 #include "memories.h"
+#include "moment_lines.h"
 #include "moments.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
@@ -285,6 +286,7 @@ String placeName() {
 }
 
 void cancelWriter();
+GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c);
 void startWriter(const std::string &what, int seconds);
 void startRecall(const ToolCall &c);
 void startMacro(const Macro &m);
@@ -735,6 +737,7 @@ GeminiLive::Callbacks callbacks() {
   };
   cb.spent = [](int tokens) { usage::addTokens(tokens, sessionKey); };
   cb.memory = [](const ToolCall &c) { return applyMemory(c); };
+  cb.tool = [](const ToolCall &c) { return applyMomentTool(c); };
   cb.turnDone = [](int tokens) {
     ring.forgive(sessionKey);  // a good turn: this key's quota strikes start over
     if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
@@ -932,6 +935,10 @@ void connect() {
     if (!section.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + section;
   }
   personaSection = personaText(companions::active());
+  if (const MomentList *set = moments::of(companions::active().id)) {  // what it has been asked to say later
+    const std::string section = momentsSection(*set, time(nullptr));
+    if (!section.empty()) personaSection += "\n\n" + section;
+  }
   if (!macroList.all().empty()) personaSection += "\n\n" + macrosSection(macroList);  // its phrases → run_macro
   sessionCompanion = companions::active().id;
   evolvedThisChat = false;
@@ -1159,6 +1166,123 @@ void onSettingsTap(uint16_t x, uint16_t y) {
       return;
   }
   redraw = true;
+}
+
+// ---------- moments: reminders, alarms and timers set by voice (moments.h) ----------
+
+void notifyMoments() {
+  JsonDocument event;
+  event["event"] = "companion.moments";
+  ble::notify(event);
+}
+
+void notifyTimer() {
+  JsonDocument event;
+  event["event"] = "companion.timer";
+  ble::notify(event);
+}
+
+std::string jsonText(const JsonDocument &doc) {
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+GeminiLive::ToolAnswer toolError(const char *error) {
+  JsonDocument doc;
+  doc["error"] = error;
+  return {jsonText(doc), true};  // spoken: the model puts it right with the user
+}
+
+// "mon", "Monday", "wed" → the day's bit (moment_store.h: Monday = bit 0).
+uint8_t dayBits(const std::vector<std::string> &days) {
+  static const char *kNames[] = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+  uint8_t bits = 0;
+  for (std::string d : days) {
+    for (char &ch : d) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    for (int i = 0; i < 7; i++)
+      if (d.compare(0, 3, kNames[i]) == 0) bits |= 1 << i;
+  }
+  return bits;
+}
+
+void showNote(const String &note) {
+  info.note = note;
+  noteUntil = millis() + 3000;
+  redraw = true;
+}
+
+// set_moment / cancel_moment / list_moments / start_timer / stop_timer from the model.
+GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
+  const int64_t now = time(nullptr);
+  const bool ours = sessionCompanion == companions::active().id;  // switched mid-chat: nothing lands
+  TimerState &timer = moments::timer();
+  if (c.name == "start_timer" || c.name == "stop_timer") {
+    if (!ours) return toolError("unavailable");
+    JsonDocument doc;
+    if (c.name == "stop_timer") {
+      if (!timer.running) return toolError("no timer is running");
+      if (moments::available()) moments::dropRecording(timer.companion, "timer");
+      timer.cancel();
+      moments::saveTimer();
+      notifyTimer();
+      LOGI("moments", "timer stopped");
+      return {"ok", false};
+    }
+    if (timer.running) {
+      doc["error"] = "a timer is running";
+      doc["label"] = timer.label;
+      doc["left"] = timer.secondsLeft(now);
+      return {jsonText(doc), true};
+    }
+    if (!timer.start(c.seconds, c.label, c.tickEvery, sessionCompanion, now))
+      return toolError("a timer runs from 1 second to 24 hours");
+    moments::saveTimer();
+    notifyTimer();
+    showNote("Timer set");
+    LOGI("moments", "timer: %d s \"%s\"%s", c.seconds, c.label.c_str(), c.tickEvery ? " with ticks" : "");
+    doc["endsAt"] = localTimeText(timer.endsAt);
+    return {jsonText(doc), false};
+  }
+  MomentList *list = ours ? moments::of(sessionCompanion) : nullptr;
+  if (!list) return toolError("unavailable");
+  if (c.name == "list_moments") return {listMomentsText(*list, now), true};
+  if (c.name == "cancel_moment") {
+    const Moment *m = list->find(c.memoryId);
+    if (!m || m->kind == MomentKind::Spontaneous) return toolError("no such moment");
+    LOGI("moments", "cancelled %d: %s", c.memoryId, m->what.c_str());
+    list->remove(c.memoryId);
+    moments::dropRecording(sessionCompanion, std::to_string(c.memoryId));
+    moments::save(sessionCompanion);
+    notifyMoments();
+    return {"ok", false};
+  }
+  // set_moment
+  Moment m;
+  if (!kindFromName(c.kind.empty() ? "reminder" : c.kind, m.kind) || m.kind == MomentKind::Spontaneous)
+    return toolError("kind must be reminder or alarm");
+  if (!parseLocalTime(c.at, m.at)) return toolError("at must be YYYY-MM-DDTHH:MM");
+  m.at -= m.at % 60;  // on the minute
+  if (m.at <= now) return toolError("that time has passed");
+  if (!repeatFromName(c.repeat, m.repeat)) m.repeat = Repeat::Once;
+  m.days = dayBits(c.days);
+  if (m.repeat == Repeat::Days && !m.days) return toolError("which days?");
+  m.what = c.text;
+  m.style = validStyle(c.style) ? c.style : "spoken";
+  m.source = "chat";
+  m.created = now;
+  if (static_cast<int>(list->all().size()) >= MomentList::kMax) return toolError("full: 50 moments are set");
+  const int id = list->add(m);
+  if (id < 0) return toolError("say what it's about");
+  moments::save(sessionCompanion);
+  notifyMoments();
+  showNote(m.kind == MomentKind::Alarm ? "Saving your alarm..." : "Saving your reminder...");
+  LOGI("moments", "set_moment: id %d at %s (%s, %s): %s", id, localTimeText(m.at).c_str(), kindName(m.kind),
+       m.style.c_str(), m.what.c_str());
+  JsonDocument doc;
+  doc["id"] = id;
+  doc["at"] = localTimeText(m.at);
+  return {jsonText(doc), false};
 }
 
 // ---------- the last thing said: kept per companion, replayed (play / pause / loop) ----------
@@ -2527,6 +2651,9 @@ void loop() {
                       : input.key == 'V' ? "What was I saying yesterday morning?"
                       : input.key == 'R' ? "When I talked about surfing the other day, what was I saying about it?"
                       : input.key == 'D' ? "Talk dirty to me."
+                      : input.key == 'L' ? "Remind me in 2 minutes to drink a glass of water, and sing it to me."
+                      : input.key == 'C' ? "Set a timer for 70 seconds for the eggs."
+                      : input.key == 'u' ? "What reminders do I have?"
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
     stopReplay();
