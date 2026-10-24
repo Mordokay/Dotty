@@ -43,6 +43,7 @@
 #include "line_job.h"
 #include "phone_wake.h"
 #include "voice_note.h"
+#include "note_deck.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -225,6 +226,20 @@ int bgFailures = 0;         // lines that failed in this wake: it gives up after
 int64_t lastWake = -1, plannedDay = -1;  // NVS companion/lastWake, plannedDay (read on first use)
 uint32_t bgOpenedAt = 0;
 uint32_t noteTestUntil = 0;  // dev n: a test voice note is recording until then
+// Voice notes (voice_note.h): the deck, a recording to play once the reply ends, the reaction after Done.
+NoteDeck deck;
+bool deckOpen = false;
+std::string deckPendingTitle;  // start_recording: the deck opens once the reply has ended
+bool deckPending = false;
+std::string pendingPlayCompanion, pendingPlayName, pendingPlayTitle;
+bool notePlaying = false;
+struct NoteReaction {
+  bool waiting = false, gotText = false;
+  std::string companion, name, title, transcript;
+  uint32_t ms = 0, until = 0;
+} reaction;
+std::string pendingTypedText, pendingTypedLabel;  // a typed turn waiting for a session
+uint32_t pendingTypedSince = 0;
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 bool jobsDue();
@@ -1265,6 +1280,12 @@ void notifyMoments() {
   ble::notify(event);
 }
 
+void notifyRecordings() {
+  JsonDocument event;
+  event["event"] = "companion.recordings";
+  ble::notify(event);
+}
+
 void notifyTimer() {
   JsonDocument event;
   event["event"] = "companion.timer";
@@ -1334,6 +1355,33 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
     LOGI("moments", "timer: %d s \"%s\"%s%s%s", c.seconds, c.label.c_str(), c.tickEvery ? " with ticks" : "",
          c.text.empty() ? "" : ", then: ", c.text.c_str());
     doc["endsAt"] = localTimeText(timer.endsAt);
+    return {jsonText(doc), false};
+  }
+  if (c.name == "start_recording" || c.name == "play_recording" || c.name == "delete_recording") {
+    if (!ours || !storage::available()) return toolError("unavailable");
+    if (c.name == "start_recording") {
+      const uint64_t freeMb = (SD_MMC.totalBytes() - SD_MMC.usedBytes()) / (1024 * 1024);
+      if (freeMb < 50) return toolError("no room on the card");
+      deckPendingTitle = c.label.empty() ? "Voice note" : c.label;
+      deckPending = true;
+      LOGI("note", "start_recording \"%s\": the deck opens after this reply", deckPendingTitle.c_str());
+      return {"ok", false};
+    }
+    const std::vector<RecordingMeta> all = note::list(sessionCompanion);
+    const int i = matchRecording(all, c.text, now);
+    if (i < 0) return toolError(all.empty() ? "they have no recordings yet" : "no recording matches that");
+    JsonDocument doc;
+    if (c.name == "play_recording") {
+      pendingPlayCompanion = sessionCompanion;
+      pendingPlayName = all[i].name;
+      pendingPlayTitle = all[i].title;
+      doc["playing"] = all[i].title;
+    } else {
+      note::remove(sessionCompanion, all[i].name);
+      LOGI("note", "deleted %s (%s)", all[i].name.c_str(), all[i].title.c_str());
+      doc["deleted"] = all[i].title;
+      notifyRecordings();
+    }
     return {jsonText(doc), false};
   }
   MomentList *list = ours ? moments::of(sessionCompanion) : nullptr;
@@ -1449,7 +1497,7 @@ std::vector<Clip> clipsFor(const FireGroup &g, MomentList &list) {
 
 bool momentBusy() {
   return info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking || awaitingSend ||
-         writing || reading;
+         writing || reading || deckOpen;  // nothing beeps into a voice note
 }
 
 void showFiring() {
@@ -2590,6 +2638,193 @@ void backgroundPoll() {
   pollPhoneWake();
 }
 
+// ---------- voice notes: the deck, playing one, the reaction (voice_note.h, note_deck.h) ----------
+
+String clockText(uint32_t ms) {
+  char buf[12];
+  const uint32_t s = ms / 1000;
+  snprintf(buf, sizeof(buf), "%lu:%02lu", static_cast<unsigned long>(s / 60), static_cast<unsigned long>(s % 60));
+  return buf;
+}
+
+DeckView deckView() {
+  DeckView v;
+  v.title = note::current().title.c_str();
+  v.clock = clockText(deck.elapsedMs(millis()));
+  v.recording = deck.state() == NoteDeck::State::Recording;
+  v.paused = deck.state() == NoteDeck::State::Paused;
+  v.confirm = deck.state() == NoteDeck::State::ConfirmDiscard;
+  v.empty = deck.parts() == 0 && !v.recording;
+  v.levelDb = voice::levelDb();
+  return v;
+}
+
+void openDeck(const std::string &title) {
+  if (!note::begin(sessionCompanion.empty() ? companions::active().id : sessionCompanion, title)) {
+    LOGW("note", "the deck didn't open (no card?)");
+    return;
+  }
+  deck.open(millis());
+  deckOpen = true;
+  redraw = true;
+}
+
+// A typed turn (the user doesn't see the text; `label` is what the history and the screen show).
+void typedTurn(const std::string &text, const std::string &label) {
+  stopReplay();
+  beginLast();
+  cancelWriter();
+  said.clear();
+  info.said = "";
+  turnMood = info.mood = "neutral";
+  firstAudioAt = 0;
+  turnMemory.clear();
+  textQueue.clear();
+  replyFrames = 0;
+  heard = label;
+  info.heard = heard.c_str();
+  live.sendText(text);
+  releasedAt = millis();
+  setState(Talk::Thinking);
+}
+
+// Sent once a session is ready (one is opened for it when there's none).
+void queueTypedTurn(const std::string &text, const std::string &label) {
+  pendingTypedText = text;
+  pendingTypedLabel = label;
+  pendingTypedSince = millis();
+}
+
+void pollTypedTurn() {
+  if (pendingTypedText.empty()) return;
+  if (live.ready() && (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Offline)) {
+    typedTurn(pendingTypedText, pendingTypedLabel);
+    pendingTypedText.clear();
+  } else if (!live.connected() && !connecting && !awaitingConnect && info.state != Talk::Error) {
+    connect();
+  } else if (millis() - pendingTypedSince > 30000) {
+    LOGW("note", "no session for the reaction: dropped");
+    pendingTypedText.clear();
+  }
+}
+
+void finishDeck(bool keep) {
+  static int16_t chunk[voice::kChunkFrames];
+  size_t frames = 0;
+  while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+  voice::stopListening();
+  const bool streamed = note::streaming();
+  const RecordingMeta m = note::current();
+  const std::string name = note::finish(keep);
+  deckOpen = false;
+  lastTurnAt = millis();
+  setState(live.connected() ? Talk::Ready : Talk::Offline, idleStatus());
+  if (name.empty()) return;
+  notifyRecordings();
+  reaction = NoteReaction();
+  reaction.waiting = true;
+  reaction.companion = sessionCompanion.empty() ? companions::active().id : sessionCompanion;
+  reaction.name = name;
+  reaction.title = m.title;
+  reaction.ms = note::current().ms;
+  reaction.until = millis() + (streamed ? 10000 : 0);  // the phone's draft is due within seconds
+}
+
+void pollReaction() {
+  if (!reaction.waiting || (!reaction.gotText && static_cast<int32_t>(millis() - reaction.until) < 0)) return;
+  reaction.waiting = false;
+  if (reaction.companion != companions::active().id) return;  // switched meanwhile
+  const std::string what = "'" + reaction.title + "' (" + clockText(reaction.ms).c_str() + ")";
+  const std::string text =
+      reaction.gotText
+          ? "(Dotty, not the user:) They just recorded a voice note with you, " + what + ". What they said: " +
+                reaction.transcript +
+                "\n\nSay briefly that it's saved and react to what they said, in character. Save lasting facts about "
+                "them with remember."
+          : "(Dotty, not the user:) They just recorded a voice note with you, " + what +
+                ". It's saved, but you can't hear it yet: say briefly that it's kept and that you'll listen to it "
+                "properly once their phone is near.";
+  LOGI("note", "reaction to %s (%s)", reaction.name.c_str(), reaction.gotText ? "with its text" : "no text yet");
+  queueTypedTurn(text, "(recording) " + reaction.title + " - " + clockText(reaction.ms).c_str());
+}
+
+void pollDeck(bool bootDown) {
+  shell::wake();  // the deck keeps Dotty unlocked
+  lastTurnAt = millis();  // and the chat open (no review meanwhile)
+  NoteDeck::Event e = deck.hold(bootDown, millis());
+  if (e == NoteDeck::Event::PartStart) {
+    voice::startListening();
+    note::partStart();
+    redraw = true;
+  } else if (e == NoteDeck::Event::PartEnd) {
+    static int16_t chunk[voice::kChunkFrames];
+    size_t frames = 0;
+    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    voice::stopListening();
+    note::partEnd();
+    redraw = true;
+  }
+  if (deck.state() == NoteDeck::State::Recording) {
+    static int16_t chunk[voice::kChunkFrames];
+    size_t frames = 0;
+    while (voice::nextChunk(chunk, frames)) note::add(chunk, frames);
+    static uint32_t lastDraw = 0;
+    if (millis() - lastDraw > 1000) {
+      lastDraw = millis();
+      redraw = true;
+    }
+  }
+  e = deck.tick(millis());
+  if (e == NoteDeck::Event::Warn) {
+    static const AudioPlayer::Note kWarn[] = {{84, 150}, {0, 100}, {84, 150}};
+    player.playNotes(kWarn, 3);
+  }
+  if (e == NoteDeck::Event::Done) finishDeck(true);
+  if (e == NoteDeck::Event::CloseEmpty || e == NoteDeck::Event::Discard) finishDeck(false);
+}
+
+void deckTap(uint16_t x, uint16_t y) {
+  const DeckHit hit = screens::deckHit(x, y, deckView());
+  NoteDeck::Event e = NoteDeck::Event::None;
+  switch (hit) {
+    case DeckHit::Back: e = deck.cancel(); break;
+    case DeckHit::Undo:
+      if (deck.undo() == NoteDeck::Event::Undo) LOGI("note", "undo: %lu ms off", static_cast<unsigned long>(note::undo()));
+      break;
+    case DeckHit::Done: e = deck.done(); break;
+    case DeckHit::Discard: e = deck.discard(false); break;
+    case DeckHit::Yes: e = deck.discard(true); break;
+    case DeckHit::No: deck.keep(); break;
+    default: break;
+  }
+  if (e == NoteDeck::Event::Done) finishDeck(true);
+  if (e == NoteDeck::Event::Discard || e == NoteDeck::Event::CloseEmpty) finishDeck(false);
+  redraw = true;
+}
+
+// play_recording: after the reply that announced it.
+void pollNotePlay() {
+  if (notePlaying && !player.isPlaying()) {
+    notePlaying = false;
+    info.momentIcon = "";
+    redraw = true;
+  }
+  if (pendingPlayName.empty() || info.state == Talk::Thinking || info.state == Talk::Speaking || voice::playing() ||
+      live.inTurn())
+    return;
+  const String wav = note::path(pendingPlayCompanion, pendingPlayName, "wav");
+  if (player.play(wav.c_str())) {
+    notePlaying = true;
+    info.momentIcon = "speech";
+    info.said = (std::string("Playing: ") + pendingPlayTitle).c_str();
+    info.page = -1;
+    if (info.state != Talk::After) setState(Talk::After);
+    lastTurnAt = millis();
+    LOGI("note", "playing %s", pendingPlayName.c_str());
+  }
+  pendingPlayName.clear();
+}
+
 // ---------- measurement (dev key Y): a text-model request while the Live session is open ----------
 // Can Dotty hold a second TLS connection during a chat (a text model writing a long script for Live
 // to read)? Logs internal RAM before and right after the second handshake, the result and timing.
@@ -2652,7 +2887,9 @@ bool idleScreen() {
 }
 
 void drawApp() {
-  if (settingsOpen) {
+  if (deckOpen) {
+    screens::drawDeck(deckView());
+  } else if (settingsOpen) {
     screens::drawSettings(settingsView());
   } else if (historyOpen) {
     std::vector<std::pair<String, String>> exchanges;
@@ -2675,6 +2912,11 @@ void drawApp() {
 }
 
 void onTap(uint16_t x, uint16_t y) {
+  if (deckOpen) return deckTap(x, y);
+  if (notePlaying) {  // a tap stops a voice note playing
+    player.stop();
+    return;
+  }
   if (firing.active) return tapFiring();  // snooze an alarm, stop anything else
   if (timerShowing()) return timerTap(x, y);
   if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
@@ -3713,6 +3955,10 @@ void loop() {
     if (!shell::locked()) ble::start();
   }
   static bool wasLocked = false;
+  if (!unlocked && deckOpen) {  // locking (or the auto-lock) = Done
+    if (deck.lockOrPower(millis()) == NoteDeck::Event::Done) finishDeck(true);
+    else finishDeck(false);
+  }
   if (!unlocked) {
     stopReplay();
     if (info.state != Talk::Offline && info.state != Talk::Error && !firing.active) onLock();
@@ -3853,6 +4099,8 @@ void loop() {
   if (!bootDown) downAt = 0;
   else if (!downAt) downAt = millis();
   const bool held = bootDown && millis() - downAt >= kHoldMs;
+  if (deckOpen) pollDeck(bootDown);
+  if (notePlaying && held) player.stop();
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
   if (held && firing.active && static_cast<int32_t>(downAt - firing.startedMs) >= 0) {
     const bool ringing = firing.kind == "alarm" || firing.kind == "timer";  // BOOT only stops those
@@ -3865,7 +4113,7 @@ void loop() {
     shell::endBluetoothWindow();
     if (bgSession) disconnect("a chat");
   }
-  if (held && !historyOpen && !settingsOpen && !awaitingSend && answeredPress != downAt) {
+  if (held && !deckOpen && !historyOpen && !settingsOpen && !awaitingSend && answeredPress != downAt) {
     static uint32_t triedAt = 0;  // one connect per press (an error screen would retry every pass)
     if ((info.state == Talk::Offline || info.state == Talk::Error) && triedAt != downAt) {
       triedAt = downAt;
@@ -3905,6 +4153,14 @@ void loop() {
   writerPoll();
   pollLines();
   pollPhoneWake();
+  pollNotePlay();
+  pollReaction();
+  pollTypedTurn();
+  if (deckPending && !deckOpen && (info.state == Talk::After || info.state == Talk::Ready) && !voice::playing() &&
+      !live.inTurn() && !writing && !reading) {
+    deckPending = false;
+    openDeck(deckPendingTitle);
+  }
   if (info.state == Talk::Thinking && !awaitingSend && !writing && !reading && millis() - releasedAt > 20000)
     setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
@@ -3935,7 +4191,8 @@ void loop() {
   // Before closing, a silent review: Gemini goes over the chat and saves what it missed (it once
   // kept "likes popcorn" but not "my name is Peter"). Closed when it's done, or after 20 s.
   const uint32_t idleMs = live.overRelay() ? kRelayIdleMs : kIdleMs;
-  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs && !bgSession) {
+  if ((info.state == Talk::Ready || info.state == Talk::After) && millis() - lastTurnAt > idleMs && !bgSession && !deckOpen &&
+      pendingTypedText.empty()) {
     if (!reviewStart && live.ready()) {
       reviewStart = millis();
       LOGI("companion", "chat over: memory review");
@@ -4118,26 +4375,15 @@ void loop() {
                       : input.key == 'L' ? "Remind me in 2 minutes to drink a glass of water, and sing it to me."
                       : input.key == 'C' ? "Start a 1 minute timer."
                       : input.key == 'u' ? "What reminders do I have?"
+                      : input.key == 'b' ? "I want to record something about eating bananas in space."
+                      : input.key == 'j' ? "Play my bananas recording."
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
-    stopReplay();
-    beginLast();
-    cancelWriter();
-    said.clear();  // a turn like startTalking's, without opening a voice activity
-    info.said = "";
-    turnMood = info.mood = "neutral";
-    firstAudioAt = 0;
-    turnMemory.clear();
-    textQueue.clear();
-    replyFrames = 0;
-    heard = *typed ? typed
-                   : std::string("(Dotty, not the user: a reading test.) Read the text below aloud exactly, word for "
-                                 "word, in a calm, slow voice. Don't add, skip or change anything, don't call "
-                                 "write_long, and say nothing else.\n\n") + kScript;
-    info.heard = heard.c_str();
-    live.sendText(heard);
-    releasedAt = millis();
-    setState(Talk::Thinking);
+    const std::string text = *typed ? typed
+                                    : std::string("(Dotty, not the user: a reading test.) Read the text below aloud exactly, "
+                                                  "word for word, in a calm, slow voice. Don't add, skip or change "
+                                                  "anything, don't call write_long, and say nothing else.\n\n") + kScript;
+    typedTurn(text, text);
   }
   if (input.key == 'E' && (info.state == Talk::Ready || info.state == Talk::After)) lastTurnAt = millis() - kIdleMs - 1;
   if (input.key == 'm') {

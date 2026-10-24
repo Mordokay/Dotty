@@ -41,6 +41,13 @@ struct SettingsView {
 };
 enum class ReplayHit { None, PlayPause, Loop };
 enum class TimerHit { None, Yes, No };
+// The recording deck (voice_note.h, note_deck.h).
+struct DeckView {
+  String title, clock;
+  bool recording = false, paused = false, confirm = false, empty = true;
+  int levelDb = -60;
+};
+enum class DeckHit { None, Back, Undo, Done, Discard, Yes, No };
 enum class SettingsHit { None, Back, CompanionPrev, CompanionNext, VolumeDown, VolumeUp, Speak, VoicePrev, VoiceNext };
 
 namespace screens {
@@ -54,6 +61,8 @@ void drawSettings(const SettingsView &v);
 SettingsHit settingsHit(uint16_t x, uint16_t y);
 ReplayHit replayHit(uint16_t x, uint16_t y);
 TimerHit timerHit(uint16_t x, uint16_t y);  // the cancel question's buttons
+void drawDeck(const DeckView &v);
+DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v);
 // Pages a reply takes (for swiping through it).
 int replyPages(const ScreenInfo &info);
 

@@ -2,6 +2,7 @@
 #include "text_pages.h"
 
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
@@ -182,6 +183,77 @@ void drawTimer(const ScreenInfo &info) {
 }
 
 }  // namespace
+
+// The recording deck: the title in the nav bar (back = cancel), REC or PAUSED with the time, the meter
+// while recording, Undo · Done · Discard while paused, or the discard question.
+void drawDeck(const DeckView &v) {
+  epd.fillScreen(kWhite);
+  epd.setTextColor(kBlack);
+  nav::draw(epd, ui::printable(v.title), nav::Icon::Back, nav::Icon::None);
+  if (v.confirm) {
+    epd.setFont(&FreeSans12pt7b);
+    ui::drawCentered(epd, "Discard this", 92);
+    ui::drawCentered(epd, "recording?", 118);
+    epd.fillRoundRect(12, 150, 80, 40, 6, kBlack);
+    epd.drawRoundRect(108, 150, 80, 40, 6, kBlack);
+    epd.setFont(&FreeSans9pt7b);
+    epd.setTextColor(kWhite);
+    centeredIn("Yes", 175, 12, 92);
+    epd.setTextColor(kBlack);
+    centeredIn("No", 175, 108, 188);
+    return;
+  }
+  if (v.recording) {
+    epd.fillCircle(52, 84, 9, kBlack);
+    epd.setFont(&FreeSansBold24pt7b);
+    epd.setCursor(70, 100);
+    epd.print("REC");
+  } else if (v.empty) {
+    epd.setFont(&FreeSans12pt7b);
+    ui::drawCentered(epd, "Hold BOOT", 88);
+    ui::drawCentered(epd, "to record", 114);
+  } else {
+    epd.setFont(&FreeSans12pt7b);
+    ui::drawCentered(epd, "PAUSED", 90);
+  }
+  if (!v.empty || v.recording) {
+    epd.setFont(&FreeSansBold12pt7b);
+    ui::drawCentered(epd, v.clock, 128);
+  }
+  if (v.recording) {  // 20 bars, -60..0 dBFS, like Tape's
+    const int bars = constrain((v.levelDb + 60) / 3, 0, 20);
+    for (int i = 0; i < 20; i++) {
+      const int16_t x = 30 + i * 7, h = 4 + i / 2;
+      if (i < bars) epd.fillRect(x, 170 - h, 5, h, kBlack);
+      else epd.drawFastHLine(x, 169, 5, kBlack);
+    }
+    return;
+  }
+  if (v.paused && !v.empty) {  // ↶ undo · ✓ done (dark) · trash
+    epd.drawRoundRect(4, 150, 60, 44, 6, kBlack);
+    epd.fillRoundRect(70, 150, 60, 44, 6, kBlack);
+    epd.drawRoundRect(136, 150, 60, 44, 6, kBlack);
+    for (int r = 9; r <= 10; r++) epd.drawCircle(34, 172, r, kBlack);  // undo: a ring open at the top left, an arrowhead
+    epd.fillRect(22, 160, 12, 12, kWhite);
+    epd.fillTriangle(20, 166, 30, 158, 30, 172, kBlack);
+    for (int d = 0; d < 3; d++) {  // done: a tick
+      epd.drawLine(88, 171 + d, 96, 179 + d, kWhite);
+      epd.drawLine(96, 179 + d, 112, 163 + d, kWhite);
+    }
+    epd.drawRect(158, 164, 16, 18, kBlack);  // discard: a bin
+    epd.drawFastHLine(154, 162, 24, kBlack);
+    epd.fillRect(162, 158, 8, 4, kBlack);
+    for (int x = 162; x <= 170; x += 4) epd.drawFastVLine(x, 167, 12, kBlack);
+  }
+}
+
+DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v) {
+  if (nav::hit(x, y) < 0) return DeckHit::Back;
+  if (y < 146) return DeckHit::None;
+  if (v.confirm) return x < kW / 2 ? DeckHit::Yes : DeckHit::No;
+  if (!v.paused || v.empty) return DeckHit::None;
+  return x < 67 ? DeckHit::Undo : x < 133 ? DeckHit::Done : DeckHit::Discard;
+}
 
 TimerHit timerHit(uint16_t x, uint16_t y) {
   if (y < 148) return TimerHit::None;
