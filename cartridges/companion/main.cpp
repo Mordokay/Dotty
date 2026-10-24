@@ -192,6 +192,10 @@ uint32_t relayDistrustUntil = 0; // the phone didn't answer a setup: Wi-Fi for c
 std::string resumeRetryHandle;  // a hand-over's resume, retried while Google still holds the old session
 int resumeRetries = 0;
 uint32_t resumeRetryAt = 0;
+// A moment just played by itself: a BOOT hold until then opens a chat that knows what was said.
+uint32_t momentReplyUntil = 0;
+std::string firedContext;   // firedNote(…) for that chat
+bool momentOnScreen = false;  // a moment's text is up with no chat behind it (not a closed session)
 
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
@@ -935,6 +939,10 @@ void connect() {
     if (!section.empty()) memorySection += (memorySection.empty() ? "" : "\n\n") + section;
   }
   personaSection = personaText(companions::active());
+  if (momentReplyUntil && static_cast<int32_t>(momentReplyUntil - millis()) > 0) {  // it just said something by itself
+    personaSection += "\n\n" + firedContext;
+    momentReplyUntil = 0;
+  }
   if (const MomentList *set = moments::of(companions::active().id)) {  // what it has been asked to say later
     const std::string section = momentsSection(*set, time(nullptr));
     if (!section.empty()) personaSection += "\n\n" + section;
@@ -996,6 +1004,7 @@ void flushEarly() {
 }
 
 void startTalking() {
+  momentOnScreen = false;
   heard.clear();
   said.clear();
   info.heard = info.said = "";
@@ -1285,6 +1294,314 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
   return {jsonText(doc), false};
 }
 
+// ---------- moments firing (moment_schedule.h): beeps, the line, alarms ringing ----------
+// A due group (a companion's moments at one minute) unlocks Dotty and plays: the attention beeps, a
+// pause, its recording with the text paced by it (or each member's own recording, or just the text);
+// alarms ring every minute until BOOT (a tap snoozes). Several groups at once play one after the
+// other, the beeps only before the first.
+
+struct Clip {
+  String wav;       // "" = no recording: the text alone
+  LastLine timing;  // its text pieces, timed to the audio
+  std::string text;
+};
+
+struct Firing {
+  bool active = false;
+  FireGroup group;
+  std::vector<Clip> clips;
+  size_t clip = 0;
+  enum class Phase { Beeps, Gap, Clip, ClipGap, Ended } phase = Phase::Beeps;
+  uint32_t phaseAt = 0;
+  bool beeps = true;  // the attention beeps before it (only the first of several at once)
+  Delivery delivery = Delivery::Voice;
+  std::string shown;  // the text so far (earlier clips + the current one's heard part)
+  std::string line;   // all of it (for the history and the chat that may follow)
+  std::string kind;   // reminder, alarm, spontaneous
+  uint32_t hold = 0;  // the gap after a clip shown as text only (time to read it)
+} firing;
+std::vector<FireGroup> firingQueue;
+Ringing ringing;
+String missedAlarmLine;    // "Missed alarm 07:30" on the lock screen until the next unlock
+uint32_t lastMomentPoll = 0;
+
+void stopReplay();
+
+const char *momentIcon(const std::string &kind) {
+  return kind == "alarm" ? "alarm" : kind == "spontaneous" ? "speech" : kind == "timer" ? "timer" : "bell";
+}
+
+// What a group will play: its shared recording, else each member's own (or its text).
+std::vector<Clip> clipsFor(const FireGroup &g, MomentList &list) {
+  std::vector<const Moment *> members;
+  for (const int id : g.ids)
+    if (const Moment *m = list.find(id)) members.push_back(m);
+  auto clipOf = [&](const std::string &key, const std::string &sig, const std::string &fallback) {
+    Clip c;
+    c.text = fallback;
+    if (!moments::recorded(g.companion, key, sig)) return c;
+    LastLine l;
+    if (parseLastLine(companions::readText(moments::recordingPath(g.companion, key, "json")), l)) {
+      c.wav = moments::recordingPath(g.companion, key, "wav");
+      c.timing = l;
+      if (!l.text().empty()) c.text = l.text();
+    }
+    return c;
+  };
+  std::vector<Clip> out;
+  if (members.size() > 1) {
+    std::string joined;
+    for (const Moment *m : members) joined += (joined.empty() ? "" : " ") + (m->line.empty() ? m->what + "." : m->line);
+    const Clip together = clipOf("group-" + std::to_string(g.minute), groupSignature(members), joined);
+    if (!together.wav.isEmpty()) return {together};
+  }
+  for (const Moment *m : members)
+    out.push_back(clipOf(std::to_string(m->id), groupSignature({m}), m->line.empty() ? m->what + "." : m->line));
+  return out;
+}
+
+bool momentBusy() {
+  return info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking || awaitingSend ||
+         writing || reading;
+}
+
+void showFiring() {
+  momentOnScreen = true;
+  lastTurnAt = millis();  // the text stays up like a reply's (the idle check would clear it at once)
+  info.momentIcon = momentIcon(firing.kind);
+  info.said = firing.shown.c_str();
+  info.page = -1;
+  if (info.state != Talk::After) setState(Talk::After);
+  redraw = true;
+}
+
+// The 5 rising attention notes (~2 s): "pay attention, I'm going to speak".
+void playAttention() {
+  static const AudioPlayer::Note kAttention[] = {{72, 300}, {0, 100}, {76, 300}, {0, 100}, {79, 300},
+                                                 {0, 100}, {84, 300}, {0, 100}, {88, 400}};
+  player.playNotes(kAttention, sizeof(kAttention) / sizeof(kAttention[0]));
+}
+
+void endFiring();
+
+// From the beeps through every clip; called again for each ring of an alarm.
+void playFiring(bool withBeeps) {
+  firing.clip = 0;
+  firing.shown.clear();
+  const bool voice = firing.delivery == Delivery::Voice;
+  if (firing.group.alarm) player.setVolume(moments::rules().alarmVolume);
+  if (withBeeps && firing.delivery != Delivery::TextOnly) {
+    playAttention();
+    firing.phase = Firing::Phase::Beeps;
+  } else {
+    firing.phase = Firing::Phase::Gap;
+  }
+  firing.phaseAt = millis();
+  if (!voice) firing.shown = firing.line;  // beeps (or nothing) and the text, no voice
+  showFiring();
+}
+
+void startFiring(const FireGroup &g, bool beeps) {
+  MomentList *list = moments::of(g.companion);
+  if (!list) return;
+  shell::wake();  // the screen lights up like an alarm clock
+  stopReplay();
+  firing = Firing();
+  firing.active = true;
+  firing.group = g;
+  firing.beeps = beeps;
+  firing.clips = clipsFor(g, *list);
+  const int64_t now = time(nullptr);
+  firing.delivery = delivery(moments::rules(), g.alarm, now);
+  std::string kind = "reminder";
+  for (const int id : g.ids)
+    if (const Moment *m = list->find(id)) {
+      if (m->kind == MomentKind::Alarm) kind = "alarm";
+      else if (m->kind == MomentKind::Spontaneous && kind == "reminder") kind = "spontaneous";
+    }
+  firing.kind = kind;
+  for (const Clip &c : firing.clips) firing.line += (firing.line.empty() ? "" : " ") + c.text;
+  LOGI("moments", "firing %s's %s at %s: %u moment(s), %u clip(s)%s", g.companion.c_str(), kind.c_str(),
+       localTimeText(g.minute * 60).c_str(), static_cast<unsigned>(g.ids.size()), static_cast<unsigned>(firing.clips.size()),
+       firing.delivery == Delivery::Voice ? "" : firing.delivery == Delivery::BeepsAndText ? " (quiet: beeps and text)" : " (quiet: text only)");
+  // Moved on now (a repeating one to its next time), so a pause or a restart never fires it twice.
+  for (const int id : g.ids)
+    if (Moment *m = list->find(id)) advance(*m, now, false);
+  moments::save(g.companion);
+  notifyMoments();
+  if (g.alarm) ringing.start(millis(), true);
+  playFiring(beeps);
+}
+
+// Every pass while a moment plays.
+void pollFiring() {
+  const uint32_t now = millis();
+  shell::wake();
+  switch (firing.phase) {
+    case Firing::Phase::Beeps:
+      if (!player.isPlaying()) {
+        firing.phase = Firing::Phase::Gap;
+        firing.phaseAt = now;
+      }
+      break;
+    case Firing::Phase::Gap:
+    case Firing::Phase::ClipGap: {
+      const uint32_t gap = firing.phase == Firing::Phase::Gap ? 500 : firing.hold ? firing.hold : 700;
+      if (now - firing.phaseAt < gap) break;
+      firing.hold = 0;
+      if (firing.delivery != Delivery::Voice || firing.clip >= firing.clips.size()) {
+        firing.phase = Firing::Phase::Ended;
+        firing.phaseAt = now;
+        break;
+      }
+      const Clip &c = firing.clips[firing.clip];
+      if (c.wav.isEmpty() || !player.play(c.wav.c_str())) {  // no recording: its text, a moment to read it
+        firing.shown += (firing.shown.empty() ? "" : " ") + c.text;
+        showFiring();
+        firing.clip++;
+        firing.phase = Firing::Phase::ClipGap;
+        firing.phaseAt = now;
+        firing.hold = 3000;  // a moment on screen to read it
+      } else {
+        firing.phase = Firing::Phase::Clip;
+        firing.phaseAt = now;
+      }
+      break;
+    }
+    case Firing::Phase::Clip: {
+      const Clip &c = firing.clips[firing.clip];
+      const std::string heard = c.timing.textAt(player.positionMs());
+      std::string before;
+      for (size_t i = 0; i < firing.clip; i++) before += (before.empty() ? "" : " ") + firing.clips[i].text;
+      const std::string shown = before + (before.empty() || heard.empty() ? "" : " ") + heard;
+      if (shown != firing.shown && now - lastTextAt > 1000) {
+        firing.shown = shown;
+        lastTextAt = now;
+        showFiring();
+      }
+      if (!player.isPlaying()) {
+        firing.hold = 0;
+        firing.shown = before + (before.empty() ? "" : " ") + c.text;
+        showFiring();
+        firing.clip++;
+        firing.phase = Firing::Phase::ClipGap;
+        firing.phaseAt = now;
+      }
+      break;
+    }
+    case Firing::Phase::Ended:
+      if (!ringing.active()) return endFiring();
+      switch (ringing.poll(now)) {  // an alarm: again every minute until BOOT
+        case Ringing::Action::Play:
+          if (now - firing.phaseAt > 1000) playFiring(true);
+          break;
+        case Ringing::Action::GiveUp: {
+          char at[8];
+          const time_t minute = static_cast<time_t>(firing.group.minute * 60);
+          tm t;
+          gmtime_r(&minute, &t);
+          snprintf(at, sizeof(at), "%02d:%02d", t.tm_hour, t.tm_min);
+          missedAlarmLine = String("Missed alarm ") + at;
+          LOGI("moments", "alarm unanswered for 10 minutes: %s", missedAlarmLine.c_str());
+          return endFiring();
+        }
+        default:
+          break;
+      }
+      break;
+  }
+}
+
+void endFiring() {
+  player.stop();
+  player.setVolume(settings.volume);
+  ringing.stop();
+  if (MomentList *list = moments::of(firing.group.companion)) {
+    for (const int id : firing.group.ids) {  // one-offs are done: their recordings go
+      const Moment *m = list->find(id);
+      if (!m || m->state != MomentState::Upcoming) moments::dropRecording(firing.group.companion, std::to_string(id));
+    }
+  }
+  moments::dropRecording(firing.group.companion, "group-" + std::to_string(firing.group.minute));
+  if (firing.group.companion == companions::active().id) {  // history: the active companion's folder
+    history::append("", firing.line, "neutral", 0, 0, "moment: " + firing.kind);
+    historyTurns++;
+    historyNews = true;
+    historyNewsCompanion = firing.group.companion;
+  }
+  if (firing.kind != "alarm") {
+    momentReplyUntil = millis() + 180000;
+    firedContext = firedNote(firing.line, firing.kind);
+  }
+  LOGI("moments", "%s done", firing.kind.c_str());
+  firing.active = false;
+  lastTurnAt = millis();
+  info.momentIcon = "";
+  info.said = firing.line.c_str();
+  redraw = true;
+  if (!firingQueue.empty()) {  // the next companion's, without beeps
+    const FireGroup next = firingQueue.front();
+    firingQueue.erase(firingQueue.begin());
+    startFiring(next, false);
+  }
+}
+
+// BOOT on a playing moment: an alarm is answered ("I'm up"), anything else just stops.
+void answerFiring() {
+  LOGI("moments", "%s answered", firing.kind.c_str());
+  firingQueue.clear();
+  const bool alarm = firing.kind == "alarm";
+  endFiring();
+  if (alarm) showNote("Good morning!");
+}
+
+// A tap on a playing moment: snooze an alarm (5 minutes, 3 times; the 4th = BOOT); else stop it.
+void tapFiring() {
+  if (firing.kind != "alarm") return answerFiring();
+  player.stop();
+  if (!ringing.snooze(millis())) return answerFiring();
+  firing.phase = Firing::Phase::Ended;
+  firing.phaseAt = millis();
+  const time_t until = time(nullptr) + Ringing::kSnoozeMs / 1000;
+  tm t;
+  gmtime_r(&until, &t);
+  char note[24];
+  snprintf(note, sizeof(note), "Snoozed until %02d:%02d", t.tm_hour, t.tm_min);
+  showNote(note);
+  LOGI("moments", "%s (%d of %d)", note, ringing.snoozes(), Ringing::kMaxSnoozes);
+}
+
+// Every pass (locked too): missed ones, due ones. Once a second is plenty.
+void pollMoments() {
+  if (firing.active) return pollFiring();
+  if (!moments::available() || millis() - lastMomentPoll < 1000) return;
+  lastMomentPoll = millis();
+  const int64_t now = time(nullptr);
+  const std::vector<CompanionMoments> all = moments::all();
+  Due d = due(all, now, momentBusy());
+  for (const auto &miss : d.missed) {
+    MomentList *list = moments::of(miss.first);
+    Moment *m = list ? list->find(miss.second) : nullptr;
+    if (!m) continue;
+    LOGI("moments", "missed %s's %s %d (%s): %s", miss.first.c_str(), kindName(m->kind), m->id, localTimeText(m->at).c_str(),
+         m->what.c_str());
+    if (m->kind == MomentKind::Alarm) missedAlarmLine = String("Missed alarm ") + localTimeText(m->at).substr(11).c_str();
+    if (miss.first == companions::active().id) history::append("", "(missed) " + m->what, "neutral", 0, 0, std::string("moment: ") + kindName(m->kind));
+    advance(*m, now, true);
+    if (m->state != MomentState::Upcoming) moments::dropRecording(miss.first, std::to_string(m->id));
+    moments::save(miss.first);
+    notifyMoments();
+  }
+  if (d.fire.empty()) return;
+  firingQueue.assign(d.fire.begin() + 1, d.fire.end());
+  startFiring(d.fire.front(), true);
+}
+
+// Locked: when to wake next (the shell sleeps until the next minute anyway).
+void armLockedWake() {
+  shell::wakeLockedAt(static_cast<time_t>(nextDue(moments::all())));
+}
+
 // ---------- the last thing said: kept per companion, replayed (play / pause / loop) ----------
 
 String lastPath(const std::string &id, const char *ext) {
@@ -1404,7 +1721,7 @@ void lastSavePoll() {
 }
 
 bool canReplay() {
-  return hasLast && !settings.textOnly &&
+  return hasLast && !settings.textOnly && !firing.active &&
          (info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Error);
 }
 
@@ -1553,6 +1870,7 @@ void drawApp() {
 }
 
 void onTap(uint16_t x, uint16_t y) {
+  if (firing.active) return tapFiring();  // snooze an alarm, stop anything else
   if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
     const ReplayHit hit = screens::replayHit(x, y);
     if (hit == ReplayHit::PlayPause) return toggleReplay();
@@ -1581,6 +1899,7 @@ void onLock() {
   // Locking turns Bluetooth off at once: a relay chat is over even though nothing reported it yet.
   if (live.overRelay() && live.connected() == false && !live.latestHandle().empty()) live.keepResume();
   if (live.connected() || connecting || live.overRelay()) disconnect("locked");
+  momentOnScreen = false;
   if (info.state != Talk::Error) setState(Talk::Offline, idleStatus());
 }
 
@@ -2359,6 +2678,8 @@ void setup() {
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
   config.wakeApp = [] { player.powerUp(); };
+  config.nowPlaying = [] { return missedAlarmLine; };  // the lock screen's bottom line
+  config.onLockedWake = [] { return false; };          // lets wakeLockedAt end a sleep (the loop does the work)
   shell::begin(config);
   storage::begin();
   companions::begin();  // also points memories and history at the active companion
@@ -2393,11 +2714,20 @@ void loop() {
     bleBackAt = 0;
     if (!shell::locked()) ble::start();
   }
+  static bool wasLocked = false;
   if (!unlocked) {
     stopReplay();
-    if (info.state != Talk::Offline && info.state != Talk::Error) onLock();
+    if (info.state != Talk::Offline && info.state != Talk::Error && !firing.active) onLock();
+    wasLocked = true;
+    pollMoments();  // one due unlocks Dotty (shell::wake) and plays from the next pass
+    armLockedWake();
     return;
   }
+  if (wasLocked) {  // unlocked: the lock screen's "Missed alarm" has been seen
+    wasLocked = false;
+    missedAlarmLine = "";
+  }
+  pollMoments();
   if (live.connected() && millis() - lastHeapSample > 250) {
     lastHeapSample = millis();
     lowFree = min(lowFree, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
@@ -2444,6 +2774,13 @@ void loop() {
   if (!connecting && !awaitingConnect && !live.connected()) {
     if ((info.state == Talk::Listening && !turnSent) || awaitingSend) {
       connect();  // a recording is waiting for it
+    } else if (momentOnScreen) {
+      // A moment's words stay up for its reply window (3 minutes), then the usual screen.
+      if (!firing.active && !(momentReplyUntil && static_cast<int32_t>(momentReplyUntil - millis()) > 0) &&
+          millis() - lastTurnAt > kIdleMs) {
+        momentOnScreen = false;
+        setState(Talk::Offline, idleStatus());
+      }
     } else if (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Connecting) {
       // Closed by the server's goAway, the runaway guard or a quiet socket death: Wi-Fi, the
       // wake lock and Bluetooth still need undoing (else Dotty can't sleep and the app can't reach it).
@@ -2514,7 +2851,13 @@ void loop() {
   if (!bootDown) downAt = 0;
   else if (!downAt) downAt = millis();
   const bool held = bootDown && millis() - downAt >= kHoldMs;
-  if (held && !historyOpen && !settingsOpen && !awaitingSend) {
+  static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
+  if (held && firing.active) {
+    const bool alarm = firing.kind == "alarm";
+    answerFiring();
+    if (alarm) answeredPress = downAt;
+  }
+  if (held && !historyOpen && !settingsOpen && !awaitingSend && answeredPress != downAt) {
     static uint32_t triedAt = 0;  // one connect per press (an error screen would retry every pass)
     if ((info.state == Talk::Offline || info.state == Talk::Error) && triedAt != downAt) {
       triedAt = downAt;
@@ -2620,6 +2963,19 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == 'F') {  // dev: the next moment, now
+    const int64_t now = time(nullptr);
+    for (const CompanionMoments &c : moments::all()) {
+      Moment *best = nullptr;
+      for (const Moment &m : c.list->all())
+        if (m.state == MomentState::Upcoming && (!best || m.at < best->at)) best = c.list->find(m.id);
+      if (!best) continue;
+      best->at = now - now % 60;
+      moments::save(c.companion);
+      LOGI("moments", "dev: %s's moment %d moved to now", c.companion.c_str(), best->id);
+      break;
+    }
+  }
   if (input.key == 'T') {
     keepBle = !keepBle;
     LOGI("companion", "Bluetooth during sessions: %s", keepBle ? "kept on (soak test)" : "off (normal)");

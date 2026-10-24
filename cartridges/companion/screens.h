@@ -23,6 +23,9 @@ struct ScreenInfo {
   bool writing = false;    // a long answer is being written: "Writing..." under the avatar
   bool recalling = false;  // looking back at past chats: "Thinking back..."
   int replayProgress = 0;  // 0..1000 while a replay plays or is paused (the bar under the avatar)
+  // A moment playing (moments.h): its kind's badge top right, in place of the history clock —
+  // "bell" (reminder), "alarm", "timer", "speech" (the companion's own line); "" = none.
+  String momentIcon;
 };
 
 struct SettingsView {

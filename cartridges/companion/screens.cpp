@@ -37,6 +37,33 @@ void drawHistoryIcon() {
   epd.drawLine(cx, cy, cx + 4, cy + 3, kBlack);
 }
 
+// A moment's kind, top right (where the history clock usually is).
+void drawMomentIcon(const String &kind) {
+  const int16_t cx = kW - 18, cy = 15;
+  if (kind == "alarm") {  // a clock with two bells on top
+    epd.fillCircle(cx - 7, cy - 8, 4, kBlack);
+    epd.fillCircle(cx + 7, cy - 8, 4, kBlack);
+    epd.fillCircle(cx, cy + 1, 10, kBlack);
+    epd.fillCircle(cx, cy + 1, 7, kWhite);
+    epd.drawFastVLine(cx, cy - 4, 6, kBlack);
+    epd.drawLine(cx, cy + 1, cx + 4, cy + 4, kBlack);
+  } else if (kind == "timer") {  // an hourglass
+    epd.drawFastHLine(cx - 8, cy - 11, 17, kBlack);
+    epd.drawFastHLine(cx - 8, cy + 11, 17, kBlack);
+    epd.drawTriangle(cx - 7, cy - 10, cx + 7, cy - 10, cx, cy, kBlack);
+    epd.fillTriangle(cx - 7, cy + 10, cx + 7, cy + 10, cx, cy, kBlack);
+  } else if (kind == "speech") {  // a speech bubble
+    epd.fillRoundRect(cx - 11, cy - 9, 22, 15, 5, kBlack);
+    epd.fillTriangle(cx - 6, cy + 5, cx - 1, cy + 5, cx - 8, cy + 11, kBlack);
+  } else {  // a bell
+    epd.fillCircle(cx, cy - 4, 7, kBlack);
+    epd.fillRect(cx - 7, cy - 4, 15, 9, kBlack);
+    epd.fillRoundRect(cx - 10, cy + 4, 21, 3, 1, kBlack);
+    epd.fillCircle(cx, cy + 9, 2, kBlack);
+    epd.fillRect(cx - 1, cy - 13, 3, 3, kBlack);
+  }
+}
+
 // The replay buttons in a column under the gear, left of the avatar (the bottom third stays for the
 // text and the meter): ▶ / ‖, then loop (dark when on).
 constexpr int16_t kReplaySize = 30, kReplayX = 3, kPlayY = 40, kLoopY = 76;
@@ -198,7 +225,8 @@ void draw(const ScreenInfo &shownInfo) {
   if (info.writing) drawNote("Writing...", small, true);
   else if (info.recalling) drawNote("Thinking back...", small);
   else if (info.note.length() && info.state != Talk::Listening) drawNote(info.note, small);
-  drawHistoryIcon();
+  if (info.momentIcon.length()) drawMomentIcon(info.momentIcon);
+  else drawHistoryIcon();
   if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);
   if ((shownInfo.replaying || shownInfo.replayPaused) && !small) {  // how far the replay is, like a song's bar
     constexpr int16_t x = 8, y = 135, w = kW - 16, h = 6;
