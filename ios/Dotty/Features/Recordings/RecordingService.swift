@@ -36,7 +36,7 @@ final class RecordingService {
         var fetch = false  // a whole file Dotty resends (rec.fetch), not one being recorded
         var background: UIBackgroundTaskIdentifier = .invalid
         var parts = RecordingParts()
-        var drafts: [String] = []  // one per part
+        var drafts: [DraftAccumulator] = []  // one per part
         var request: SFSpeechAudioBufferRecognitionRequest?
         var task: SFSpeechRecognitionTask?
     }
@@ -68,7 +68,7 @@ final class RecordingService {
             let from = m["from"] as? Int ?? 0
             if from > 0, let before = partial[id], before.count == from {
                 live.parts.prefill(before)
-                live.drafts = [""]
+                live.drafts = [DraftAccumulator()]
             }
             partial[id] = nil
             live.background = Self.beginBackground("voice-note")
@@ -80,7 +80,7 @@ final class RecordingService {
         case "rec.part":
             finishPartRecognition()
             current?.parts.startPart()
-            current?.drafts.append("")
+            current?.drafts.append(DraftAccumulator())
             startPartRecognition()
         case "rec.undo":
             current?.task?.cancel()
@@ -116,7 +116,7 @@ final class RecordingService {
         lastFrameAt = Date()
         if current?.parts.partCount == 0 {  // a whole file resent (rec.fetch): one part, no rec.part
             current?.parts.startPart()
-            current?.drafts.append("")
+            current?.drafts.append(DraftAccumulator())
             startPartRecognition()
         }
         current?.parts.add(data)
@@ -146,14 +146,14 @@ final class RecordingService {
         }, onError: { _ in })
     }
 
-    private var finishedDrafts: [String: [String]] = [:]  // a recording's drafts after rec.end (late results)
+    private var finishedDrafts: [String: [DraftAccumulator]] = [:]  // a recording's drafts after rec.end (late results)
 
     private func setDraft(id: String?, index: Int, text: String) {
         if current?.id == id, var drafts = current?.drafts, index < drafts.count {
-            drafts[index] = text
+            drafts[index].update(text)
             current?.drafts = drafts
         } else if let id, var drafts = finishedDrafts[id], index < drafts.count {
-            drafts[index] = text
+            drafts[index].update(text)
             finishedDrafts[id] = drafts
         }
     }
@@ -191,7 +191,8 @@ final class RecordingService {
         RecordingStore.save(r)
         finishedDrafts[live.id] = live.drafts
         try? await Task.sleep(nanoseconds: 1_500_000_000)  // the last part's final words
-        var draft = (finishedDrafts.removeValue(forKey: live.id) ?? live.drafts).filter { !$0.isEmpty }.joined(separator: " ")
+        var draft = (finishedDrafts.removeValue(forKey: live.id) ?? live.drafts).map(\.text).filter { !$0.isEmpty }
+            .joined(separator: " ")
         if draft.isEmpty { draft = await fileDraft(RecordingStore.wavURL(r)) }  // no live words (the background, a fetch)
         r.draft = draft
         RecordingStore.save(r)
@@ -206,15 +207,15 @@ final class RecordingService {
               let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable else { return "" }
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        var text = ""
+        var text = DraftAccumulator()
         var done = false
         let task = SpeechAuth.recognize(recognizer, request, onText: { t, final in
-            text = t
+            text.update(t)
             if final { done = true }
         }, onError: { _ in done = true })
         for _ in 0..<600 where !done { try? await Task.sleep(nanoseconds: 100_000_000) }
         task.cancel()
-        return text
+        return text.text
     }
 
     /// Asks Dotty for the whole recording (or the rest of an interrupted transfer) and waits while it comes.

@@ -61,3 +61,21 @@ enum RecordingRetry {
         return now.timeIntervalSince(last) >= wait
     }
 }
+
+/// Apple's live text for one part. iOS's recognizer starts its text over after a pause (each result then
+/// holds only the newest phrase): a result that doesn't carry on from the last one means the last was
+/// finished, so it's kept and the new one added after it. A 56 s note had kept only its last sentence.
+struct DraftAccumulator {
+    private var committed = ""
+    private var latest = ""
+
+    var text: String { [committed, latest].filter { !$0.isEmpty }.joined(separator: " ") }
+
+    mutating func update(_ result: String) {
+        let carriesOn = latest.isEmpty || result.lowercased().hasPrefix(String(latest.lowercased().prefix(12)))
+        if !carriesOn {
+            committed = [committed, latest].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        latest = result
+    }
+}

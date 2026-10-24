@@ -50,6 +50,16 @@ resumed.prefill(Array(repeating: Int16(7), count: 1140))
 resumed.add(frame(5, ramp))
 check("a resumed fetch keeps what came before", resumed.samples.count == 1140 + 570 && resumed.samples.first == 7 && !resumed.gap)
 
+// iOS's recognizer starts its text over after a pause (the user's 56 s note kept only its last sentence).
+var acc = DraftAccumulator()
+acc.update("So people like to chew bubblegum")
+acc.update("So people like to chew bubblegum but it is not healthy")
+acc.update("I was thinking what else")
+acc.update("I was thinking what else can you chew")
+acc.update("So yeah I have to research this")
+check("draft: text started over after a pause is kept", acc.text ==
+      "So people like to chew bubblegum but it is not healthy I was thinking what else can you chew So yeah I have to research this")
+
 let now = Date(timeIntervalSince1970: 1_800_000_000)
 check("retry: the first try at once", RecordingRetry.shouldTry(attempts: 0, last: nil, now: now))
 check("retry: the second after an hour", !RecordingRetry.shouldTry(attempts: 1, last: now.addingTimeInterval(-3000), now: now) &&
