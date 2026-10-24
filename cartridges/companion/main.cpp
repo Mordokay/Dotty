@@ -40,6 +40,7 @@
 #include "memories.h"
 #include "moment_lines.h"
 #include "moments.h"
+#include "line_job.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -153,7 +154,7 @@ std::string historyNewsCompanion;  // turns appended to history, and when talksT
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
 // moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
 MacroList macroList;  // the user's macros (data/macros.json), shared by every companion
-enum class Job { Write, Recall };
+enum class Job { Write, Recall, Line, Plan };
 Job jobKind = Job::Write;
 std::string jobCallId;           // recall's function call, answered with what was found
 bool writing = false;            // a job asked, its follow-up not sent yet
@@ -196,6 +197,14 @@ uint32_t resumeRetryAt = 0;
 uint32_t momentReplyUntil = 0;
 std::string firedContext;   // firedNote(…) for that chat
 bool momentOnScreen = false;  // a moment's text is up with no chat behind it (not a closed session)
+// Recording a moment's line (line_job.h): the reading's audio goes to lineRec, not the speaker.
+LineJob lineJob;
+bool capturingLine = false;
+AdpcmRecorder lineRec;
+LastLine linePending;      // its text pieces, timed
+size_t lineFrames = 0;     // 24 kHz frames received
+uint32_t lineCooldownUntil = 0, lineReadingAt = 0, lastLineScan = 0;
+void abortLine(const char *why);
 
 // The background connect (a task: TLS takes seconds and must not freeze the screen).
 TaskHandle_t connectTask = nullptr;
@@ -300,6 +309,7 @@ uint32_t resumeKeptAt = 0;  // when a conversation was kept to resume (kResumeKe
 
 void disconnect(const char *why) {
   reviewStart = 0;
+  abortLine(why);
   ble::advertiseSlowly(false);
   if (!live.resumeHandle().empty()) resumeKeptAt = millis();
   path.end();
@@ -583,6 +593,7 @@ void launchJob() {
 }
 
 void startJob() {
+  abortLine("the chat needs the text model");  // the chat's own long answer comes first
   writing = true;
   written = false;
   questionDone = false;
@@ -715,6 +726,10 @@ GeminiLive::Callbacks callbacks() {
     redraw = true;
   };
   cb.said = [](const std::string &piece) {
+    if (capturingLine) {  // a moment's line being recorded: its words, timed to its audio
+      linePending.add(lineFrames / 24, piece);
+      return;
+    }
     if (info.state != Talk::Thinking && info.state != Talk::Speaking) return;  // an interrupted reply
     // The reading's first words follow the question's own ("Give me a moment."): a space between.
     std::string t = piece;
@@ -729,6 +744,11 @@ GeminiLive::Callbacks callbacks() {
     }
   };
   cb.audio = [](const int16_t *pcm, size_t frames) {
+    if (capturingLine) {  // to the card, not the speaker: the moment stays a surprise
+      lineRec.add(pcm, frames);
+      lineFrames += frames;
+      return;
+    }
     if (info.state != Talk::Thinking && info.state != Talk::Speaking) return;
     if (!voice::playing()) beginReply();
     voice::play(pcm, frames);
@@ -744,6 +764,12 @@ GeminiLive::Callbacks callbacks() {
   cb.tool = [](const ToolCall &c) { return applyMomentTool(c); };
   cb.turnDone = [](int tokens) {
     ring.forgive(sessionKey);  // a good turn: this key's quota strikes start over
+    if (capturingLine) {  // a chunk of a moment's line has been read
+      usage::addTokens(tokens, sessionKey);
+      lineJob.chunkDone();
+      lastTurnAt = millis();
+      return;
+    }
     if (reviewStart) {  // the end-of-chat review: its memory calls are applied, nothing else to keep
       usage::addTokens(tokens, sessionKey);
       LOGI("companion", "memory review done (%d tokens)", tokens);
@@ -1005,6 +1031,7 @@ void flushEarly() {
 
 void startTalking() {
   momentOnScreen = false;
+  abortLine("talking");
   heard.clear();
   said.clear();
   info.heard = info.said = "";
@@ -1517,10 +1544,13 @@ void endFiring() {
   player.setVolume(settings.volume);
   ringing.stop();
   if (MomentList *list = moments::of(firing.group.companion)) {
-    for (const int id : firing.group.ids) {  // one-offs are done: their recordings go
+    for (const int id : firing.group.ids) {  // one-offs are done: they go with their recordings (the history keeps them)
       const Moment *m = list->find(id);
-      if (!m || m->state != MomentState::Upcoming) moments::dropRecording(firing.group.companion, std::to_string(id));
+      if (m && m->state == MomentState::Upcoming) continue;
+      moments::dropRecording(firing.group.companion, std::to_string(id));
+      list->remove(id);
     }
+    moments::save(firing.group.companion);
   }
   moments::dropRecording(firing.group.companion, "group-" + std::to_string(firing.group.minute));
   if (firing.group.companion == companions::active().id) {  // history: the active companion's folder
@@ -1654,6 +1684,7 @@ bool writeCard(const String &path, const uint8_t *head, size_t headLen, const ui
 struct LastSave {
   AdpcmRecorder audio;
   LastLine line;
+  std::string signature;  // a moment's line: what it was recorded for (moments::recorded)
   std::string companion;
   String wav, json;
   uint32_t startedAt = 0;
@@ -1676,7 +1707,14 @@ void lastSaveTask(void *arg) {
     SD_MMC.remove(job->wav);
     ok = SD_MMC.rename(job->wav + ".part", job->wav);
   }
-  const std::string json = lastLineJson(job->line);
+  std::string json = lastLineJson(job->line);
+  if (!job->signature.empty()) {  // a moment's recording: what it was made for
+    JsonDocument doc;
+    deserializeJson(doc, json);
+    doc["signature"] = job->signature;
+    json.clear();
+    serializeJson(doc, json);
+  }
   ok = ok && writeCard(job->json, reinterpret_cast<const uint8_t *>(json.data()), json.size(), nullptr, 0);
   job->ok = ok;
   job->done = true;  // the loop takes it from here (lastSavePoll)
@@ -1788,6 +1826,229 @@ void pollReplay() {
     info.said = t.c_str();
     lastTextAt = millis();
     redraw = true;
+  }
+}
+
+// ---------- recording moments' lines (line_job.h): written, read silently, saved ----------
+// The earliest-due moment (or group, or the timer) without its recording; in a chat, only the chat's
+// companion's (its session reads it). A recording is made for a signature (what, style): an edit
+// records again.
+
+LastSave *lineSave = nullptr;
+const char *lineNote = "Saving your reminder...";
+
+bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
+  const int64_t now = time(nullptr);
+  bool found = false;
+  auto consider = [&](const LineWork &w) {
+    if (!found || w.at < out.at) {
+      out = w;
+      found = true;
+    }
+  };
+  TimerState &timer = moments::timer();
+  if (timer.running && !timer.paused && !timer.ready && timer.secondsLeft(now) > 20 &&
+      (onlyCompanion.empty() || timer.companion == onlyCompanion)) {
+    LineWork w;
+    w.companion = timer.companion;
+    w.key = "timer";
+    w.topics.push_back({"timer", timer.label.empty() ? "their timer ran out" : "the timer for " + timer.label, "excited"});
+    w.at = timer.endsAt;
+    w.words = 40;
+    w.style = "excited";
+    w.signature = "timer|" + timer.label;
+    consider(w);
+  }
+  for (const CompanionMoments &c : moments::all()) {
+    if (!onlyCompanion.empty() && c.companion != onlyCompanion) continue;
+    MomentList &list = *c.list;
+    bool changed = false;
+    std::vector<int> grouped;
+    for (const std::vector<int> &ids : sharedMinutes(list)) {
+      std::vector<const Moment *> members;
+      LineWork w;
+      w.companion = c.companion;
+      for (const int id : ids) {
+        const Moment *m = list.find(id);
+        members.push_back(m);
+        w.topics.push_back({kindName(m->kind), m->what, m->style});
+        if (m->repeat == Repeat::Once) grouped.push_back(id);
+      }
+      w.key = "group-" + std::to_string(members[0]->at / 60);
+      w.ids = ids;
+      w.at = members[0]->at;
+      w.words = groupWords(ids.size());
+      w.style = members[0]->style;
+      w.signature = groupSignature(members);
+      const bool ready = moments::recorded(c.companion, w.key, w.signature);
+      for (const int id : ids) {  // a one-off in a group is ready when the group is
+        Moment *m = list.find(id);
+        if (m->repeat == Repeat::Once && m->ready != ready) {
+          m->ready = ready;
+          changed = true;
+        }
+      }
+      if (!ready) consider(w);
+    }
+    for (const Moment &m : list.all()) {
+      if (m.state != MomentState::Upcoming) continue;
+      if (std::find(grouped.begin(), grouped.end(), m.id) != grouped.end()) continue;
+      LineWork w;
+      w.companion = c.companion;
+      w.key = std::to_string(m.id);
+      w.ids = {m.id};
+      w.topics.push_back({kindName(m.kind), m.what, m.style});
+      w.at = m.at;
+      w.words = 150;
+      w.style = m.style;
+      w.signature = groupSignature({&m});
+      const bool ready = moments::recorded(c.companion, w.key, w.signature);
+      if (m.ready != ready) {
+        list.find(m.id)->ready = ready;
+        changed = true;
+      }
+      if (!ready) consider(w);
+    }
+    if (changed) moments::save(c.companion);
+  }
+  return found;
+}
+
+void abortLine(const char *why) {
+  if (!lineJob.busy()) return;
+  LOGI("line", "stopped (%s)", why);
+  if (lineJob.step() == LineJob::Step::Writing) jobs.cancel();
+  lineJob.abort();
+  capturingLine = false;
+  lineRec.reset(0);
+  lineCooldownUntil = millis() + 60000;
+}
+
+void lineSaveTask(void *arg) {
+  lastSaveTask(arg);  // the replay's: WAV from the ADPCM, then the timing file (with its signature)
+}
+
+// The reading has arrived: onto the card (a task: a minute of WAV is ~3 MB).
+void saveLine() {
+  capturingLine = false;
+  if (lineSave || lineRec.samples() < 24000 / 2) {
+    LOGW("line", "nothing to keep (%u frames)", static_cast<unsigned>(lineRec.samples()));
+    lineRec.reset(0);
+    return lineJob.saved(false);
+  }
+  linePending.ms = UINT32_MAX;
+  linePending.cut(lineRec.samples() / 24);
+  linePending.t = time(nullptr);
+  LastSave *job = new LastSave();
+  job->audio = std::move(lineRec);
+  job->line = linePending;
+  job->signature = lineJob.work().signature;
+  job->companion = lineJob.work().companion;
+  job->wav = moments::recordingPath(lineJob.work().companion, lineJob.work().key, "wav");
+  job->json = moments::recordingPath(lineJob.work().companion, lineJob.work().key, "json");
+  job->startedAt = millis();
+  lineRec = AdpcmRecorder();
+  lineSave = job;
+  if (xTaskCreatePinnedToCore(lineSaveTask, "line-save", 8192, job, 1, nullptr, 0) != pdPASS) {
+    delete job;
+    lineSave = nullptr;
+    lineJob.saved(false);
+  }
+}
+
+void lineSaved() {
+  if (!lineSave || !lineSave->done) return;
+  const bool ok = lineSave->ok;
+  LOGI("line", "%s %s: %.1f s in %lu ms", ok ? "recorded" : "NOT recorded", lineJob.work().key.c_str(),
+       lineSave->audio.samples() / 24000.0f, static_cast<unsigned long>(millis() - lineSave->startedAt));
+  delete lineSave;
+  lineSave = nullptr;
+  lineJob.saved(ok);
+  if (!ok) return;
+  const LineWork &w = lineJob.work();
+  if (w.key == "timer") {
+    moments::timer().line = lineJob.text();
+    moments::timer().ready = true;
+    moments::saveTimer();
+  } else if (MomentList *list = moments::of(w.companion)) {
+    for (const int id : w.ids)
+      if (Moment *m = list->find(id)) {
+        if (w.ids.size() == 1) m->line = lineJob.text();
+        m->ready = true;
+      }
+    moments::save(w.companion);
+  }
+  notifyMoments();
+}
+
+// In a chat: once the reply has ended, the chat's companion's lines are written and read on its session.
+void pollLines() {
+  lineSaved();
+  if (lineJob.step() == LineJob::Step::Done || lineJob.step() == LineJob::Step::Failed) {
+    if (lineJob.step() == LineJob::Step::Failed) lineCooldownUntil = millis() + 60000;
+    lineJob.reset();
+    capturingLine = false;
+  }
+  const bool idleChat = live.ready() && !connecting && (info.state == Talk::After || info.state == Talk::Ready) &&
+                        !writing && !reading && !reviewStart && !live.inTurn() && !voice::playing() && !firing.active;
+  if (lineJob.busy()) {
+    lastTurnAt = millis();  // the chat stays open (its review waits) until the line is done
+    info.note = lineNote;
+    noteUntil = millis() + 3000;
+  }
+  switch (lineJob.step()) {
+    case LineJob::Step::Idle: {
+      if (!idleChat || jobs.busy() || static_cast<int32_t>(millis() - lineCooldownUntil) < 0) return;
+      if (millis() - lastLineScan < 3000) return;
+      lastLineScan = millis();
+      LineWork w;
+      if (!nextLineWork(w, sessionCompanion)) return;
+      const Profile *who = companions::find(w.companion);
+      if (!who) return;
+      lineNote = w.key == "timer" ? "Saving your timer..." : "Saving your reminder...";
+      for (const Topic &t : w.topics)
+        if (t.kind == "alarm") lineNote = "Saving your alarm...";
+      lineJob.start(w);
+      writerBody = lineRequest(*who, w.companion == sessionCompanion ? memorySection : std::string(), w.topics, w.at, w.words);
+      jobKind = Job::Line;
+      LOGI("line", "writing %s's %s (%u topic(s), %d words at most)", w.companion.c_str(), w.key.c_str(),
+           static_cast<unsigned>(w.topics.size()), w.words);
+      launchJob();
+      redraw = true;
+      return;
+    }
+    case LineJob::Step::Writing: {
+      Written w;
+      if (jobs.take(w)) {
+        if (w.tokens) usage::addTokens(w.tokens, sessionKey);
+        LOGI("line", "%s (%u characters)", w.ok ? "written" : w.error.c_str(), static_cast<unsigned>(w.text.size()));
+        lineJob.written(w);
+      }
+      return;
+    }
+    case LineJob::Step::WaitSession:
+      if (idleChat && sessionCompanion == lineJob.work().companion) {
+        lineJob.sessionReady();
+        lineRec.reset(kLastMaxFrames);
+        linePending = LastLine();
+        lineFrames = 0;
+        lineReadingAt = millis();
+      }
+      return;
+    case LineJob::Step::Reading: {
+      if (millis() - lineReadingAt > 120000) return abortLine("the reading took too long");
+      std::string note;
+      if (lineJob.takeSend(note)) {
+        capturingLine = true;
+        live.sendText(note, lineJob.text().size() && lineFrames > 0);
+      }
+      return;
+    }
+    case LineJob::Step::Saving:
+      if (capturingLine) saveLine();
+      return;
+    default:
+      return;
   }
 }
 
@@ -2894,6 +3155,7 @@ void loop() {
     setState(Talk::Error, "Connection lost");
   }
   writerPoll();
+  pollLines();
   if (info.state == Talk::Thinking && !awaitingSend && !writing && !reading && millis() - releasedAt > 20000)
     setState(Talk::Ready, "No reply. Try again?");
   if (info.state == Talk::Speaking && !textQueue.empty() && (millis() - lastTextAt > 1000 || !voice::playing())) {
