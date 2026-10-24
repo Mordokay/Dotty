@@ -1111,7 +1111,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   (a preview), `companion.moment.rules {…}`, `companion.timer {action}`; events `companion.moments`,
   `companion.timer`. App: Companion › Moments (clock button): timer card, Today / Upcoming / Repeating /
   Missed, `MomentEditor`, rules. Timer screen: hourglass, label, big M:SS; tap = pause, long press = "Cancel
-  the timer?"; the lock line "Pasta - 7 min"; unlocks at 60 s left. Dev keys: L (sung reminder in 2 min,
+  the timer?"; the lock line "Pasta - 7 min"; unlocks at 60 s left. `start_timer {…, what, style}`
+  carries what its end says ("sing me happy birthday" → sung, 13 s): without it the writer leant on
+  memories and every timer was "the eggs" (the app's timer sheet has "When it ends").
+  **Memory**: lines are recorded in a Wi-Fi chat only once Bluetooth is off and ≥ 40 KB internal (largest
+  ≥ 24 KB) are free — a timer's line recorded with Wi-Fi + Bluetooth + Live open left 7 KB, after which
+  every Wi-Fi scan failed in 75 ms with "0 networks" ("No Wi-Fi") until a restart; a failed connect logs
+  the heap. Measured: idle 86 KB internal with the iPhone connected (150 KB with Bluetooth off), a relay
+  chat ~80 KB; the first Wi-Fi use keeps ~23 KB for good (networking set up once, not a leak). Dev keys:
+  `%` logs the heap, `^` forces Wi-Fi chats for 10 min (Bluetooth off). Dev keys: L (sung reminder in 2 min,
   typed), C (70 s egg timer, typed), u (list, typed), F (next moment now), y (an app reminder 40 min out), z
   (plan now, hours around now, wake due), ! (restore rules, clear every moment), @ (moment commands via
   `ble::runHere`, dotty_core's serial command runner), N (cycles the note card). The note card (memories,

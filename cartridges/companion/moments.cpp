@@ -88,6 +88,8 @@ void loadTimer() {
     timer_.paused = p.getBool("timerPaused", false);
     timer_.tickEvery = p.getInt("timerEvery", 0);
     timer_.label = p.getString("timerLabel", "").c_str();
+    timer_.what = p.getString("timerWhat", "").c_str();
+    timer_.style = p.getString("timerStyle", "").c_str();
     timer_.companion = p.getString("timerWho", "").c_str();
     timer_.line = p.getString("timerLine", "").c_str();
     timer_.ready = p.getBool("timerReady", false);
@@ -160,6 +162,8 @@ void saveTimer() {
   p.putBool("timerPaused", timer_.paused);
   p.putInt("timerEvery", timer_.tickEvery);
   p.putString("timerLabel", timer_.label.c_str());
+  p.putString("timerWhat", timer_.what.c_str());
+  p.putString("timerStyle", timer_.style.c_str());
   p.putString("timerWho", timer_.companion.c_str());
   p.putString("timerLine", timer_.line.c_str());
   p.putBool("timerReady", timer_.ready);

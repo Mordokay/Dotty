@@ -157,6 +157,10 @@ std::string liveSetup(const LiveConfig &config) {
   param(timer, "seconds", "INTEGER", true);
   param(timer, "label", "STRING", false)["description"] = "what it's for, a word or two";
   param(timer, "tickEvery", "INTEGER", false)["description"] = "a soft tick every this many seconds, if asked";
+  param(timer, "what", "STRING", false)["description"] =
+      "what you'll say or do when it ends, if the user asked for something (\"sing happy birthday\")";
+  JsonObject timerStyle = param(timer, "style", "STRING", false);
+  for (const char *st : {"spoken", "sung", "whispered", "excited", "calm"}) timerStyle["enum"].add(st);
   declare("stop_timer", "Stop the running timer");
   return serialize(doc);
 }
@@ -283,7 +287,7 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "You can say things by yourself later: only when the user asks for a reminder or an alarm (\"remind me at 6 to "
       "cook dinner\", \"wake me at 7\"), call set_moment with the local time worked out from the date and time below "
       "(\"in 20 minutes\" too) and what it's about; for a countdown (\"a 10-minute timer\") call start_timer (at most "
-      "24 hours). Always call the tool, every time: never say a reminder, alarm or timer is set without calling it (a second "
+      "24 hours), with what to say or do when it ends in what (and style) if they asked for something. Always call the tool, every time: never say a reminder, alarm or timer is set without calling it (a second "
       "timer while one runs comes back as an error to tell the user about). Then confirm it briefly in your own words. "
       "To cancel or change one, list_moments gives their numbers. "
       "You are on a "

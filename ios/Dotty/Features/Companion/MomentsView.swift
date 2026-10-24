@@ -456,6 +456,7 @@ private struct TimerSheet: View {
     @State private var minutes = 10
     @State private var seconds = 0
     @State private var label = ""
+    @State private var what = ""
     @State private var confirmReplace = false
     @State private var error: String?
 
@@ -471,6 +472,9 @@ private struct TimerSheet: View {
                     .frame(height: 150)
                 }
                 Section("What it's for") { TextField("Pasta", text: $label) }
+                Section("When it ends (optional)") {
+                    TextField("Sing me happy birthday", text: $what, axis: .vertical).lineLimit(1...3)
+                }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
             }
             .navigationTitle("Timer")
@@ -499,8 +503,18 @@ private struct TimerSheet: View {
     private func start(replacing: Bool = false) async {
         do {
             if replacing { _ = try await link.send("companion.timer", ["action": "cancel"]) }
-            _ = try await link.send("companion.timer", ["action": "start", "seconds": hours * 3600 + minutes * 60 + seconds,
-                                                        "label": label.trimmingCharacters(in: .whitespaces)])
+            var args: [String: Any] = ["action": "start", "seconds": hours * 3600 + minutes * 60 + seconds,
+                                       "label": label.trimmingCharacters(in: .whitespaces)]
+            let ending = what.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !ending.isEmpty {
+                args["what"] = String(ending.prefix(200))
+                if ending.lowercased().contains("sing") { args["style"] = "sung" }
+            }
+            let r = try await link.send("companion.timer", args)
+            if r.ok == false {
+                error = r["error"] as? String == "running" ? "A timer is already running." : "That didn't work."
+                return
+            }
             onStarted()
             dismiss()
         } catch {

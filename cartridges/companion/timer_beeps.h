@@ -17,6 +17,8 @@ struct TimerState {
   int left = 0;  // seconds, while paused
   int tickEvery = 0;
   std::string label, companion;
+  std::string what;    // what to say or do when it ends ("sing happy birthday"), "" = just that it's up
+  std::string style;   // how (spoken, sung, …), "" = excited
   std::string line;    // the companion's closing words, once written
   bool ready = false;  // its line is recorded
 
@@ -28,6 +30,7 @@ struct TimerState {
   std::string lockLine(int64_t now) const;  // "Pasta - 7 min" (minutes rounded up; "Timer" without a label)
   std::string clock(int64_t now) const;     // "9:41", "1:02:05"
   std::string title() const;                // "Pasta", or "Timer"
+  std::string signature() const;            // what its recording is made for (label, what, style)
 };
 
 struct Beep {

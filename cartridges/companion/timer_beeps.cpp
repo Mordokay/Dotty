@@ -12,6 +12,8 @@ bool TimerState::start(int seconds, const std::string &label_, int tickEvery_, c
   tickEvery = tickEvery_ > 0 ? tickEvery_ : 0;
   label = label_;
   companion = companion_;
+  what.clear();
+  style.clear();
   line.clear();
   ready = false;
   return true;
@@ -44,6 +46,10 @@ std::string TimerState::title() const {
   std::string t = label;
   t[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(t[0])));
   return t;
+}
+
+std::string TimerState::signature() const {
+  return "timer|" + label + "|" + what + "|" + style;
 }
 
 std::string TimerState::lockLine(int64_t now) const {

@@ -34,6 +34,22 @@ int main() {
     h.start(3725, "", 0, "friend", t);
     CHECK("clock: hours", h.clock(t) == "1:02:05");
   }
+  {
+    TimerState s;
+    s.start(60, "eggs", 0, "friend", t);
+    s.what = "sing happy birthday";
+    s.style = "sung";
+    s.line = "old words";
+    s.ready = true;
+    s.start(60, "", 0, "friend", t);
+    CHECK("start forgets the last timer's words, style and line", s.what.empty() && s.style.empty() && s.line.empty() && !s.ready);
+    s.what = "sing happy birthday";
+    s.style = "sung";
+    TimerState other = s;
+    other.what = "say well done";
+    CHECK("signature: what, style and label make the recording", s.signature() != other.signature() &&
+                                                                     s.signature().find("happy birthday") != std::string::npos);
+  }
   CHECK("cue: no tickEvery -> silence at 300 s", timerCue(300, 0, false).sound == TimerSound::None);
   CHECK("cue: tickEvery 60 -> a tick at 120 s, none at 90",
         timerCue(120, 60, false).sound == TimerSound::Tick && timerCue(90, 60, false).sound == TimerSound::None);

@@ -963,7 +963,9 @@ void connectLoop(void *) {
     error = "No Wi-Fi";
   }
   if (!ok && connectError.isEmpty()) connectError = error;
-  if (!ok) LOGW("companion", "connect failed: %s", error.c_str());
+  if (!ok)
+    LOGW("companion", "connect failed: %s (internal %u KB free, largest %u KB)", error.c_str(),
+         heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
   if (cancelConnect) {  // locked, stopped or the phone won meanwhile: undo what this task opened
     if (claimed) live.close();
     net::disconnect();
@@ -1321,10 +1323,13 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
     }
     if (!timer.start(c.seconds, c.label, c.tickEvery, sessionCompanion, now))
       return toolError("a timer runs from 1 second to 24 hours");
+    timer.what = c.text;  // "sing happy birthday": what its end says (the user, 2026-10-24)
+    timer.style = validStyle(c.style) ? c.style : "";
     moments::saveTimer();
     notifyTimer();
     showNote("Timer set");
-    LOGI("moments", "timer: %d s \"%s\"%s", c.seconds, c.label.c_str(), c.tickEvery ? " with ticks" : "");
+    LOGI("moments", "timer: %d s \"%s\"%s%s%s", c.seconds, c.label.c_str(), c.tickEvery ? " with ticks" : "",
+         c.text.empty() ? "" : ", then: ", c.text.c_str());
     doc["endsAt"] = localTimeText(timer.endsAt);
     return {jsonText(doc), false};
   }
@@ -1762,7 +1767,7 @@ void startTimerEnd() {
   firing.delivery = Delivery::Voice;
   Clip c;
   c.text = t.title() + ": time's up!";
-  const std::string sig = "timer|" + t.label;
+  const std::string sig = t.signature();
   LastLine l;
   if (moments::recorded(t.companion, "timer", sig) &&
       parseLastLine(companions::readText(moments::recordingPath(t.companion, "timer", "json")), l)) {
@@ -2111,11 +2116,14 @@ bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
     LineWork w;
     w.companion = timer.companion;
     w.key = "timer";
-    w.topics.push_back({"timer", timer.label.empty() ? "their timer ran out" : "the timer for " + timer.label, "excited"});
+    const std::string up = timer.label.empty() ? "their timer ran out" : "their " + timer.label + " timer ran out";
+    w.style = timer.style.empty() ? "excited" : timer.style;
+    // What they asked for at its end ("sing happy birthday"), else just that it's up — without it the
+    // writer leant on memories and every timer was "the eggs".
+    w.topics.push_back({"timer", timer.what.empty() ? up : up + "; as asked when it was set: " + timer.what, w.style});
     w.at = timer.endsAt;
-    w.words = 40;
-    w.style = "excited";
-    w.signature = "timer|" + timer.label;
+    w.words = timer.what.empty() ? 40 : 150;
+    w.signature = timer.signature();
     consider(w);
   }
   for (const CompanionMoments &c : moments::all()) {
@@ -2252,6 +2260,11 @@ void pollLines() {
     lineJob.reset();
     capturingLine = false;
   }
+  // Room for a second TLS connection (the writer): in a Wi-Fi chat only once Bluetooth is off (Wi-Fi +
+  // Bluetooth + Live left 7 KB once and Wi-Fi couldn't start again), and never in a tight heap.
+  const bool roomForWriter = (live.overRelay() || !ble::running()) &&
+                             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= 24 * 1024 &&
+                             heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= 40 * 1024;
   const bool idleChat = (bgSession ? live.ready() && !live.inTurn()
                                    : live.ready() && !connecting && (info.state == Talk::After || info.state == Talk::Ready) &&
                                          !writing && !reading && !reviewStart && !live.inTurn() && !voice::playing()) &&
@@ -2263,7 +2276,8 @@ void pollLines() {
   }
   switch (lineJob.step()) {
     case LineJob::Step::Idle: {
-      if (!idleChat || jobs.busy() || planRunning || static_cast<int32_t>(millis() - lineCooldownUntil) < 0) return;
+      if (!idleChat || !roomForWriter || jobs.busy() || planRunning || static_cast<int32_t>(millis() - lineCooldownUntil) < 0)
+        return;
       if (millis() - lastLineScan < 3000) return;
       lastLineScan = millis();
       LineWork w;
@@ -2863,6 +2877,7 @@ void timerReply(JsonObject o) {
   o["paused"] = t.paused;
   o["left"] = t.secondsLeft(now);
   o["tickEvery"] = t.tickEvery;
+  o["what"] = t.what;
   o["companion"] = t.companion;
   o["ready"] = t.ready;
 }
@@ -3008,6 +3023,9 @@ void registerMomentCommands() {
         reply["error"] = "bad seconds";
         return;
       }
+      t.what = args["what"] | "";
+      t.style = args["style"] | "";
+      if (!t.style.empty() && !validStyle(t.style)) t.style.clear();
     } else if (action == "pause") {
       t.pause(now);
     } else if (action == "resume") {
@@ -3948,6 +3966,16 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == '%') {  // dev: internal RAM now (hunting a leak)
+    LOGI("heap", "internal %u KB free, largest %u KB, min ever %u KB; PSRAM %u KB", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024, heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024,
+         heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+  }
+  if (input.key == '^') {  // dev: chats over Wi-Fi for 10 minutes (the phone is left out)
+    relayDistrustUntil = millis() + 600000;
+    ble::stop();  // the phone can't win the race (Bluetooth comes back after the chat)
+    LOGI("dev", "Wi-Fi chats for 10 minutes");
+  }
   if (input.key == 'y') {  // dev: an app-made reminder 40 minutes out (recorded at the next chance)
     const std::string r = ble::runHere("{\"cmd\":\"companion.moment.save\",\"kind\":\"reminder\",\"at\":" +
                                        std::to_string(time(nullptr) + 2400) + ",\"what\":\"stretch your back\",\"style\":\"calm\"}");
@@ -4043,7 +4071,7 @@ void loop() {
                       : input.key == 'R' ? "When I talked about surfing the other day, what was I saying about it?"
                       : input.key == 'D' ? "Talk dirty to me."
                       : input.key == 'L' ? "Remind me in 2 minutes to drink a glass of water, and sing it to me."
-                      : input.key == 'C' ? "Set a timer for 70 seconds for the eggs."
+                      : input.key == 'C' ? "Set a 1 minute timer and when it ends sing me happy birthday."
                       : input.key == 'u' ? "What reminders do I have?"
                       : input.key == 'H' ? "" : nullptr;
   if (typed && live.ready() && (info.state == Talk::Ready || info.state == Talk::After)) {
