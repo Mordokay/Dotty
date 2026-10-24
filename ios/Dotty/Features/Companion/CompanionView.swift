@@ -29,6 +29,12 @@ struct CompanionView: View {
                 HStack {
                     Text("Companions").font(.lpTitle).foregroundStyle(Color.ink)
                     Spacer()
+                    NavigationLink { MomentsView() } label: {
+                        Image(systemName: "clock").font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                    }
+                    .accessibilityLabel("Moments")
+                    .padding(.trailing, Spacing.s)
                     NavigationLink { MacrosView() } label: {
                         Image(systemName: "wand.and.stars").font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(Color.ink)
