@@ -1127,6 +1127,34 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `ble::runHere`, dotty_core's serial command runner), N (cycles the note card). The note card (memories,
   "Thinking back...", "Saving…") is 2.5x: 12 pt, a card over the avatar's lower part (the user couldn't read
   the 6 px one).
+- **Recordings** (0.6.0; spec/plan `docs/superpowers/{specs,plans}/2026-10-24-companion-recordings*`): voice notes
+  through a companion. "I want to record something about…" → `start_recording {title}` → after the reply the
+  **deck** (nav: back = cancel, the title; "Hold BOOT to record"; ● REC + time + meter; PAUSED with ↶ Undo · ✓
+  Done · 🗑 Discard, Yes / No) — BOOT held = a part, released = pause; locking = Done; 2 min empty → closed, 5 min
+  paused → Done, a beep at 29:30, Done at 30:00; < 50 MB free → "no room". Rules: `note_deck.h` (host-tested).
+  Recorder `voice_note.*` (the chat's 16 kHz capture, a writer task, header written at each pause, `repairAll`
+  at boot, Undo = VFS `truncate`); files `companions/<id>/recordings/<YYYYMMDD-HHMMSS>.wav/.json/.txt`
+  (`recording_store.*`, host-tested: details, `matchRecording` "the last one" / dates / words,
+  `recordingsSection`, `transcriptBlock`, `headerFix`). Streamed to the phone while recording: events `rec.begin
+  / rec.part / rec.undo / rec.end` + `0x1F 0x02 seq` ADPCM frames (`rec_messages.*`, host-tested; the chat's voice
+  stays 0x01). **The iPhone** (`Features/Recordings/RecordingService`, app-wide, chained after the relay's
+  onReady): keeps the WAV (`RecordingStore`, Documents/Recordings/<companion>/), Apple's on-device draft live (a
+  recognition per part), and after Done sends the **draft at once** (`companion.recording.text {…, isDraft}`;
+  long text in `companion.recording.piece`) so the companion reacts within seconds (a typed turn: "They just
+  recorded … What they said: …"; no text after 10 s → "I'll listen properly once your phone is near"), then
+  **Gemini's final transcript** from the audio (≤ 6 min: the base64 WAV must fit Gemini's 20 MB inline limit;
+  longer: the draft corrected) with memories and the title as hints, and a summary + 3-6 points (+ a title for
+  "Voice note"). Dotty logs `transcript Apple:` / `transcript final:` lines (testing phase). The latest 10
+  summaries join the instruction; recall adds those days' transcripts. Tools `play_recording {query}`,
+  `delete_recording {query}` (after a confirmation). BLE `companion.recordings`, `.recording.text/.piece/
+  .rename/.delete/.play`, `rec.fetch {companion, id}` (the whole file back, 4 frames a pass); the phone wake's
+  sync job tells the app (`companion.recordings` event), ≤ 3 asks per recording per boot. App: Companion ›
+  Recordings (list, a page with play, summary, Final / Apple transcript tabs, share, rename, delete, Play on
+  Dotty); the companion pager = 28 px avatar circles with design-system colour rings, a dot on the one on Dotty,
+  a dashed "+". Dotty: a running timer shows as a ⌛ m:ss chip top right (history clock below it); its screen has
+  a back arrow and opens by itself in the last minute. Relay log has a "Background speech test" (the probe).
+  Dev keys: b (typed "record … bananas in space"), j (typed "play my bananas recording"), n (a 10 s test note), w
+  (the newest note over serial, `#WAV`), `civil_time.h` replaces timegm (newlib has none).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
