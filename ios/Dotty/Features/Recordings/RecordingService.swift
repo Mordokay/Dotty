@@ -244,26 +244,42 @@ final class RecordingService {
         r.finalAttempts += 1
         r.lastFinalAttempt = Date()
         RecordingStore.save(r)
+        let started = Date()
         let memories = await memoryHints(r.companion)
+        let memoriesAt = Date()
         do {
-            let transcriptSchema: [String: Any] = ["type": "OBJECT", "properties": ["transcript": ["type": "STRING"]], "required": ["transcript"]]
+            // One request: the transcript, the summary and points, a title (two calls cost a round trip each).
+            let schema: [String: Any] = ["type": "OBJECT", "properties": [
+                "transcript": ["type": "STRING"], "summary": ["type": "STRING"],
+                "points": ["type": "ARRAY", "items": ["type": "STRING"]], "title": ["type": "STRING"],
+            ], "required": ["transcript", "summary", "points", "title"]]
+            let placeholder = r.title.lowercased() == "voice note" || r.title.lowercased() == "test note"
             let hints = "Hints: the note's title is \"\(r.title)\"; names and places the speaker knows: \(memories.isEmpty ? "none" : memories)."
-            var answer: [String: Any] = ["transcript": r.final]  // a transcript from an earlier try is kept
-            if !r.final.isEmpty {
-                // the summary alone failed last time
+            // The user (2026-10-24): not literal; a light polish is fine as long as the message doesn't change.
+            let polish = "Write it as clean, readable text: drop filler words (uh, um, filler \"like\" and \"you know\"), false " +
+                "starts and accidental repeats, and fix grammar slips only where needed; keep the speaker's own wording, ideas and " +
+                "order, never add, remove or change what they meant. If no words are spoken, transcript is empty."
+            let rest = " Also: summary = one or two sentences on what it's about; points = 3 to 6 short key points (the facts, plans " +
+                "and ideas); title = " + (placeholder ? "a short title (2 to 5 words)" : "\"\(r.title)\" unchanged") + "."
+            var answer: [String: Any] = [:]
+            var audioKB = 0
+            if !r.final.isEmpty {  // the transcript is there (an earlier try's summary failed): the summary alone
+                answer = try await GeminiText.generate("Here is a voice note's text." + rest + " transcript = the text unchanged." +
+                                                       "\n\nText: \(r.final)", schema: schema)
             } else if r.duration <= Self.audioLimit, let wav = try? Data(contentsOf: RecordingStore.wavURL(r)) {
+                audioKB = wav.count / 1024
                 answer = try await GeminiText.generateWithAudio(
-                    "Transcribe this voice note exactly as spoken, in English. The speaker is fluent but not a native speaker and has an " +
-                    "accent: use the hints to resolve words that are hard to hear. \(hints) An automatic draft (it may contain " +
-                    "mishearings): \"\(r.draft)\". Keep the speaker's own words and sentences; fix only mishearings; no summary, no notes.",
-                    wav: wav, schema: transcriptSchema)
+                    "Transcribe this voice note, in English. The speaker is fluent but not a native speaker and has an accent: use the " +
+                    "hints to resolve words that are hard to hear. \(hints) An automatic draft (it may contain mishearings): \"\(r.draft)\". " +
+                    polish + rest, wav: wav, schema: schema)
             } else {
                 answer = try await GeminiText.generate(
-                    "Here is an automatic transcript of a long voice note by a fluent non-native English speaker with an accent. Fix only " +
-                    "words that were clearly misheard, using the hints and the context. \(hints) Keep everything else exactly as it is." +
-                    "\n\nTranscript: \(r.draft)", schema: transcriptSchema)
+                    "Here is an automatic transcript of a long voice note by a fluent non-native English speaker with an accent. Fix " +
+                    "words that were clearly misheard, using the hints and the context. \(hints) " + polish + rest +
+                    "\n\nTranscript: \(r.draft)", schema: schema)
             }
-            r.final = (answer["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let geminiAt = Date()
+            if r.final.isEmpty { r.final = (answer["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
             if r.final.isEmpty {  // nothing was said: no summary, no more tries
                 r.nothingSaid = true
                 r.needsFinal = false
@@ -271,25 +287,20 @@ final class RecordingService {
                 log("\(r.title): no words in it")
                 return
             }
+            r.summary = answer["summary"] as? String ?? ""
+            r.points = (answer["points"] as? [String] ?? []).prefix(6).map { String($0.prefix(80)) }
+            if placeholder, let t = answer["title"] as? String, !t.isEmpty { r.title = String(t.prefix(60)) }
+            r.needsFinal = r.summary.isEmpty
             RecordingStore.save(r)
-            let summarySchema: [String: Any] = ["type": "OBJECT", "properties": [
-                "summary": ["type": "STRING"], "points": ["type": "ARRAY", "items": ["type": "STRING"]], "title": ["type": "STRING"],
-            ], "required": ["summary", "points", "title"]]
-            let placeholder = r.title.lowercased() == "voice note" || r.title.lowercased() == "test note"
-            let s = try await GeminiText.generate(
-                "Summarise this voice note for the companion who will remember it: summary = one or two sentences; points = 3 to 6 " +
-                "short key points (the facts, plans and ideas in it); title = " +
-                (placeholder ? "a short title (2 to 5 words)" : "\"\(r.title)\" unchanged") + ".\n\nVoice note: \(r.final)",
-                schema: summarySchema)
-            r.summary = s["summary"] as? String ?? ""
-            r.points = (s["points"] as? [String] ?? []).prefix(6).map { String($0.prefix(80)) }
-            if placeholder, let t = s["title"] as? String, !t.isEmpty { r.title = String(t.prefix(60)) }
-            r.needsFinal = r.final.isEmpty
+            log(String(format: "%@: memories %.1f s, Gemini %.1f s (%d KB of audio)", r.title, memoriesAt.timeIntervalSince(started),
+                       geminiAt.timeIntervalSince(memoriesAt), audioKB))
         } catch {
             r.needsFinal = true
             log("\(r.title): Gemini couldn't make the final transcript yet (\(error.localizedDescription))")
         }
         RecordingStore.save(r)
+        let sendStarted = Date()
+        defer { log(String(format: "%@: sending to Dotty %.1f s", r.title, Date().timeIntervalSince(sendStarted))) }
         if !r.final.isEmpty {
             await sendText(r, transcript: r.final, isDraft: false)
         } else if !r.draft.isEmpty {

@@ -1144,7 +1144,16 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   recorded … What they said: …"; no text after 10 s → "I'll listen properly once your phone is near"), then
   **Gemini's final transcript** from the audio (≤ 6 min: the base64 WAV must fit Gemini's 20 MB inline limit;
   longer: the draft corrected) with memories and the title as hints, and a summary + 3-6 points (+ a title for
-  "Voice note"). Dotty logs `transcript Apple:` / `transcript final:` lines (testing phase). The latest 10
+  "Voice note"). Dotty logs `transcript Apple:` / `transcript final:` lines (testing phase). **Measured
+  2026-10-24** (the user's voice, 0:56 and 1:28): the probe — Apple's on-device recognition **works with the
+  iPhone locked** (41 of 56 results in the background); Apple misheard "hundreds"→"handles", "game"→"gay",
+  "scroller … memorable"→"scholar … me" and dropped words, Gemini got all of them (and "original movements",
+  which the user did say) → **Gemini's text is the transcript**, Apple's only drives the instant reaction (kept,
+  the user's choice). iOS starts its live text over after a pause (`DraftAccumulator` keeps every piece; one note
+  had kept only its last sentence). The user wants it **polished, not literal**: fillers, false starts and
+  repeats dropped, meaning unchanged. Transcript + summary + points + title come from **one** Gemini request; the
+  app logs each step's seconds (memories, Gemini, sending) — the first runs took 13 s and 38 s end to end with
+  two requests. The latest 10
   summaries join the instruction; recall adds those days' transcripts. Tools `play_recording {query}`,
   `delete_recording {query}` (after a confirmation). BLE `companion.recordings`, `.recording.text/.piece/
   .rename/.delete/.play`, `rec.fetch {companion, id}` (the whole file back, 4 frames a pass); the phone wake's
