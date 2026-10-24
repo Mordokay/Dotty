@@ -1078,6 +1078,45 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   point joined last time is joined directly (NVS `wifi/lastBssid`, `lastChannel`, `WIFI_FAST_SCAN`,
   6 s) — **1.7 s** — and after a full scan its strongest access point likewise; press → Gemini ready
   over Wi-Fi ~4 s (was ~17 s).
+- **Scheduled moments** (0.5.0; spec/plan `docs/superpowers/{specs,plans}/2026-10-24-companion-moments*`): the
+  companion speaks first. Kinds: **reminder** (once; a BOOT hold within 3 min opens a chat told what it
+  said, `firedNote`), **alarm** (rings every minute ≤ 10 min at `alarmVolume`, ignores quiet windows; BOOT =
+  done, a tap = snooze 5 min ×3, the 4th = BOOT; unanswered → lock screen "Missed alarm HH:MM" until
+  unlock), **spontaneous** (the companion's own lines: a daily plan writes `perDay` of them inside the
+  allowed hours, ≥ 2 h apart, outside quiet windows), **timer** (one, ≤ 24 h, NVS). Host-tested plain C++:
+  `moment_store.*` (Moment/MomentList ≤ 50 per companion, MomentRules, `parseLocalTime` — newlib has no
+  timegm), `moment_schedule.*` (due groups per companion + minute, < 1 h late fires else missed, `advance`,
+  `delivery` for quiet windows, `groupWords` 150 + 100/topic ≤ 300, `groupSignature`, `Ringing`),
+  `timer_beeps.*` (ticks at 60/30 s and every `tickEvery`, the last 10 s a semitone higher and 50 → 100 %
+  louder, refresh 10 s / 1 s), `phone_wake.h`, `moment_lines.*` (line / plan requests, `parsePlan`'s checks,
+  `momentsSection`, `listMomentsText`), `line_job.h`. Card (`moments.*`): `companions/<id>/moments.json`,
+  `moments/<key>.wav + .json` (key = id, `group-<minute>`, `timer`; the json = the replay's timing +
+  `signature`), `data/moment_rules.json`. **Lines are recorded ahead**: the writer writes (in the companion's
+  voice, ≤ 150 words, sung = lyrics), Live reads word for word with `styleNote`, the audio goes to an
+  `AdpcmRecorder` (`capturingLine`: nothing from the speaker) and a task saves it — in a chat after the reply
+  (note "Saving your reminder..."; the review waits), or in a **recording session** (`bgSession`, the
+  recording instruction, no chat) at a phone wake. Measured: a sung line written in ~1 s, recorded 8.8 s.
+  **Firing**: the locked loop's branch (not `onLockedWake`, which only lets `shell::wakeLockedAt` end a
+  sleep) unlocks Dotty, 5 rising beeps, 0.5 s, the recording with paced text and a badge top right (bell /
+  alarm / timer / speech); several companions at one minute play in turn, beeps once; moments advance when
+  they start (never twice); finished one-offs are removed; the recording becomes the companion's **last
+  line** (▶ replays it). **The phone wake**: locked, every `wakeEvery` min (20) only when a job is due
+  (record / plan), `shell::bluetoothWindow`; the phone's `relay.hello` within 30 s → jobs through it (the
+  plan via `relay.fetch` with no session), else Wi-Fi; ≤ 3 min; logs `phone wake: done in N s via
+  phone|wifi|nothing`. Unlocked it runs when the phone is there and Dotty idle (an app-made moment records at
+  once). Measured: locked wake, plan of 3 lines + 3 recordings, 30 s through the phone. Tools `set_moment`,
+  `cancel_moment`, `list_moments` (answered with content), `start_timer`, `stop_timer` (`GeminiLive::
+  ToolAnswer`: silent, or spoken when it's an error / the list). BLE `companion.moments {companion?}`,
+  `companion.moment.save {id?, companion, kind, at, repeat, days, what, style}` → {id}, `.delete`, `.play`
+  (a preview), `companion.moment.rules {…}`, `companion.timer {action}`; events `companion.moments`,
+  `companion.timer`. App: Companion › Moments (clock button): timer card, Today / Upcoming / Repeating /
+  Missed, `MomentEditor`, rules. Timer screen: hourglass, label, big M:SS; tap = pause, long press = "Cancel
+  the timer?"; the lock line "Pasta - 7 min"; unlocks at 60 s left. Dev keys: L (sung reminder in 2 min,
+  typed), C (70 s egg timer, typed), u (list, typed), F (next moment now), y (an app reminder 40 min out), z
+  (plan now, hours around now, wake due), ! (restore rules, clear every moment), @ (moment commands via
+  `ble::runHere`, dotty_core's serial command runner), N (cycles the note card). The note card (memories,
+  "Thinking back...", "Saving…") is 2.5x: 12 pt, a card over the avatar's lower part (the user couldn't read
+  the 6 px one).
 - The lock screen's "N chats" = this companion's talks today (`conversations()` over its history:
   turns within the 3-minute idle close are one talk); it was the day's exchanges across every
   companion (79 on a test-heavy day).
