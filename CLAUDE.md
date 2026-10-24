@@ -1144,7 +1144,9 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   recorded … What they said: …"; no text after 10 s → "I'll listen properly once your phone is near"), then
   **Gemini's final transcript** from the audio (≤ 6 min: the base64 WAV must fit Gemini's 20 MB inline limit;
   longer: the draft corrected) with memories and the title as hints, and a summary + 3-6 points (+ a title for
-  "Voice note"). Dotty logs `transcript Apple:` / `transcript final:` lines (testing phase). **Measured
+  "Voice note"). (The comparison phase logged both texts on Dotty; ended 2026-10-24: the app alone keeps Apple's
+  draft, for its Final / Apple tabs.) Measured end to end (77 s note): Gemini 3.8 s for 2.4 MB of audio; after
+  Done ~7-8 s with the memories read during the 1.5 s wait for Apple's last words. **Measured
   2026-10-24** (the user's voice, 0:56 and 1:28): the probe — Apple's on-device recognition **works with the
   iPhone locked** (41 of 56 results in the background); Apple misheard "hundreds"→"handles", "game"→"gay",
   "scroller … memorable"→"scholar … me" and dropped words, Gemini got all of them (and "original movements",

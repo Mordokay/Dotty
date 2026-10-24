@@ -190,6 +190,7 @@ final class RecordingService {
         RecordingStore.saveAudio(r, wav: RecordingParts.wav(samples))
         RecordingStore.save(r)
         finishedDrafts[live.id] = live.drafts
+        async let hints = memoryHints(live.companion)       // read from Dotty meanwhile (Gemini's hints)
         try? await Task.sleep(nanoseconds: 1_500_000_000)  // the last part's final words
         var draft = (finishedDrafts.removeValue(forKey: live.id) ?? live.drafts).map(\.text).filter { !$0.isEmpty }
             .joined(separator: " ")
@@ -197,8 +198,9 @@ final class RecordingService {
         r.draft = draft
         RecordingStore.save(r)
         log("\(r.title): \(Int(r.duration)) s, Apple's draft \(draft.split(separator: " ").count) words")
+        let memories = await hints
         if !draft.isEmpty { await sendText(r, transcript: draft, isDraft: true) }  // the reaction needs it now
-        await makeFinal(r)
+        await makeFinal(r, memories: memories)
     }
 
     /// Apple's draft from the saved file (when nothing came live).
@@ -236,7 +238,7 @@ final class RecordingService {
     }
 
     /// Gemini's transcript (from the audio when short enough) and the summary, then to Dotty.
-    private func makeFinal(_ start: LocalRecording) async {
+    private func makeFinal(_ start: LocalRecording, memories known: String? = nil) async {
         var r = start
         guard !r.nothingSaid, RecordingRetry.shouldTry(attempts: r.finalAttempts, last: r.lastFinalAttempt, now: Date()) else { return }
         let task = Self.beginBackground("voice-note-final")
@@ -245,7 +247,8 @@ final class RecordingService {
         r.lastFinalAttempt = Date()
         RecordingStore.save(r)
         let started = Date()
-        let memories = await memoryHints(r.companion)
+        let memories: String
+        if let known { memories = known } else { memories = await memoryHints(r.companion) }
         let memoriesAt = Date()
         do {
             // One request: the transcript, the summary and points, a title (two calls cost a round trip each).
@@ -320,7 +323,6 @@ final class RecordingService {
         var head: [String: Any] = ["id": r.id, "companion": r.companion, "isDraft": isDraft, "summary": String(r.summary.prefix(300)),
                                    "points": r.points]
         if !r.title.isEmpty { head["title"] = r.title }
-        if !isDraft { head["draft"] = r.draft }  // the testing phase: Dotty logs both
         var inline = head
         inline["transcript"] = transcript
         do {
@@ -334,7 +336,6 @@ final class RecordingService {
                 }
                 _ = try await link.send("companion.recording.text", head)
                 try await sendPieces(link, id: r.id, field: "transcript", text: transcript)
-                if !isDraft && !r.draft.isEmpty { try await sendPieces(link, id: r.id, field: "draft", text: r.draft) }
                 _ = try await link.send("companion.recording.text", ["id": r.id, "done": true])
             }
             if !isDraft {

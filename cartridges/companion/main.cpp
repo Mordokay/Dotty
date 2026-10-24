@@ -66,7 +66,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.6.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.6.1");
 
 namespace {
 
@@ -3406,12 +3406,6 @@ void applyRecordingText(const RecText &t) {
   lastSyncActivity = millis();
   LOGI("note", "%s: %s transcript, %u characters; \"%s\"", m.name.c_str(), t.isDraft ? "draft" : "final",
        static_cast<unsigned>(t.transcript.size()), m.title.c_str());
-  // The testing phase (the user, 2026-10-24): both texts in the log, to compare Apple's with Gemini's.
-  auto logText = [](const char *what, const std::string &text) {
-    for (size_t at = 0; at < text.size(); at += 90) LOGI("transcript", "%s: %s", what, text.substr(at, 90).c_str());
-  };
-  if (!t.draft.empty()) logText("Apple", t.draft);
-  logText(t.isDraft ? "draft" : "final", t.transcript);
   if (reaction.waiting && reaction.name == m.name) {
     reaction.gotText = true;
     reaction.transcript = t.transcript;
