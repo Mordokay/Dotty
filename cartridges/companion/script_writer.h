@@ -14,6 +14,8 @@
 constexpr const char *kWriterModel = "gemini-flash-lite-latest";  // 138 words in 2.7 s on the device
 
 int writerWords(int seconds);  // ~2.5 words a second, 30-120 s (read in chunks: readingChunks)
+// Who's speaking, for a text model writing in the companion's voice: its character, then its memories.
+std::string writerCharacter(const Profile &p, const std::string &memories);
 // The generateContent body: the companion's character and memories, the length, what to write.
 std::string writerRequest(const Profile &p, const std::string &memories, const std::string &what, int seconds);
 

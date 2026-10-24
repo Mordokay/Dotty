@@ -22,7 +22,7 @@ int writerWords(int seconds) {
   return s * 5 / 2;
 }
 
-std::string writerRequest(const Profile &p, const std::string &memories, const std::string &what, int seconds) {
+std::string writerCharacter(const Profile &p, const std::string &memories) {
   const std::string who = p.awake() ? p.name : "the companion";
   std::string system = "You write what " + who + ", a small desk companion who lives on the user's desk, will say "
                        "out loud to the user.";
@@ -32,6 +32,12 @@ std::string writerRequest(const Profile &p, const std::string &memories, const s
   if (!p.speaking.empty()) system += " Way of speaking: " + p.speaking;
   if (!p.backstory.empty()) system += " Story: " + p.backstory;
   if (!memories.empty()) system += "\n\n" + memories + "\n\n";
+  return system;
+}
+
+std::string writerRequest(const Profile &p, const std::string &memories, const std::string &what, int seconds) {
+  const std::string who = p.awake() ? p.name : "the companion";
+  std::string system = writerCharacter(p, memories);
   system += " Write it in " + who + "'s own voice, in the first person, talking to the user. Spoken English in "
             "full, flowing sentences; no headings, lists, markdown, emoji or stage directions. About " +
             std::to_string(writerWords(seconds)) + " words. Only the words to say.";
