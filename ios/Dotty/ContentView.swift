@@ -17,7 +17,10 @@ struct ContentView: View {
             }
         }
         .environment(link)
-        .task { RelayService.shared.attach(link) }  // chats through this iPhone: app-wide, background too
+        .task {
+            RelayService.shared.attach(link)      // chats through this iPhone: app-wide, background too
+            RecordingService.shared.attach(link)  // voice notes from Dotty (after the relay: it chains onReady)
+        }
         .preferredColorScheme(.dark)
         .animation(.settle, value: link.paired)
         .onChange(of: scenePhase) { _, phase in

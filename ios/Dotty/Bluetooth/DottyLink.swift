@@ -49,6 +49,9 @@ final class DottyLink: NSObject {
     @ObservationIgnored private var dataCharacteristic: CBCharacteristic?
     @ObservationIgnored var onRelayRaw: ((Data) -> Void)?
     @ObservationIgnored var onRelayEvent: ((DottyMessage) -> Void)?
+    // Voice notes (Features/Recordings): their audio (0x1F 0x02 …) and rec.* / companion.recordings events.
+    @ObservationIgnored var onRecordingRaw: ((Data) -> Void)?
+    @ObservationIgnored var onRecordingEvent: ((DottyMessage) -> Void)?
     @ObservationIgnored var onReady: (() -> Void)?  // each time a connection is ready (the relay says hello)
     @ObservationIgnored private var writeReady: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var subscribed = false
@@ -299,6 +302,11 @@ final class DottyLink: NSObject {
                 onRelayEvent?(message)
                 return  // the relay's traffic: not an app event
             }
+            if let event = message.event, event.hasPrefix("rec.") {
+                onRecordingEvent?(message)
+                return
+            }
+            if message.event == "companion.recordings" { onRecordingEvent?(message) }  // and the screens too
             lastEvent = message
             eventCount += 1
         }
@@ -440,7 +448,7 @@ extension DottyLink: @preconcurrency CBPeripheralDelegate {
             becameReadyIfComplete()
         case DottyUUID.event:
             if value.first == 0x1F {  // a raw relay value, not JSON
-                onRelayRaw?(value)
+                if value.count > 1, value[value.startIndex + 1] == 0x02 { onRecordingRaw?(value) } else { onRelayRaw?(value) }
                 return
             }
             if value.first == 0x1E {

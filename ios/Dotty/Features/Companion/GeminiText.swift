@@ -19,15 +19,25 @@ enum GeminiText {
     }
 
     static func generate(_ prompt: String, schema: [String: Any]) async throws -> [String: Any] {
+        try await generate(parts: [["text": prompt]], schema: schema)
+    }
+
+    /// The same with a WAV (a voice note): its audio inline, base64 (the request must stay under 20 MB).
+    static func generateWithAudio(_ prompt: String, wav: Data, schema: [String: Any]) async throws -> [String: Any] {
+        try await generate(parts: [["inline_data": ["mime_type": "audio/wav", "data": wav.base64EncodedString()]],
+                                   ["text": prompt]], schema: schema, timeout: 180)
+    }
+
+    private static func generate(parts: [[String: Any]], schema: [String: Any], timeout: TimeInterval = 60) async throws -> [String: Any] {
         guard let key = GeminiKeys.load().first else { throw Failure.noKey }
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(key)") else {
             throw Failure.unreadable
         }
-        var request = URLRequest(url: url, timeoutInterval: 60)
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = [
-            "contents": [["parts": [["text": prompt]]]],
+            "contents": [["parts": parts]],
             "generationConfig": ["responseMimeType": "application/json", "responseSchema": schema],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
