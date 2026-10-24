@@ -49,18 +49,23 @@ struct DeckView {
   int levelDb = -60;
 };
 enum class DeckHit { None, Back, Undo, Done, Discard, Yes, No };
-// The recordings list (show_recordings): 4 rows a page, newest first; or the one playing.
+// The recordings list (show_recordings): 4 rows a page, newest first; the player (like Music's); its info
+// (summary + points); the delete question.
 struct RecordingRow {
   String title, detail;  // "Bananas in space", "Sat 24 Oct - 1:17"
 };
 struct RecordingsView {
-  std::vector<RecordingRow> rows;  // this page's
-  int page = 0, pages = 1;
-  bool playing = false;            // one is playing: its title, detail and summary instead of the rows
-  RecordingRow now;
-  String summary;
+  enum class Mode { List, Player, Info, Confirm } mode = Mode::List;
+  std::vector<RecordingRow> rows;  // the list: this page's
+  int page = 0, pages = 1;         // the list's or the info's page
+  RecordingRow now;                // the player / info / question: this recording
+  int index = 0, count = 0;        // the player: "2 / 4"
+  bool playing = false;            // the player: playing (not paused, not ended)
+  uint32_t positionMs = 0, durationMs = 0;
+  int volume = 70;
+  String info;                     // the info screen's text (recordingInfoText)
 };
-enum class RecordingsHit { None, Back, NextPage, Row };
+enum class RecordingsHit { None, Back, NextPage, Row, Trash, Yes, No, Prev, Toggle, Next, VolumeDown, VolumeUp, Info };
 enum class SettingsHit { None, Back, CompanionPrev, CompanionNext, VolumeDown, VolumeUp, Speak, VoicePrev, VoiceNext };
 
 namespace screens {
@@ -77,8 +82,9 @@ TimerHit timerHit(uint16_t x, uint16_t y);  // the cancel question's buttons
 void drawDeck(const DeckView &v);
 DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v);
 void drawRecordings(const RecordingsView &v);
-// Row: `row` = the row on this page (0..3).
-RecordingsHit recordingsHit(uint16_t x, uint16_t y, int rows, int &row);
+// Row / Trash: `row` = the row on this page (0..3).
+RecordingsHit recordingsHit(uint16_t x, uint16_t y, const RecordingsView &v, int &row);
+int recordingInfoPages(const RecordingsView &v);  // pages the info text takes
 // Pages a reply takes (for swiping through it).
 int replyPages(const ScreenInfo &info);
 

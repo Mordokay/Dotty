@@ -13,7 +13,7 @@ constexpr int16_t kHeight = 45;
 constexpr int16_t kButton = 44;
 constexpr int16_t kTouch = 66;
 
-enum class Icon { None, Back, Forward, Shuffle, InOrder, Playlists, Star, StarFilled, Trash };
+enum class Icon { None, Back, Forward, Shuffle, InOrder, Playlists, Star, StarFilled, Trash, Info };
 
 // `rightText` (e.g. a list's page, "1/2") takes the right corner instead of an icon.
 void draw(Adafruit_GFX &gfx, const String &title, Icon left, Icon right, const String &rightText = String());

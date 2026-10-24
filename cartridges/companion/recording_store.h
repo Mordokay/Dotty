@@ -39,6 +39,10 @@ std::string transcriptBlock(const RecordingMeta &m, const std::string &transcrip
 // The recordings list on Dotty: a row's title ("Voice note" when untitled) and "Sat 24 Oct - 1:17".
 std::string recordingRowTitle(const RecordingMeta &m);
 std::string recordingRowDetail(const RecordingMeta &m);
+// The player's info screen: the summary, a blank line, then "- " + each point ("No summary yet." when empty).
+std::string recordingInfoText(const RecordingMeta &m);
+// The list's page (4 rows a page) once one is deleted and `remaining` are left.
+int listPageAfterDelete(int remaining, int page);
 
 struct HeaderFix {
   bool needed = false;

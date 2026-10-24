@@ -192,6 +192,17 @@ std::string recordingRowDetail(const RecordingMeta &m) {
   return out;
 }
 
+std::string recordingInfoText(const RecordingMeta &m) {
+  std::string s = m.summary;
+  for (size_t i = 0; i < m.points.size(); i++) s += (s.empty() ? "" : i ? "\n" : "\n\n") + std::string("- ") + m.points[i];
+  return s.empty() ? "No summary yet." : s;
+}
+
+int listPageAfterDelete(int remaining, int page) {
+  const int last = remaining > 0 ? (remaining - 1) / 4 : 0;
+  return page < last ? page : last;
+}
+
 HeaderFix headerFix(uint32_t fileBytes, uint32_t headerDataBytes) {
   HeaderFix f;
   if (fileBytes < 44) return f;

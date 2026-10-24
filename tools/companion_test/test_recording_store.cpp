@@ -89,6 +89,17 @@ int main() {
     CHECK_EQ("row title", recordingRowTitle(m), std::string("Bananas in space"));
   }
   {
+    RecordingMeta m = rec("Gym plan", local(2026, 10, 22, 9, 0), "Three days a week.");
+    m.points = {"Monday legs", "Rest on Thursday"};
+    RecordingMeta bare = rec("x", 0, "");
+    CHECK_EQ("info text: summary, then the points", recordingInfoText(m),
+             std::string("Three days a week.\n\n- Monday legs\n- Rest on Thursday"));
+    CHECK_EQ("info text: nothing yet", recordingInfoText(bare), std::string("No summary yet."));
+  }
+  CHECK("page after a delete: stays, or steps back from an emptied last page",
+        listPageAfterDelete(9, 1) == 1 && listPageAfterDelete(8, 2) == 1 && listPageAfterDelete(4, 1) == 0 &&
+            listPageAfterDelete(0, 0) == 0);
+  {
     const HeaderFix cut = headerFix(44 + 32000, 16000);
     const HeaderFix tiny = headerFix(30, 0);
     const HeaderFix odd = headerFix(44 + 32001, 0);

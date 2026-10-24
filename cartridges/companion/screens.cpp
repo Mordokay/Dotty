@@ -249,53 +249,168 @@ DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v) {
   return x < 67 ? DeckHit::Undo : x < 133 ? DeckHit::Done : DeckHit::Discard;
 }
 
+namespace {
+
+constexpr int16_t kTrashW = 36;  // the trash column at the left of each recording row
+// The player: Music's layout (title, "2 / 4", previous | play/pause | next, progress + time, volume).
+constexpr int16_t kPlayerY = 115, kPrevX = 38, kNextX = kW - 38, kVolumeY = 191, kInfoLines = 7;
+
+void playerTriangle(int16_t cx, int16_t cy, int16_t dir) {
+  epd.fillTriangle(cx - 8 * dir, cy - 10, cx - 8 * dir, cy + 10, cx + 7 * dir, cy, kBlack);
+}
+
+void drawPlayer(const RecordingsView &v) {
+  nav::draw(epd, "Recordings", nav::Icon::Back, nav::Icon::Info);
+  epd.setFont(&FreeSansBold9pt7b);
+  ui::drawCentered(epd, ui::fitText(epd, ui::printable(v.now.title), kW - 12), 63);
+  epd.setFont(&FreeSans9pt7b);
+  ui::drawCentered(epd, String(v.index + 1) + " / " + String(v.count) + " - " + v.now.detail.substring(0, v.now.detail.indexOf(" - ")), 83);
+  const int16_t cx = kW / 2, cy = kPlayerY;
+  epd.fillCircle(cx, cy, 26, kBlack);
+  if (v.playing) {
+    epd.fillRect(cx - 10, cy - 11, 7, 22, kWhite);
+    epd.fillRect(cx + 3, cy - 11, 7, 22, kWhite);
+  } else {
+    epd.fillTriangle(cx - 7, cy - 13, cx - 7, cy + 13, cx + 13, cy, kWhite);
+  }
+  for (int16_t bx : {kPrevX, kNextX}) {
+    epd.drawCircle(bx, cy, 20, kBlack);
+    epd.drawCircle(bx, cy, 19, kBlack);
+  }
+  playerTriangle(kPrevX + 2, cy, -1);
+  epd.fillRect(kPrevX - 9, cy - 10, 3, 20, kBlack);
+  playerTriangle(kNextX - 2, cy, 1);
+  epd.fillRect(kNextX + 7, cy - 10, 3, 20, kBlack);
+  const int16_t barX = 15, barY = 147, barW = kW - 30, barH = 8;
+  epd.drawRect(barX, barY, barW, barH, kBlack);
+  if (v.durationMs > 0)
+    epd.fillRect(barX + 2, barY + 2, static_cast<int64_t>(barW - 4) * min(v.positionMs, v.durationMs) / v.durationMs, barH - 4, kBlack);
+  ui::drawCentered(epd, ui::formatDuration(v.positionMs) + " / " + ui::formatDuration(v.durationMs), 170);
+  epd.fillRect(16, kVolumeY - 6, 14, 3, kBlack);  // volume:  -   vol 80%   +
+  epd.fillRect(kW - 30, kVolumeY - 6, 14, 3, kBlack);
+  epd.fillRect(kW - 24, kVolumeY - 12, 3, 14, kBlack);
+  ui::drawCentered(epd, "vol " + String(v.volume) + "%", kVolumeY);
+}
+
+// The info text as lines: the title (bold), the date, a rule, then the summary and the points, each a dot
+// with its lines indented beside it (9 pt).
+struct InfoLine {
+  enum Kind : uint8_t { Text, Bold, Rule, Bullet, Indented } kind;
+  String text;
+};
+constexpr int16_t kBulletIndent = 20;
+
+std::vector<InfoLine> infoLines(const RecordingsView &v) {
+  std::vector<InfoLine> out;
+  epd.setFont(&FreeSansBold9pt7b);
+  for (const String &l : ui::wrapText(epd, ui::printable(v.now.title), kW - 16, 3)) out.push_back({InfoLine::Bold, l});
+  out.push_back({InfoLine::Text, v.now.detail});
+  out.push_back({InfoLine::Rule, ""});
+  epd.setFont(&FreeSans9pt7b);
+  String text = v.info;
+  while (text.length()) {
+    const int nl = text.indexOf('\n');
+    String para = nl < 0 ? text : text.substring(0, nl);
+    text = nl < 0 ? String() : text.substring(nl + 1);
+    if (para.isEmpty()) {
+      out.push_back({InfoLine::Text, ""});
+      continue;
+    }
+    const bool bullet = para.startsWith("- ");
+    if (bullet) para = para.substring(2);
+    bool first = true;
+    for (const String &l : ui::wrapText(epd, ui::printable(para), kW - 16 - (bullet ? kBulletIndent - 8 : 0), 40)) {
+      out.push_back({bullet ? (first ? InfoLine::Bullet : InfoLine::Indented) : InfoLine::Text, l});
+      first = false;
+    }
+  }
+  return out;
+}
+
+void drawInfo(const RecordingsView &v) {
+  const std::vector<InfoLine> lines = infoLines(v);
+  const int pages = max(1, (static_cast<int>(lines.size()) + kInfoLines - 1) / kInfoLines);
+  nav::draw(epd, "About", nav::Icon::Back, nav::Icon::None, nav::pageLabel(v.page, pages));
+  for (int i = 0; i < kInfoLines; i++) {
+    const int at = v.page * kInfoLines + i;
+    if (at >= static_cast<int>(lines.size())) break;
+    const int16_t y = nav::kHeight + 20 + i * kLineH;
+    const InfoLine &l = lines[at];
+    if (l.kind == InfoLine::Rule) {
+      epd.drawFastHLine(8, y - 6, kW - 16, kBlack);
+      continue;
+    }
+    if (l.kind == InfoLine::Bullet) epd.fillCircle(12, y - 5, 3, kBlack);
+    epd.setFont(l.kind == InfoLine::Bold ? &FreeSansBold9pt7b : &FreeSans9pt7b);
+    epd.setCursor(l.kind == InfoLine::Bullet || l.kind == InfoLine::Indented ? kBulletIndent : 8, y);
+    epd.print(l.text);
+  }
+}
+
+}  // namespace
+
+int recordingInfoPages(const RecordingsView &v) {
+  return max(1, (static_cast<int>(infoLines(v).size()) + kInfoLines - 1) / kInfoLines);
+}
+
 // The recordings list: like Dotty's other lists (38 px rows, 4 a page, the page in the nav's right corner).
 void drawRecordings(const RecordingsView &v) {
+  using Mode = RecordingsView::Mode;
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
-  if (v.playing) {  // the one playing: title, when and how long, its summary; a tap stops it
-    nav::draw(epd, "Playing", nav::Icon::Back, nav::Icon::None);
+  if (v.mode == Mode::Confirm) {  // like the deck's discard question, with the row's title and date
+    nav::draw(epd, "Delete?", nav::Icon::Back, nav::Icon::None);
+    epd.setFont(&FreeSans12pt7b);
+    ui::drawCentered(epd, "Delete this", 70);
+    ui::drawCentered(epd, "recording?", 94);
     epd.setFont(&FreeSansBold9pt7b);
-    int16_t y = nav::kHeight + 20;
-    for (const String &l : ui::wrapText(epd, ui::printable(v.now.title), kW - 16, 2)) {
-      ui::drawCentered(epd, l, y);
-      y += kLineH;
-    }
+    const std::vector<String> title = ui::wrapText(epd, ui::printable(v.now.title), kW - 16, 1);
+    if (!title.empty()) ui::drawCentered(epd, title[0], 119);
     epd.setFont(&FreeSans9pt7b);
-    ui::drawCentered(epd, v.now.detail, y);
-    y += 6;
-    epd.drawFastHLine(8, y, kW - 16, kBlack);
-    y += kLineH;
-    const int lines = max(0, (kW - 26 - y) / kLineH + 1);
-    for (const String &l : ui::wrapText(epd, ui::printable(v.summary), kW - 16, lines)) {
-      epd.setCursor(8, y);
-      epd.print(l);
-      y += kLineH;
-    }
-    ui::drawCentered(epd, "Tap to stop", kW - 6);
+    ui::drawCentered(epd, v.now.detail, 139);
+    epd.fillRoundRect(12, 152, 80, 40, 6, kBlack);
+    epd.drawRoundRect(108, 152, 80, 40, 6, kBlack);
+    epd.setTextColor(kWhite);
+    centeredIn("Yes", 177, 12, 92);
+    epd.setTextColor(kBlack);
+    centeredIn("No", 177, 108, 188);
     return;
   }
+  if (v.mode == Mode::Player) return drawPlayer(v);
+  if (v.mode == Mode::Info) return drawInfo(v);
   nav::draw(epd, "Recordings", nav::Icon::Back, nav::Icon::None, nav::pageLabel(v.page, v.pages));
   for (size_t i = 0; i < v.rows.size() && i < 4; i++) {
     const int16_t top = nav::kHeight + i * 38;
+    nav::drawIcon(epd, nav::Icon::Trash, kTrashW / 2, top + 19, kBlack);  // delete (asks first)
     epd.setFont(&FreeSansBold9pt7b);
-    const std::vector<String> title = ui::wrapText(epd, ui::printable(v.rows[i].title), kW - 16, 1);
-    epd.setCursor(8, top + 15);
+    const std::vector<String> title = ui::wrapText(epd, ui::printable(v.rows[i].title), kW - kTrashW - 6, 1);
+    epd.setCursor(kTrashW, top + 15);
     if (!title.empty()) epd.print(title[0]);
     epd.setFont(&FreeSans9pt7b);
-    epd.setCursor(8, top + 31);
+    epd.setCursor(kTrashW, top + 31);
     epd.print(v.rows[i].detail);
     if (i + 1 < v.rows.size()) epd.drawFastHLine(8, top + 37, kW - 16, kBlack);
   }
 }
 
-RecordingsHit recordingsHit(uint16_t x, uint16_t y, int rows, int &row) {
+RecordingsHit recordingsHit(uint16_t x, uint16_t y, const RecordingsView &v, int &row) {
+  using Mode = RecordingsView::Mode;
   if (y < nav::kHeight) {
     const int corner = nav::hit(x, y);
+    if (v.mode == Mode::Confirm) return corner < 0 ? RecordingsHit::No : RecordingsHit::None;
+    if (v.mode == Mode::Player && corner > 0) return RecordingsHit::Info;
     return corner < 0 ? RecordingsHit::Back : corner > 0 ? RecordingsHit::NextPage : RecordingsHit::None;
   }
+  if (v.mode == Mode::Confirm) return y < 148 ? RecordingsHit::None : x < kW / 2 ? RecordingsHit::Yes : RecordingsHit::No;
+  if (v.mode == Mode::Info) return RecordingsHit::NextPage;  // a tap on the text turns the page
+  if (v.mode == Mode::Player) {
+    if (y >= kPlayerY - 30 && y <= kPlayerY + 30) return x < 70 ? RecordingsHit::Prev : x > kW - 70 ? RecordingsHit::Next : RecordingsHit::Toggle;
+    if (y >= kVolumeY - 20) return x < 70 ? RecordingsHit::VolumeDown : x > kW - 70 ? RecordingsHit::VolumeUp : RecordingsHit::None;
+    return RecordingsHit::None;
+  }
   row = (y - nav::kHeight) / 38;
-  return row < rows ? RecordingsHit::Row : RecordingsHit::None;
+  if (row >= static_cast<int>(v.rows.size())) return RecordingsHit::None;
+  return x < kTrashW ? RecordingsHit::Trash : RecordingsHit::Row;  // the left blind strip reads as x ~12: trash
 }
 
 TimerHit timerHit(uint16_t x, uint16_t y) {
@@ -383,8 +498,8 @@ int replyPages(const ScreenInfo &info) {
 }
 
 ReplayHit replayHit(uint16_t x, uint16_t y) {
-  if (x > kReplayX + kReplaySize + 4 || y < kPlayY) return ReplayHit::None;  // above: the gear
-  if (y < (kPlayY + kReplaySize + kLoopY) / 2) return ReplayHit::PlayPause;
+  if (x > kReplayX + kReplaySize + 4 || y < kPlayerY) return ReplayHit::None;  // above: the gear
+  if (y < (kPlayerY + kReplaySize + kLoopY) / 2) return ReplayHit::PlayPause;
   if (y < kLoopY + kReplaySize + 8) return ReplayHit::Loop;
   return ReplayHit::None;
 }

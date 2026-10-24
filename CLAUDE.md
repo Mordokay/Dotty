@@ -1160,9 +1160,15 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `delete_recording {query}` (after a confirmation), `show_recordings` (0.6.2, the user's ask — the spec had no list
   on Dotty: "show me my recordings", "what have I recorded lately"; no recordings = a spoken error): once the reply
   ends a "Recordings" list opens (38 px rows, 4 a page, title bold + "Sat 24 Oct - 1:17", the page in the nav's
-  right corner, swipes turn pages; `recordingRowTitle/Detail`, host-tested); a row plays it ("Playing": title,
-  date, summary, "Tap to stop"; tap or BOOT = back to the list), back / a BOOT press (then talks) / 2 minutes
-  untouched / lock / a switch close it. Dev key `v` ("What have I recorded lately?"; typed keys now open a
+  right corner, swipes turn pages; `recordingRowTitle/Detail`, host-tested). 0.6.3 (the user's asks): a 🗑 at
+  each row's left (36 px column; the left blind strip lands there) asks "Delete this recording?" with the title
+  and date, Yes / No (gone after 10 s; `listPageAfterDelete`); a row opens a **player in Music's layout** (nav:
+  back, "Recordings", ⓘ = `nav::Icon::Info` in dotty_core; title, "2 / 4 - Sat 24 Oct", ⏮ ⏯ ⏭ — previous =
+  newer, restarts after 3 s —, progress bar + time redrawn once a second, volume − / + = the companion's
+  volume; swipes = previous / next; an ended one stays with ▶ to play again); ⓘ = "About": title, date, the
+  summary and the points as dotted bullets (`recordingInfoText`, host-tested), 7 lines a page, a tap or
+  swipe turns pages. Back / BOOT step back one screen; on the list back / a BOOT press (then talks) / 2
+  minutes untouched / lock / a switch close it. Dev key `v` ("What have I recorded lately?"; typed keys now open a
   session themselves). BLE `companion.recordings`, `.recording.text/.piece/
   .rename/.delete/.play`, `rec.fetch {companion, id}` (the whole file back, 4 frames a pass); the phone wake's
   sync job tells the app (`companion.recordings` event), ≤ 3 asks per recording per boot. App: Companion ›

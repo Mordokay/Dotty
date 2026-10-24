@@ -66,7 +66,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.6.2");
+DOTTY_CARTRIDGE("companion", "Companion", "0.6.3");
 
 namespace {
 
@@ -244,7 +244,11 @@ bool listPending = false, listOpen = false;
 uint32_t listPendingAt = 0, listTouchedAt = 0;
 std::string listCompanion;
 std::vector<RecordingMeta> listItems;  // newest first, read when it opens
-int listPage = 0, listPlaying = -1;    // the row playing (-1 = none)
+int listPage = 0, listPlaying = -1;    // the row on the player (-1 = the list)
+bool listInfo = false;                 // the player's info screen (summary + points)
+int listInfoPage = 0;
+uint32_t listDurationMs = 0, listDrawnAt = 0;  // the player's length once it ends; its last redraw
+int listConfirm = -1;                  // the row asking "Delete this recording?" (-1 = none)
 struct NoteReaction {
   bool waiting = false, gotText = false;
   std::string companion, name, title, transcript;
@@ -2911,6 +2915,7 @@ void deckTap(uint16_t x, uint16_t y) {
 }
 
 // ---------- the recordings list (show_recordings) ----------
+// List → a row opens the player (Music's layout) and plays it → ⓘ shows its summary and points.
 constexpr uint32_t kListIdleMs = 120000;  // closes itself after 2 minutes untouched
 
 int listPages() {
@@ -2925,6 +2930,8 @@ void openList() {
   listOpen = true;
   listPage = 0;
   listPlaying = -1;
+  listConfirm = -1;
+  listInfo = false;
   listTouchedAt = millis();
   redraw = true;
   LOGI("note", "recordings list open: %u", static_cast<unsigned>(listItems.size()));
@@ -2934,24 +2941,42 @@ void closeList() {
   if (listPlaying >= 0) player.stop();
   listOpen = false;
   listPlaying = -1;
+  listConfirm = -1;
+  listInfo = false;
   listItems.clear();
   listItems.shrink_to_fit();
   redraw = true;
 }
 
 RecordingsView recordingsView() {
+  using Mode = RecordingsView::Mode;
   RecordingsView v;
   v.page = listPage;
   v.pages = listPages();
-  if (listPlaying >= 0 && listPlaying < static_cast<int>(listItems.size())) {
-    const RecordingMeta &m = listItems[listPlaying];
-    v.playing = true;
+  const int count = static_cast<int>(listItems.size());
+  const int shown = listPlaying >= 0 ? listPlaying : listConfirm;
+  if (shown >= 0 && shown < count) {
+    const RecordingMeta &m = listItems[shown];
     v.now = {recordingRowTitle(m).c_str(), recordingRowDetail(m).c_str()};
-    v.summary = m.summary.empty() ? "No summary yet." : m.summary.c_str();
-    return v;
+    v.index = shown;
+    v.count = count;
   }
-  for (int i = listPage * 4; i < static_cast<int>(listItems.size()) && i < listPage * 4 + 4; i++)
-    v.rows.push_back({recordingRowTitle(listItems[i]).c_str(), recordingRowDetail(listItems[i]).c_str()});
+  if (listConfirm >= 0 && listConfirm < count) {
+    v.mode = Mode::Confirm;
+  } else if (listPlaying >= 0 && listPlaying < count && listInfo) {
+    v.mode = Mode::Info;
+    v.page = listInfoPage;
+    v.info = recordingInfoText(listItems[listPlaying]).c_str();
+  } else if (listPlaying >= 0 && listPlaying < count) {
+    v.mode = Mode::Player;
+    v.playing = player.isPlaying() && !player.isPaused();
+    v.durationMs = player.isPlaying() ? player.durationMs() : listDurationMs;
+    v.positionMs = player.isPlaying() ? player.positionMs() : 0;
+    v.volume = settings.volume;
+  } else {
+    for (int i = listPage * 4; i < count && i < listPage * 4 + 4; i++)
+      v.rows.push_back({recordingRowTitle(listItems[i]).c_str(), recordingRowDetail(listItems[i]).c_str()});
+  }
   return v;
 }
 
@@ -2961,26 +2986,116 @@ void listTurnPage(int step) {
   redraw = true;
 }
 
+// The player: plays row `i` of the list from the start.
+void listPlay(int i) {
+  if (i < 0 || i >= static_cast<int>(listItems.size())) return;
+  const String wav = note::path(listCompanion, listItems[i].name, "wav");
+  listPlaying = i;
+  listInfo = false;
+  listDurationMs = listItems[i].ms;
+  if (!player.play(wav.c_str())) LOGW("note", "couldn't play %s", listItems[i].name.c_str());
+  else LOGI("note", "playing %s from the list", listItems[i].name.c_str());
+  listDrawnAt = millis();
+  redraw = true;
+}
+
+// Back to the list (the player stops).
+void listLeavePlayer() {
+  player.stop();
+  listPage = listPlaying / 4;  // the page of the one it played
+  listPlaying = -1;
+  listInfo = false;
+  redraw = true;
+}
+
+// Previous restarts the recording after 3 s, like Music; the list is newest first, so previous = newer.
+void listStep(int dir) {
+  if (dir < 0 && player.isPlaying() && player.positionMs() > 3000) return listPlay(listPlaying);
+  const int to = listPlaying + dir;
+  if (to >= 0 && to < static_cast<int>(listItems.size())) listPlay(to);
+  else if (dir < 0) listPlay(listPlaying);
+}
+
+void listInfoTurn(int step) {
+  const int pages = screens::recordingInfoPages(recordingsView());
+  listInfoPage = (listInfoPage + step + pages) % pages;
+  redraw = true;
+}
+
+// "Yes" to "Delete this recording?": gone from the card and the list (the app hears it like a deleted one).
+void listDelete() {
+  const RecordingMeta m = listItems[listConfirm];
+  note::remove(listCompanion, m.name);
+  LOGI("note", "deleted %s (%s) from the list", m.name.c_str(), m.title.c_str());
+  notifyRecordings();
+  listItems.erase(listItems.begin() + listConfirm);
+  listConfirm = -1;
+  listPage = listPageAfterDelete(static_cast<int>(listItems.size()), listPage);
+  if (listItems.empty()) return closeList();
+  redraw = true;
+}
+
 void listTap(uint16_t x, uint16_t y) {
   listTouchedAt = millis();
-  if (listPlaying >= 0) {  // a tap stops it: back to the list
-    player.stop();
-    return;
-  }
   int row = 0;
-  const RecordingsHit hit = screens::recordingsHit(x, y, static_cast<int>(recordingsView().rows.size()), row);
-  if (hit == RecordingsHit::Back) return closeList();
-  if (hit == RecordingsHit::NextPage) return listTurnPage(1);
-  if (hit != RecordingsHit::Row) return;
-  const int i = listPage * 4 + row;
-  const String wav = note::path(listCompanion, listItems[i].name, "wav");
-  if (!player.play(wav.c_str())) {
-    LOGW("note", "couldn't play %s", listItems[i].name.c_str());
-    return;
+  const RecordingsHit hit = screens::recordingsHit(x, y, recordingsView(), row);
+  switch (hit) {
+    case RecordingsHit::No:
+      listConfirm = -1;
+      redraw = true;
+      return;
+    case RecordingsHit::Yes:
+      return listDelete();
+    case RecordingsHit::Back:
+      if (listInfo) {
+        listInfo = false;
+        redraw = true;
+        return;
+      }
+      return listPlaying >= 0 ? listLeavePlayer() : closeList();
+    case RecordingsHit::NextPage:
+      return listInfo ? listInfoTurn(1) : listTurnPage(1);
+    case RecordingsHit::Trash:
+      listConfirm = listPage * 4 + row;
+      redraw = true;
+      return;
+    case RecordingsHit::Row:
+      return listPlay(listPage * 4 + row);
+    case RecordingsHit::Toggle:
+      if (player.isPlaying()) player.togglePause();
+      else listPlay(listPlaying);  // it ended: from the start
+      redraw = true;
+      return;
+    case RecordingsHit::Prev:
+      return listStep(-1);
+    case RecordingsHit::Next:
+      return listStep(1);
+    case RecordingsHit::VolumeDown:
+    case RecordingsHit::VolumeUp:
+      settings.volume = constrain(settings.volume + (hit == RecordingsHit::VolumeUp ? 10 : -10), 0, 100);
+      player.setVolume(settings.volume);
+      saveSettings();
+      redraw = true;
+      return;
+    case RecordingsHit::Info:
+      LOGI("note", "info: %u-character summary, %u points", static_cast<unsigned>(listItems[listPlaying].summary.size()),
+           static_cast<unsigned>(listItems[listPlaying].points.size()));
+      listInfo = true;
+      listInfoPage = 0;
+      redraw = true;
+      return;
+    default:
+      return;
   }
-  listPlaying = i;
-  redraw = true;
-  LOGI("note", "playing %s from the list", listItems[i].name.c_str());
+}
+
+void listSwipe(Touch::Gesture g) {
+  listTouchedAt = millis();
+  const int step = g == Touch::Gesture::SwipeLeft || g == Touch::Gesture::SwipeUp ? 1 : -1;
+  if (listConfirm >= 0) return;
+  if (listInfo) return listInfoTurn(step);
+  if (listPlaying >= 0) return listStep(step);
+  listTurnPage(step);
 }
 
 void pollList() {
@@ -2994,14 +3109,23 @@ void pollList() {
     openList();
   }
   if (!listOpen) return;
-  if (listPlaying >= 0) {
+  static bool wasPlaying = false;
+  const bool playing = listPlaying >= 0 && player.isPlaying();
+  if (playing) {
     listTouchedAt = millis();  // listening counts as using it
     shell::wake();
-    if (!player.isPlaying()) {
-      listPlaying = -1;
+    if (!listInfo && !player.isPaused() && millis() - listDrawnAt >= 1000) {  // the progress bar, once a second
+      listDrawnAt = millis();
       redraw = true;
     }
-  } else if (millis() - listTouchedAt > kListIdleMs) {
+  } else if (wasPlaying && listPlaying >= 0) {
+    redraw = true;  // it ended: the play button and 0:00
+  }
+  wasPlaying = playing;
+  if (listConfirm >= 0 && millis() - listTouchedAt > 10000) {  // unanswered: back to the list
+    listConfirm = -1;
+    redraw = true;
+  } else if (!playing && millis() - listTouchedAt > kListIdleMs) {
     LOGI("note", "recordings list: closed after 2 minutes untouched");
     closeList();
   }
@@ -4499,9 +4623,11 @@ void loop() {
   if (deckOpen) pollDeck(held, bootUpSince && millis() - bootUpSince >= 40);
   if (notePlaying && held) player.stop();
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
-  if (held && listOpen) {  // BOOT stops the one playing (back to the list), else closes the list and talks
-    if (listPlaying >= 0) {
-      player.stop();
+  if (held && listOpen && answeredPress != downAt) {  // one press: BOOT on the player / info goes back to the list, else closes the list and talks
+    if (listPlaying >= 0 || listConfirm >= 0) {
+      if (listPlaying >= 0) listLeavePlayer();
+      listConfirm = -1;
+      redraw = true;
       answeredPress = downAt;
     } else {
       closeList();
@@ -4622,9 +4748,9 @@ void loop() {
     timerConfirm = true;
     redraw = true;
   }
-  if (listOpen && listPlaying < 0 && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
-      input.gesture != Touch::Gesture::LongPress) {  // left / up = the next page, right / down = the one before
-    listTurnPage(input.gesture == Touch::Gesture::SwipeLeft || input.gesture == Touch::Gesture::SwipeUp ? 1 : -1);
+  if (listOpen && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
+      input.gesture != Touch::Gesture::LongPress) {  // left / up = next (page or recording), right / down = back
+    listSwipe(input.gesture);
   } else if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
     const int step = input.gesture == Touch::Gesture::SwipeUp ? 3 : -3;
     if (historyOpen) historyScroll = max(0, historyScroll - step);
