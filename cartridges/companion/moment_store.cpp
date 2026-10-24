@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <ctime>
 
+#include "civil_time.h"
+
 namespace {
 
 std::string trim(const std::string &s) {
@@ -59,18 +61,6 @@ uint8_t repeatDays(const Moment &m) {
     case Repeat::Days: return m.days & 0x7F;
     default: return 0;
   }
-}
-
-// Seconds since 1970 for a calendar date and time, with no zone (newlib has no timegm). Days from the
-// civil date: Howard Hinnant's algorithm.
-int64_t civilEpoch(int y, int m, int d, int h, int mi, int s) {
-  y -= m <= 2;
-  const int64_t era = (y >= 0 ? y : y - 399) / 400;
-  const int64_t yoe = y - era * 400;
-  const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  const int64_t days = era * 146097 + doe - 719468;
-  return days * 86400 + h * 3600 + mi * 60 + s;
 }
 
 int clampInt(int v, int lo, int hi) {
