@@ -26,6 +26,9 @@ struct ScreenInfo {
   // A moment playing (moments.h): its kind's badge top right, in place of the history clock —
   // "bell" (reminder), "alarm", "timer", "speech" (the companion's own line); "" = none.
   String momentIcon;
+  // A running timer (timer_beeps.h) takes the idle screen: its label and the time left ("" = none).
+  String timerLabel, timerClock;
+  bool timerPaused = false, timerConfirm = false;  // confirm: "Cancel the timer?" Yes / No
 };
 
 struct SettingsView {
@@ -37,6 +40,7 @@ struct SettingsView {
   int choices = 2;  // favourite voices to step through (no arrows for one)
 };
 enum class ReplayHit { None, PlayPause, Loop };
+enum class TimerHit { None, Yes, No };
 enum class SettingsHit { None, Back, CompanionPrev, CompanionNext, VolumeDown, VolumeUp, Speak, VoicePrev, VoiceNext };
 
 namespace screens {
@@ -49,6 +53,7 @@ void drawHistory(const std::vector<std::pair<String, String>> &exchanges, int sc
 void drawSettings(const SettingsView &v);
 SettingsHit settingsHit(uint16_t x, uint16_t y);
 ReplayHit replayHit(uint16_t x, uint16_t y);
+TimerHit timerHit(uint16_t x, uint16_t y);  // the cancel question's buttons
 // Pages a reply takes (for swiping through it).
 int replyPages(const ScreenInfo &info);
 

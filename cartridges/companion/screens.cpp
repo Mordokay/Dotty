@@ -2,6 +2,7 @@
 #include "text_pages.h"
 
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 
@@ -141,6 +142,51 @@ std::vector<String> wrap(const String &text, int16_t width, int maxLines) {
 
 }  // namespace
 
+namespace {
+
+void centeredIn(const String &text, int16_t y, int16_t x0, int16_t x1) {
+  int16_t bx, by;
+  uint16_t w, h;
+  epd.getTextBounds(text, 0, 0, &bx, &by, &w, &h);
+  epd.setCursor(x0 + (x1 - x0 - w) / 2 - bx, y);
+  epd.print(text);
+}
+
+// A running timer: an hourglass and its label, the time left big, a hint (or the cancel question).
+void drawTimer(const ScreenInfo &info) {
+  epd.fillScreen(kWhite);
+  epd.setTextColor(kBlack);
+  const int16_t cx = kW / 2;
+  epd.drawFastHLine(cx - 8, 10, 17, kBlack);  // an hourglass
+  epd.drawFastHLine(cx - 8, 32, 17, kBlack);
+  epd.drawTriangle(cx - 7, 11, cx + 7, 11, cx, 21, kBlack);
+  epd.fillTriangle(cx - 7, 31, cx + 7, 31, cx, 21, kBlack);
+  epd.setFont(&FreeSans12pt7b);
+  ui::drawCentered(epd, ui::printable(info.timerLabel), 60);
+  epd.setFont(&FreeSansBold24pt7b);
+  ui::drawCentered(epd, info.timerClock, 112);
+  epd.setFont(&FreeSans9pt7b);
+  if (info.timerConfirm) {
+    ui::drawCentered(epd, "Cancel the timer?", 142);
+    epd.fillRoundRect(12, 154, 80, 36, 6, kBlack);
+    epd.drawRoundRect(108, 154, 80, 36, 6, kBlack);
+    epd.setTextColor(kWhite);
+    centeredIn("Yes", 177, 12, 92);
+    epd.setTextColor(kBlack);
+    centeredIn("No", 177, 108, 188);
+    return;
+  }
+  ui::drawCentered(epd, info.timerPaused ? "Paused - tap to go on" : "Tap: pause", 150);
+  ui::drawCentered(epd, "Hold the screen: cancel", 176);
+}
+
+}  // namespace
+
+TimerHit timerHit(uint16_t x, uint16_t y) {
+  if (y < 148) return TimerHit::None;
+  return x < kW / 2 ? TimerHit::Yes : TimerHit::No;
+}
+
 // Four rows of 38 px under the nav bar: Companion ‹ › / Volume - + / Speak switch / Voice ‹ ›.
 namespace {
 constexpr int16_t kRow = 38, kRow0 = 45;  // rows at 45, 83, 121, 159
@@ -228,6 +274,7 @@ ReplayHit replayHit(uint16_t x, uint16_t y) {
 
 void draw(const ScreenInfo &shownInfo) {
   // A replay looks like the reply did: talking while it plays, its text paused.
+  if (shownInfo.timerClock.length()) return drawTimer(shownInfo);
   ScreenInfo info = shownInfo;
   if (info.replaying) info.state = Talk::Speaking;
   else if (info.replayPaused) info.state = Talk::After;

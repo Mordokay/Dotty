@@ -1418,7 +1418,12 @@ void playFiring(bool withBeeps) {
   const bool voice = firing.delivery == Delivery::Voice;
   if (firing.group.alarm) player.setVolume(moments::rules().alarmVolume);
   if (withBeeps && firing.delivery != Delivery::TextOnly) {
-    playAttention();
+    if (firing.kind == "timer") {  // time's up: a fanfare
+      static const AudioPlayer::Note kFanfare[] = {{67, 120}, {72, 120}, {76, 120}, {79, 120}, {84, 400}};
+      player.playNotes(kFanfare, sizeof(kFanfare) / sizeof(kFanfare[0]));
+    } else {
+      playAttention();
+    }
     firing.phase = Firing::Phase::Beeps;
   } else {
     firing.phase = Firing::Phase::Gap;
@@ -1611,6 +1616,12 @@ void endFiring() {
     moments::save(firing.group.companion);
   }
   moments::dropRecording(firing.group.companion, "group-" + std::to_string(firing.group.minute));
+  if (firing.kind == "timer") {  // the timer is over
+    moments::dropRecording(firing.group.companion, "timer");
+    moments::timer().cancel();
+    moments::saveTimer();
+    notifyTimer();
+  }
   if (firing.group.companion == companions::active().id) {  // history: the active companion's folder
     history::append("", firing.line, "neutral", 0, 0, "moment: " + firing.kind);
     historyTurns++;
@@ -1659,6 +1670,113 @@ void tapFiring() {
   LOGI("moments", "%s (%d of %d)", note, ringing.snoozes(), Ringing::kMaxSnoozes);
 }
 
+// ---------- the timer (timer_beeps.h): its sounds as it counts down, its end ----------
+
+int lastTimerLeft = -1;      // the second last heard (each new one may play a cue)
+int lastTimerStep = -1;      // the screen shows the time left in steps of 10 s (1 s in the last minute)
+bool timerVolume = false;    // a countdown beep set its own volume: back to the companion's after
+bool timerConfirm = false;   // "Cancel the timer?" is up
+
+bool timerShowing() {
+  return moments::timer().running && !firing.active && !settingsOpen && !historyOpen && !momentOnScreen &&
+         (info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Error);
+}
+
+// Time's up: a fanfare, the companion's recorded line (or the words), ringing like an alarm until BOOT or a tap.
+void startTimerEnd() {
+  TimerState &t = moments::timer();
+  shell::wake();
+  stopReplay();
+  timerConfirm = false;
+  firing = Firing();
+  firing.active = true;
+  firing.kind = "timer";
+  firing.group.companion = t.companion;
+  firing.group.alarm = true;  // the alarm volume
+  firing.delivery = Delivery::Voice;
+  Clip c;
+  c.text = t.title() + ": time's up!";
+  const std::string sig = "timer|" + t.label;
+  LastLine l;
+  if (moments::recorded(t.companion, "timer", sig) &&
+      parseLastLine(companions::readText(moments::recordingPath(t.companion, "timer", "json")), l)) {
+    c.wav = moments::recordingPath(t.companion, "timer", "wav");
+    c.timing = l;
+    if (!l.text().empty()) c.text = l.text();
+  }
+  firing.clips.push_back(c);
+  firing.line = c.text;
+  LOGI("moments", "timer \"%s\" is up%s", t.label.c_str(), c.wav.isEmpty() ? " (no recording)" : "");
+  ringing.start(millis(), false);  // BOOT or a tap stops it; no snooze
+  playFiring(true);
+}
+
+void pollTimer() {
+  TimerState &t = moments::timer();
+  if (timerVolume && !player.isPlaying()) {
+    player.setVolume(settings.volume);
+    timerVolume = false;
+  }
+  if (!t.running || t.paused || firing.active) return;
+  const int64_t now = time(nullptr);
+  if (now - t.endsAt >= 3600) {  // it ended over an hour ago (Dotty was off): forgotten quietly
+    LOGI("moments", "timer \"%s\" ended long ago: dropped", t.label.c_str());
+    moments::dropRecording(t.companion, "timer");
+    t.cancel();
+    moments::saveTimer();
+    return;
+  }
+  const int left = t.secondsLeft(now);
+  if (left != lastTimerLeft) {
+    const bool newSecond = lastTimerLeft < 0 || left < lastTimerLeft;
+    lastTimerLeft = left;
+    if (newSecond) {
+      const TimerCue cue = timerCue(left, t.tickEvery, momentBusy());
+      if (cue.sound == TimerSound::End) {
+        lastTimerLeft = -1;
+        return startTimerEnd();
+      }
+      if (cue.sound != TimerSound::None && !shell::locked()) {
+        const AudioPlayer::Note n = {cue.beep.midi, cue.beep.ms};
+        player.setVolume(cue.beep.volume);
+        player.playNotes(&n, 1);
+        timerVolume = true;
+      }
+    }
+    const int step = left / timerRefreshSeconds(left);
+    if (step != lastTimerStep && timerShowing()) {
+      lastTimerStep = step;
+      redraw = true;
+    }
+  }
+  if (left <= 60) shell::wake();  // the last minute: Dotty unlocks and shows the countdown
+}
+
+void timerTap(uint16_t x, uint16_t y) {
+  TimerState &t = moments::timer();
+  if (timerConfirm) {
+    const TimerHit hit = screens::timerHit(x, y);
+    if (hit == TimerHit::None) return;
+    timerConfirm = false;
+    if (hit == TimerHit::Yes) {
+      LOGI("moments", "timer cancelled on Dotty");
+      moments::dropRecording(t.companion, "timer");
+      t.cancel();
+      moments::saveTimer();
+      notifyTimer();
+    }
+  } else if (t.paused) {
+    t.resume(time(nullptr));
+    moments::saveTimer();
+    notifyTimer();
+  } else {
+    t.pause(time(nullptr));
+    moments::saveTimer();
+    notifyTimer();
+  }
+  redraw = true;
+}
+
 // Every pass (locked too): missed ones, due ones. Once a second is plenty.
 void pollMoments() {
   if (firing.active) return pollFiring();
@@ -1687,7 +1805,10 @@ void pollMoments() {
 
 // Locked: when to wake next (the shell sleeps until the next minute anyway).
 void armLockedWake() {
-  shell::wakeLockedAt(static_cast<time_t>(nextDue(moments::all())));
+  int64_t next = nextDue(moments::all());
+  const TimerState &t = moments::timer();
+  if (t.running && !t.paused && (!next || t.endsAt - 60 < next)) next = t.endsAt - 60;  // the last minute
+  shell::wakeLockedAt(static_cast<time_t>(next));
 }
 
 // ---------- the last thing said: kept per companion, replayed (play / pause / loop) ----------
@@ -2184,12 +2305,19 @@ void drawApp() {
     info.replayPaused = replay.state() == Replay::Paused;
     info.replayLoop = replay.looping();
     info.replayProgress = replay.state() == Replay::Stopped ? 0 : lastLine.progress(player.positionMs());
+    const TimerState &t = moments::timer();
+    const bool timer = timerShowing();
+    info.timerLabel = timer ? t.title().c_str() : "";
+    info.timerClock = timer ? t.clock(time(nullptr)).c_str() : "";
+    info.timerPaused = t.paused;
+    info.timerConfirm = timerConfirm;
     screens::draw(info);
   }
 }
 
 void onTap(uint16_t x, uint16_t y) {
   if (firing.active) return tapFiring();  // snooze an alarm, stop anything else
+  if (timerShowing()) return timerTap(x, y);
   if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
     const ReplayHit hit = screens::replayHit(x, y);
     if (hit == ReplayHit::PlayPause) return toggleReplay();
@@ -2997,7 +3125,11 @@ void setup() {
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
   config.wakeApp = [] { player.powerUp(); };
-  config.nowPlaying = [] { return missedAlarmLine; };  // the lock screen's bottom line
+  config.nowPlaying = [] {  // the lock screen's bottom line: a missed alarm, else a running timer
+    if (missedAlarmLine.length()) return missedAlarmLine;
+    const TimerState &t = moments::timer();
+    return t.running ? String(t.lockLine(time(nullptr)).c_str()) : String();
+  };
   config.onLockedWake = [] { return false; };          // lets wakeLockedAt end a sleep (the loop does the work)
   shell::begin(config);
   storage::begin();
@@ -3039,6 +3171,7 @@ void loop() {
     if (info.state != Talk::Offline && info.state != Talk::Error && !firing.active) onLock();
     wasLocked = true;
     pollMoments();  // one due unlocks Dotty (shell::wake) and plays from the next pass
+    pollTimer();
     armLockedWake();
     return;
   }
@@ -3047,6 +3180,7 @@ void loop() {
     missedAlarmLine = "";
   }
   pollMoments();
+  pollTimer();
   if (live.connected() && millis() - lastHeapSample > 250) {
     lastHeapSample = millis();
     lowFree = min(lowFree, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
@@ -3172,9 +3306,9 @@ void loop() {
   const bool held = bootDown && millis() - downAt >= kHoldMs;
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
   if (held && firing.active) {
-    const bool alarm = firing.kind == "alarm";
+    const bool ringing = firing.kind == "alarm" || firing.kind == "timer";  // BOOT only stops those
     answerFiring();
-    if (alarm) answeredPress = downAt;
+    if (ringing) answeredPress = downAt;
   }
   if (held && !historyOpen && !settingsOpen && !awaitingSend && answeredPress != downAt) {
     static uint32_t triedAt = 0;  // one connect per press (an error screen would retry every pass)
@@ -3259,6 +3393,10 @@ void loop() {
 
   // Touch: corners, scrolling a reply or history.
   if (input.gesture == Touch::Gesture::Tap) onTap(shell::touch.x(), shell::touch.y());
+  if (input.gesture == Touch::Gesture::LongPress && timerShowing() && !timerConfirm) {  // "Cancel the timer?"
+    timerConfirm = true;
+    redraw = true;
+  }
   if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
     const int step = input.gesture == Touch::Gesture::SwipeUp ? 3 : -3;
     if (historyOpen) historyScroll = max(0, historyScroll - step);
@@ -3442,7 +3580,7 @@ void loop() {
   if (input.key == 'q') callbacks().failed("Resource has been exhausted (e.g. check quota).", -1, true, false);
 
   // The avatar's animation clock.
-  if (millis() - lastFrameAt > kFrameMs && info.state != Talk::Listening) {
+  if (millis() - lastFrameAt > kFrameMs && info.state != Talk::Listening && !timerShowing()) {
     lastFrameAt = millis();
     info.frame++;
     redraw = true;
