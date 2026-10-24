@@ -66,7 +66,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.6.3");
+DOTTY_CARTRIDGE("companion", "Companion", "0.6.4");
 
 namespace {
 
@@ -237,10 +237,9 @@ int16_t *noteSendBuf = nullptr;          // rec.fetch's frame buffer (PSRAM, mad
 std::string deckPendingTitle;  // start_recording: the deck opens once the reply has ended
 bool deckPending = false;
 uint32_t deckPendingAt = 0;  // a deck that hasn't opened within 2 minutes (the reply never ended) is dropped
-std::string pendingPlayCompanion, pendingPlayName, pendingPlayTitle;
-bool notePlaying = false;
 // show_recordings: the list opens once the reply has ended; a row plays that recording.
 bool listPending = false, listOpen = false;
+std::string listPendingCompanion, listPendingName;  // whose list opens; a recording to open the player on ("" = the list)
 uint32_t listPendingAt = 0, listTouchedAt = 0;
 std::string listCompanion;
 std::vector<RecordingMeta> listItems;  // newest first, read when it opens
@@ -268,6 +267,8 @@ uint32_t pendingTypedSince = 0;
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 void dropPending();
+void openListLater(const std::string &companion, const std::string &name);
+void listPlay(int i);
 bool jobsDue();
 bool syncWanted();
 bool recordingNeedsSync(const RecordingMeta &m);
@@ -1425,8 +1426,7 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
     if (c.name == "show_recordings") {
       const size_t count = note::list(sessionCompanion).size();
       if (!count) return toolError("they have no recordings yet");
-      listPending = true;
-      listPendingAt = millis();
+      openListLater(sessionCompanion, "");
       LOGI("note", "show_recordings: %u, the list opens after this reply", static_cast<unsigned>(count));
       JsonDocument doc;
       doc["recordings"] = count;
@@ -1445,10 +1445,8 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
     const int i = matchRecording(all, c.text, now);
     if (i < 0) return toolError(all.empty() ? "they have no recordings yet" : "no recording matches that");
     JsonDocument doc;
-    if (c.name == "play_recording") {
-      pendingPlayCompanion = sessionCompanion;
-      pendingPlayName = all[i].name;
-      pendingPlayTitle = all[i].title;
+    if (c.name == "play_recording") {  // the player opens on it once the reply ends (controls, info)
+      openListLater(sessionCompanion, all[i].name);
       doc["playing"] = all[i].title;
     } else {
       note::remove(sessionCompanion, all[i].name);
@@ -2922,8 +2920,18 @@ int listPages() {
   return max(1, (static_cast<int>(listItems.size()) + 3) / 4);
 }
 
+// show_recordings / play_recording / the app's "Play on Dotty": opens once the reply has ended.
+void openListLater(const std::string &companion, const std::string &name) {
+  listPending = true;
+  listPendingAt = millis();
+  listPendingCompanion = companion;
+  listPendingName = name;
+}
+
 void openList() {
-  listCompanion = sessionCompanion.empty() ? companions::active().id : sessionCompanion;
+  listCompanion = !listPendingCompanion.empty() ? listPendingCompanion
+                  : sessionCompanion.empty()    ? companions::active().id
+                                                : sessionCompanion;
   listItems = note::list(listCompanion);
   if (listItems.empty()) return;
   stopReplay();
@@ -2935,6 +2943,8 @@ void openList() {
   listTouchedAt = millis();
   redraw = true;
   LOGI("note", "recordings list open: %u", static_cast<unsigned>(listItems.size()));
+  for (size_t i = 0; i < listItems.size(); i++)  // asked to play one: straight to the player on it
+    if (listItems[i].name == listPendingName) listPlay(static_cast<int>(i));
 }
 
 void closeList() {
@@ -3103,7 +3113,8 @@ void pollList() {
     listPending = false;
     LOGW("note", "the recordings list didn't open in time: dropped");
   }
-  if (listPending && !listOpen && !deckOpen && (info.state == Talk::After || info.state == Talk::Ready) &&
+  if (listPending && !listOpen && !deckOpen &&
+      (info.state == Talk::After || info.state == Talk::Ready || info.state == Talk::Offline || info.state == Talk::Error) &&
       !voice::playing() && !live.inTurn() && !writing && !reading) {
     listPending = false;
     openList();
@@ -3131,28 +3142,6 @@ void pollList() {
   }
 }
 
-// play_recording: after the reply that announced it.
-void pollNotePlay() {
-  if (notePlaying && !player.isPlaying()) {
-    notePlaying = false;
-    info.momentIcon = "";
-    redraw = true;
-  }
-  if (pendingPlayName.empty() || info.state == Talk::Thinking || info.state == Talk::Speaking || voice::playing() ||
-      live.inTurn())
-    return;
-  const String wav = note::path(pendingPlayCompanion, pendingPlayName, "wav");
-  if (player.play(wav.c_str())) {
-    notePlaying = true;
-    info.momentIcon = "speech";
-    info.said = (std::string("Playing: ") + pendingPlayTitle).c_str();
-    info.page = -1;
-    if (info.state != Talk::After) setState(Talk::After);
-    lastTurnAt = millis();
-    LOGI("note", "playing %s", pendingPlayName.c_str());
-  }
-  pendingPlayName.clear();
-}
 
 // ---------- measurement (dev key Y): a text-model request while the Live session is open ----------
 // Can Dotty hold a second TLS connection during a chat (a text model writing a long script for Live
@@ -3246,10 +3235,6 @@ void drawApp() {
 void onTap(uint16_t x, uint16_t y) {
   if (deckOpen) return deckTap(x, y);
   if (listOpen) return listTap(x, y);
-  if (notePlaying) {  // a tap stops a voice note playing
-    player.stop();
-    return;
-  }
   if (firing.active) return tapFiring();  // snooze an alarm, stop anything else
   if (timerShowing()) return timerTap(x, y);
   if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
@@ -3284,7 +3269,6 @@ void dropPending() {
   deckPending = false;
   listPending = false;
   if (listOpen) closeList();
-  pendingPlayName.clear();
   reaction.waiting = false;
   pendingTypedText.clear();
 }
@@ -3772,9 +3756,7 @@ void registerRecordingCommands() {
     const std::string who = args["companion"] | "", name = args["name"] | "";
     for (const RecordingMeta &m : note::list(who))
       if (m.name == name) {
-        pendingPlayCompanion = who;
-        pendingPlayName = name;
-        pendingPlayTitle = m.title;
+        openListLater(who, name);
         return;
       }
     reply["ok"] = false;
@@ -4621,7 +4603,6 @@ void loop() {
   if (bootDown) bootUpSince = 0;
   else if (!bootUpSince) bootUpSince = millis();
   if (deckOpen) pollDeck(held, bootUpSince && millis() - bootUpSince >= 40);
-  if (notePlaying && held) player.stop();
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
   if (held && listOpen && answeredPress != downAt) {  // one press: BOOT on the player / info goes back to the list, else closes the list and talks
     if (listPlaying >= 0 || listConfirm >= 0) {
@@ -4684,7 +4665,6 @@ void loop() {
   writerPoll();
   pollLines();
   pollPhoneWake();
-  pollNotePlay();
   pollList();
   pollNoteSend();
   pollReaction();

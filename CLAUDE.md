@@ -1168,7 +1168,10 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   volume; swipes = previous / next; an ended one stays with ▶ to play again); ⓘ = "About": title, date, the
   summary and the points as dotted bullets (`recordingInfoText`, host-tested), 7 lines a page, a tap or
   swipe turns pages. Back / BOOT step back one screen; on the list back / a BOOT press (then talks) / 2
-  minutes untouched / lock / a switch close it. Dev key `v` ("What have I recorded lately?"; typed keys now open a
+  minutes untouched / lock / a switch close it. 0.6.4 (the user's ask): `play_recording` ("play my last idea
+  about the peasants' meals") and the app's `companion.recording.play` open that player on the recording
+  (`openListLater(companion, name)`, after the reply; also from the idle / error screen) — the old bare
+  playback with a speech badge is gone. Dev key `v` ("What have I recorded lately?"; typed keys now open a
   session themselves). BLE `companion.recordings`, `.recording.text/.piece/
   .rename/.delete/.play`, `rec.fetch {companion, id}` (the whole file back, 4 frames a pass); the phone wake's
   sync job tells the app (`companion.recordings` event), ≤ 3 asks per recording per boot. App: Companion ›
