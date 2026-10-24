@@ -120,6 +120,22 @@ int main() {
     CHECK_EQ("nextOccurrence: once in the past is 0", nextOccurrence(reminder("x", fri0730), fri0730 + 1), (int64_t)0);
   }
   {
+    Moment w = reminder("gym", local(2026, 10, 24, 7, 0));  // Saturday 07:00
+    w.repeat = Repeat::Weekdays;
+    const bool ok = firstOccurrence(w);
+    Moment d = reminder("swim", local(2026, 10, 24, 8, 0));
+    d.repeat = Repeat::Days;
+    d.days = 0;
+    Moment once = reminder("x", local(2026, 10, 24, 8, 0));
+    const bool onceOk = firstOccurrence(once);
+    CHECK("firstOccurrence: weekdays set for a Saturday starts on Monday",
+          ok && w.at == local(2026, 10, 26, 7, 0) && !firstOccurrence(d) && onceOk && once.at == local(2026, 10, 24, 8, 0));
+    Moment fri = reminder("gym", local(2026, 10, 23, 7, 0));  // Friday: already a weekday
+    fri.repeat = Repeat::Weekdays;
+    firstOccurrence(fri);
+    CHECK("firstOccurrence: an allowed day stays", fri.at == local(2026, 10, 23, 7, 0));
+  }
+  {
     MomentRules r;
     CHECK("rules: defaults", r.perDay == 2 && r.from == 600 && r.to == 1260 && r.alarmVolume == 90 &&
                                  r.wakeEvery == 20 && !r.quietSilent && r.quiet.empty());

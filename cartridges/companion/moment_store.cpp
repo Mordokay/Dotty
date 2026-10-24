@@ -150,6 +150,14 @@ int64_t nextOccurrence(const Moment &m, int64_t after) {
   return 0;
 }
 
+bool firstOccurrence(Moment &m) {
+  if (m.repeat == Repeat::Once) return m.at > 0;
+  const int64_t first = nextOccurrence(m, m.at - 1);
+  if (!first) return false;
+  m.at = first;
+  return true;
+}
+
 const Moment *MomentList::find(int id) const {
   for (const Moment &m : moments_)
     if (m.id == id) return &m;

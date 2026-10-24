@@ -38,9 +38,13 @@ struct MomentEditor: View {
                             Text(moment.kind == "alarm" ? "Rings every minute until you press BOOT (a tap snoozes 5 minutes)."
                                                          : "Said once; hold BOOT within 3 minutes to answer.")
                                 .font(.lpCaption).foregroundStyle(Color.inkMuted)
-                            DatePicker("When", selection: dateBinding,
-                                       in: Date()..., displayedComponents: moment.repeat == "once" ? [.date, .hourAndMinute] : [.hourAndMinute])
-                                .font(.lpBody)
+                            if moment.repeat == "once" {  // a date and time still to come
+                                DatePicker("When", selection: dateBinding, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                                    .font(.lpBody)
+                            } else {  // any time of day: an earlier one than now starts tomorrow
+                                DatePicker("At", selection: dateBinding, displayedComponents: [.hourAndMinute])
+                                    .font(.lpBody)
+                            }
                             Picker("Repeat", selection: $moment.repeat) {
                                 Text("Once").tag("once")
                                 Text("Every day").tag("daily")

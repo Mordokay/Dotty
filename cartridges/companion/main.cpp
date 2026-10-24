@@ -208,6 +208,8 @@ bool momentOnScreen = false;  // a moment's text is up with no chat behind it (n
 // Recording a moment's line (line_job.h): the reading's audio goes to lineRec, not the speaker.
 LineJob lineJob;
 bool capturingLine = false;
+bool lineDiscard = false;  // a stopped reading's turn is still under way: its audio, words and end are dropped
+std::map<std::string, uint32_t> lineBackoff;  // "<companion>/<key>" → no new try before then (millis)
 AdpcmRecorder lineRec;
 LastLine linePending;      // its text pieces, timed
 size_t lineFrames = 0;     // 24 kHz frames received
@@ -331,9 +333,11 @@ uint32_t resumeKeptAt = 0;  // when a conversation was kept to resume (kResumeKe
 void disconnect(const char *why) {
   reviewStart = 0;
   abortLine(why);
+  const bool wasBackground = bgSession;
   bgSession = false;
   ble::advertiseSlowly(false);
-  if (!live.resumeHandle().empty()) resumeKeptAt = millis();
+  if (wasBackground) live.forgetResume();  // a recording session is never resumed by a chat
+  else if (!live.resumeHandle().empty()) resumeKeptAt = millis();
   path.end();
   cancelWriter();
   early.clear();
@@ -749,6 +753,7 @@ GeminiLive::Callbacks callbacks() {
     redraw = true;
   };
   cb.said = [](const std::string &piece) {
+    if (lineDiscard) return;
     if (capturingLine) {  // a moment's line being recorded: its words, timed to its audio
       linePending.add(lineFrames / 24, piece);
       return;
@@ -767,6 +772,7 @@ GeminiLive::Callbacks callbacks() {
     }
   };
   cb.audio = [](const int16_t *pcm, size_t frames) {
+    if (lineDiscard) return;
     if (capturingLine) {  // to the card, not the speaker: the moment stays a surprise
       lineRec.add(pcm, frames);
       lineFrames += frames;
@@ -787,6 +793,11 @@ GeminiLive::Callbacks callbacks() {
   cb.tool = [](const ToolCall &c) { return applyMomentTool(c); };
   cb.turnDone = [](int tokens) {
     ring.forgive(sessionKey);  // a good turn: this key's quota strikes start over
+    if (lineDiscard) {  // the end of a stopped reading: nothing to keep
+      usage::addTokens(tokens, sessionKey);
+      lineDiscard = false;
+      return;
+    }
     if (capturingLine) {  // a chunk of a moment's line has been read
       usage::addTokens(tokens, sessionKey);
       lineJob.chunkDone();
@@ -1060,6 +1071,7 @@ void flushEarly() {
 void startTalking() {
   momentOnScreen = false;
   abortLine("talking");
+  lineDiscard = false;  // the new question's start drains whatever is left of it
   heard.clear();
   said.clear();
   info.heard = info.said = "";
@@ -1339,6 +1351,7 @@ GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
   if (!repeatFromName(c.repeat, m.repeat)) m.repeat = Repeat::Once;
   m.days = dayBits(c.days);
   if (m.repeat == Repeat::Days && !m.days) return toolError("which days?");
+  if (!firstOccurrence(m)) return toolError("which days?");  // "weekdays" asked on a Saturday: Monday
   m.what = c.text;
   m.style = validStyle(c.style) ? c.style : "spoken";
   m.source = "chat";
@@ -1383,6 +1396,7 @@ struct Firing {
   std::string kind;   // reminder, alarm, spontaneous
   uint32_t hold = 0;  // the gap after a clip shown as text only (time to read it)
   bool preview = false;  // played from the app: nothing moves on or is deleted
+  uint32_t startedMs = 0;  // a BOOT press already down before this doesn't answer it
 } firing;
 std::vector<FireGroup> firingQueue;
 bool previewFiring = false;  // companion.moment.play: plays it without moving it on or deleting anything
@@ -1478,6 +1492,7 @@ void startFiring(const FireGroup &g, bool beeps) {
   stopReplay();
   firing = Firing();
   firing.active = true;
+  firing.startedMs = millis();
   firing.group = g;
   firing.beeps = beeps;
   firing.clips = clipsFor(g, *list);
@@ -1729,7 +1744,7 @@ bool timerConfirm = false;   // "Cancel the timer?" is up
 
 bool timerShowing() {
   return moments::timer().running && !firing.active && !settingsOpen && !historyOpen && !momentOnScreen &&
-         (info.state == Talk::Offline || info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Error);
+         info.state == Talk::Offline;  // never over a reply's text or an error
 }
 
 // Time's up: a fanfare, the companion's recorded line (or the words), ringing like an alarm until BOOT or a tap.
@@ -1740,6 +1755,7 @@ void startTimerEnd() {
   timerConfirm = false;
   firing = Firing();
   firing.active = true;
+  firing.startedMs = millis();
   firing.kind = "timer";
   firing.group.companion = t.companion;
   firing.group.alarm = true;  // the alarm volume
@@ -1777,6 +1793,13 @@ void pollTimer() {
     return;
   }
   const int left = t.secondsLeft(now);
+  if (left == 0 && lastTimerLeft == 0) {  // its end waited for a reply or a press: now?
+    if (timerCue(0, t.tickEvery, momentBusy()).sound == TimerSound::End) {
+      lastTimerLeft = -1;
+      return startTimerEnd();
+    }
+    return;
+  }
   if (left != lastTimerLeft) {
     const bool newSecond = lastTimerLeft < 0 || left < lastTimerLeft;
     lastTimerLeft = left;
@@ -2075,6 +2098,8 @@ bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
   const int64_t now = time(nullptr);
   bool found = false;
   auto consider = [&](const LineWork &w) {
+    const auto back = lineBackoff.find(w.companion + "/" + w.key);
+    if (back != lineBackoff.end() && static_cast<int32_t>(back->second - millis()) > 0) return;  // failed lately
     if (!found || w.at < out.at) {
       out = w;
       found = true;
@@ -2221,6 +2246,7 @@ void pollLines() {
   if (lineJob.step() == LineJob::Step::Done || lineJob.step() == LineJob::Step::Failed) {
     if (lineJob.step() == LineJob::Step::Failed) {
       lineCooldownUntil = millis() + 60000;
+      lineBackoff[lineJob.work().companion + "/" + lineJob.work().key] = millis() + 30 * 60 * 1000;  // not every wake
       if (bgSession) bgFailures++;
     }
     lineJob.reset();
@@ -2287,7 +2313,10 @@ void pollLines() {
       }
       return;
     case LineJob::Step::Reading: {
-      if (millis() - lineReadingAt > 120000) return abortLine("the reading took too long");
+      if (millis() - lineReadingAt > readingCapMs(lineJob.work().words)) {
+        lineDiscard = live.inTurn();  // its turn may still end: swallowed, not taken for a chat's reply
+        return abortLine("the reading took too long");
+      }
       std::string note;
       if (lineJob.takeSend(note)) {
         capturingLine = true;
@@ -2357,6 +2386,7 @@ bool startBackgroundSession(const std::string &companion, bool viaPhone) {
   sessionCompanion = companion;
   personaSection = personaText(*p);
   memorySection = companion == companions::active().id ? memories::store().promptSection() : std::string();
+  live.forgetResume();  // its own session: a chat's kept conversation isn't carried into it (nor back)
   bgSession = true;
   awaitingConnect = true;
   bgOpenedAt = millis();
@@ -2438,6 +2468,10 @@ void pollPlan() {
 
 void endPhoneWake(const char *how) {
   if (bgSession || live.connected() || connecting) disconnect("phone wake done");
+  if (!connecting) {  // whatever happened, nothing of the wake may keep Dotty awake
+    net::disconnect();
+    power::setWakeLock(power::kWakeLockNetwork, false);
+  }
   shell::endBluetoothWindow();
   LOGI("wake", "phone wake: done in %lu s via %s", static_cast<unsigned long>((millis() - bgOpenedAt) / 1000), how);
   phoneWake.end();
@@ -2472,9 +2506,17 @@ void pollPhoneWake() {
     return;
   }
   const bool phone = relay::phoneReady();
-  LineWork work;
-  const bool lineLeft = nextLineWork(work, "") && bgFailures < 2;
-  const bool done = !planRunning && !planIsDue() && !lineJob.busy() && !lineLeft;
+  // What's left, read from the card every few seconds (not every pass: each moment's recording is checked).
+  static LineWork work;
+  static bool lineLeft = false;
+  static uint32_t scannedAt = 0;
+  static LineJob::Step scannedStep = LineJob::Step::Idle;
+  if (!scannedAt || millis() - scannedAt > 3000 || lineJob.step() != scannedStep) {
+    scannedAt = millis();
+    scannedStep = lineJob.step();
+    lineLeft = nextLineWork(work, "");
+  }
+  const bool done = PhoneWake::jobsDone(planIsDue(), planRunning, lineJob.busy(), lineLeft, bgFailures);
   const PhoneWake::Stage stage = phoneWake.poll(millis(), phone, true, done);
   if (stage == PhoneWake::Stage::Done) return endPhoneWake(wakeVia);
   if (stage == PhoneWake::Stage::Phone && shell::locked()) shell::bluetoothWindow(30);  // kept open while it works
@@ -2482,8 +2524,13 @@ void pollPhoneWake() {
   // A session that didn't open, or a phone that didn't answer its setup in 10 s.
   if (bgSession && awaitingConnect && !connecting && !live.connected()) {
     LOGW("wake", "the recording session didn't open: %s", connectError.c_str());
-    awaitingConnect = false;
-    bgSession = false;
+    disconnect("recording session didn't open");  // Wi-Fi off, the Network wake lock released
+    bgFailures++;
+  }
+  // An open recording session that died quietly (the iPhone suspended, a 1006 while idle).
+  if (bgSession && !awaitingConnect && !connecting && !live.connected()) {
+    LOGW("wake", "the recording session closed");
+    disconnect("recording session closed");
     bgFailures++;
   }
   if (bgSession && awaitingConnect && live.overRelay() && !live.ready() && millis() - relayOpenAt > 10000) {
@@ -2884,6 +2931,7 @@ void registerMomentCommands() {
       m.days = dayBits(days);
     }
     if (m.repeat == Repeat::Days && !m.days) return fail("no days");
+    if (!firstOccurrence(m)) return fail("no days");  // the first time on an allowed day
     m.what = args["what"] | m.what.c_str();
     m.style = args["style"] | m.style.c_str();
     if (!validStyle(m.style)) return fail("bad style");
@@ -3776,7 +3824,7 @@ void loop() {
   else if (!downAt) downAt = millis();
   const bool held = bootDown && millis() - downAt >= kHoldMs;
   static uint32_t answeredPress = 0;  // the press that answered a moment doesn't also start a chat
-  if (held && firing.active) {
+  if (held && firing.active && static_cast<int32_t>(downAt - firing.startedMs) >= 0) {
     const bool ringing = firing.kind == "alarm" || firing.kind == "timer";  // BOOT only stops those
     answerFiring();
     if (ringing) answeredPress = downAt;

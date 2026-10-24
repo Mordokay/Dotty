@@ -74,6 +74,9 @@ std::string localTimeText(int64_t local);                     // "2026-10-24T18:
 // The first time after `after` it's due: Once → m.at if it's later, else 0; repeating → the next allowed
 // day at m.at's time of day, never before m.at.
 int64_t nextOccurrence(const Moment &m, int64_t after);
+// A new or moved repeating moment's first time on an allowed day ("weekdays 07:00" set for a Saturday →
+// Monday). False when no day is allowed (Repeat::Days with none). A one-off is left as it is.
+bool firstOccurrence(Moment &m);
 const char *kindName(MomentKind k);  // "reminder", "alarm", "spontaneous"
 bool kindFromName(const std::string &name, MomentKind &out);
 const char *repeatName(Repeat r);  // "once", "daily", "weekdays", "days"

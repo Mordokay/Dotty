@@ -7,8 +7,8 @@
 // The timer (spec: "Timers"): one at a time, up to 24 h, kept in NVS so a restart keeps it. What it
 // plays as it counts down: an optional tick every tickEvery seconds (not in the last minute), a tick at
 // 60 and 30 s, then the last ten seconds a beep a second, each a semitone higher and louder (50 → 100 %),
-// and the end (a fanfare and the companion's line, played by main.cpp). Nothing but the end while
-// Dotty listens or speaks. Plain C++ (host-tested). Times are local epoch seconds.
+// and the end (a fanfare and the companion's line, played by main.cpp). Nothing while Dotty listens or
+// speaks: the end waits for the reply to finish. Plain C++ (host-tested). Times are local epoch seconds.
 
 struct TimerState {
   static constexpr int kMaxSeconds = 86400;

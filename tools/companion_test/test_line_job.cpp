@@ -85,5 +85,7 @@ int main() {
     j.abort();
     CHECK("abort while idle stays idle", j.step() == LineJob::Step::Idle);
   }
+  CHECK("readingCapMs: half a second a word plus 30 s (300 words fit)",
+        readingCapMs(40) == 50000 && readingCapMs(300) == 180000 && readingCapMs(300) > 300 * 400 + 6 * 2500);
   return failures ? 1 : 0;
 }

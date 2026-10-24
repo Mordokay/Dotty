@@ -13,6 +13,12 @@
 // arrived: nothing plays, so no pacing), the audio is saved. Anything that interrupts it (BOOT, a lock,
 // the phone leaving, quota) ends it Failed, and the moment stays not ready. Plain C++ (host-tested);
 // main.cpp feeds it.
+// How long a reading may take before it counts as stuck: Live streams it at about real time (~0.4 s a
+// word) plus a pause at each chunk's join; half a second a word and 30 s spare (300 words: 3 minutes).
+inline uint32_t readingCapMs(int words) {
+  return static_cast<uint32_t>(words) * 500 + 30000;
+}
+
 struct LineWork {
   std::string companion;
   std::string key;  // the recording's name: "<id>", "group-<minute>" or "timer"

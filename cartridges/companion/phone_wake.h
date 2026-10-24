@@ -42,6 +42,13 @@ class PhoneWake {
     }
     return stage_;
   }
+  // Is the wake's work over? A running job always finishes; two failures (no internet, quota) end the rest
+  // for this wake, plan included — else a day without internet kept every wake awake its full 3 minutes.
+  static bool jobsDone(bool planDue, bool planRunning, bool lineBusy, bool lineLeft, int failures) {
+    if (planRunning || lineBusy) return false;
+    if (failures >= 2) return true;
+    return !planDue && !lineLeft;
+  }
   bool bluetoothOn() const { return stage_ == Stage::WaitingForPhone || stage_ == Stage::Phone; }
   Stage stage() const { return stage_; }
   void end() { stage_ = Stage::Idle; }  // a chat, BOOT or a firing moment cancels a wake; or it's over

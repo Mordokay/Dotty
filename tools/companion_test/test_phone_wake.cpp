@@ -57,5 +57,12 @@ int main() {
     CHECK("end() -> Idle, Bluetooth off", p.stage() == PhoneWake::Stage::Idle && !p.bluetoothOn() &&
                                               p.poll(2000, true, true, false) == PhoneWake::Stage::Idle);
   }
+  CHECK("jobs done: nothing left", PhoneWake::jobsDone(false, false, false, false, 0));
+  CHECK("jobs done: a line or a plan left", !PhoneWake::jobsDone(true, false, false, false, 0) &&
+                                                !PhoneWake::jobsDone(false, false, false, true, 0));
+  CHECK("two failures end the wake even with a plan due (no internet: don't sit 3 minutes awake)",
+        PhoneWake::jobsDone(true, false, false, true, 2));
+  CHECK("a job still running isn't cut by the failures", !PhoneWake::jobsDone(true, true, false, true, 2) &&
+                                                            !PhoneWake::jobsDone(false, false, true, false, 2));
   return failures ? 1 : 0;
 }

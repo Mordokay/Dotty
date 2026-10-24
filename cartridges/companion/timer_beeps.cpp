@@ -61,11 +61,11 @@ std::string TimerState::clock(int64_t now) const {
 
 TimerCue timerCue(int secondsLeft, int tickEvery, bool busy) {
   TimerCue cue;
+  if (busy) return cue;  // the end too: it plays once the reply is over (asked again each pass meanwhile)
   if (secondsLeft <= 0) {
     cue.sound = TimerSound::End;
     return cue;
   }
-  if (busy) return cue;
   if (secondsLeft <= 10) {
     cue.sound = TimerSound::Countdown;
     cue.beep.midi = static_cast<uint8_t>(72 + (10 - secondsLeft));

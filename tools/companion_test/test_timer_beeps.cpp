@@ -49,9 +49,9 @@ int main() {
               five.beep.volume < one.beep.volume && timerCue(11, 0, false).sound == TimerSound::None);
   }
   CHECK("cue: 0 is the end", timerCue(0, 0, false).sound == TimerSound::End);
-  CHECK("cue: busy skips ticks and countdown, never the end",
+  CHECK("cue: busy skips ticks and countdown, and holds the end until the reply is over",
         timerCue(30, 0, true).sound == TimerSound::None && timerCue(5, 0, true).sound == TimerSound::None &&
-            timerCue(0, 0, true).sound == TimerSound::End);
+            timerCue(0, 0, true).sound == TimerSound::None && timerCue(0, 0, false).sound == TimerSound::End);
   CHECK("refresh every 10 s, every second in the last minute",
         timerRefreshSeconds(300) == 10 && timerRefreshSeconds(61) == 10 && timerRefreshSeconds(60) == 1);
   return failures ? 1 : 0;
