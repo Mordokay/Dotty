@@ -28,6 +28,7 @@ struct ScreenInfo {
   String momentIcon;
   // A running timer (timer_beeps.h) takes the idle screen: its label and the time left ("" = none).
   String timerLabel, timerClock;
+  String timerChip;  // a running timer's time left, top right on the companion's screen ("" = none)
   bool timerPaused = false, timerConfirm = false;  // confirm: "Cancel the timer?" Yes / No
 };
 
@@ -40,7 +41,7 @@ struct SettingsView {
   int choices = 2;  // favourite voices to step through (no arrows for one)
 };
 enum class ReplayHit { None, PlayPause, Loop };
-enum class TimerHit { None, Yes, No };
+enum class TimerHit { None, Back, Yes, No };
 // The recording deck (voice_note.h, note_deck.h).
 struct DeckView {
   String title, clock;

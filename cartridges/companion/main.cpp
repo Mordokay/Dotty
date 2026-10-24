@@ -1830,9 +1830,11 @@ int lastTimerStep = -1;      // the screen shows the time left in steps of 10 s 
 bool timerVolume = false;    // a countdown beep set its own volume: back to the companion's after
 bool timerConfirm = false;   // "Cancel the timer?" is up
 
+bool timerOpen = false;       // the timer screen is open (the chip's tap, or its last minute)
+bool timerAutoOpened = false;  // its last minute opened it already (back keeps it closed)
+
 bool timerShowing() {
-  return moments::timer().running && !firing.active && !settingsOpen && !historyOpen && !momentOnScreen &&
-         info.state == Talk::Offline;  // never over a reply's text or an error
+  return timerOpen && moments::timer().running && !firing.active && !settingsOpen && !historyOpen && !deckOpen;
 }
 
 // Time's up: a fanfare, the companion's recorded line (or the words), ringing like an alarm until BOOT or a tap.
@@ -1871,6 +1873,7 @@ void pollTimer() {
     player.setVolume(settings.volume);
     timerVolume = false;
   }
+  if (!t.running) timerOpen = timerAutoOpened = false;  // the next timer starts closed
   if (!t.running || t.paused || firing.active) return;
   const int64_t now = time(nullptr);
   if (now - t.endsAt >= 3600) {  // it ended over an hour ago (Dotty was off): forgotten quietly
@@ -1910,11 +1913,22 @@ void pollTimer() {
       redraw = true;
     }
   }
-  if (left <= 60) shell::wake();  // the last minute: Dotty unlocks and shows the countdown
+  if (left <= 60) {  // the last minute: Dotty unlocks and shows the countdown (once: back closes it)
+    shell::wake();
+    if (!timerAutoOpened) {
+      timerAutoOpened = timerOpen = true;
+      redraw = true;
+    }
+  }
 }
 
 void timerTap(uint16_t x, uint16_t y) {
   TimerState &t = moments::timer();
+  if (screens::timerHit(x, y) == TimerHit::Back) {
+    timerOpen = timerConfirm = false;
+    redraw = true;
+    return;
+  }
   if (timerConfirm) {
     const TimerHit hit = screens::timerHit(x, y);
     if (hit == TimerHit::None) return;
@@ -2955,6 +2969,7 @@ void drawApp() {
     const bool timer = timerShowing();
     info.timerLabel = timer ? t.title().c_str() : "";
     info.timerClock = timer ? t.clock(time(nullptr)).c_str() : "";
+    info.timerChip = t.running && !timer ? t.clock(time(nullptr)).c_str() : "";
     info.timerPaused = t.paused;
     info.timerConfirm = timerConfirm;
     screens::draw(info);
@@ -2984,7 +2999,10 @@ void onTap(uint16_t x, uint16_t y) {
     stopReplay();  // its voice samples use the speaker
     settingsOpen = true;
     redraw = true;
-  } else if (y < 40 && x > 150) {
+  } else if (y < 28 && x > 130 && moments::timer().running) {  // the timer chip
+    timerOpen = true;
+    redraw = true;
+  } else if ((y < 40 || (moments::timer().running && y < 60)) && x > 150) {
     historyOpen = true;
     historyScroll = 0;
     redraw = true;

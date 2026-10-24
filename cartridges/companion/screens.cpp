@@ -158,15 +158,9 @@ void centeredIn(const String &text, int16_t y, int16_t x0, int16_t x1) {
 void drawTimer(const ScreenInfo &info) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
-  const int16_t cx = kW / 2;
-  epd.drawFastHLine(cx - 8, 10, 17, kBlack);  // an hourglass
-  epd.drawFastHLine(cx - 8, 32, 17, kBlack);
-  epd.drawTriangle(cx - 7, 11, cx + 7, 11, cx, 21, kBlack);
-  epd.fillTriangle(cx - 7, 31, cx + 7, 31, cx, 21, kBlack);
-  epd.setFont(&FreeSans12pt7b);
-  ui::drawCentered(epd, ui::printable(info.timerLabel), 60);
+  nav::draw(epd, ui::printable(info.timerLabel), nav::Icon::Back, nav::Icon::None);  // back: the companion
   epd.setFont(&FreeSansBold24pt7b);
-  ui::drawCentered(epd, info.timerClock, 112);
+  ui::drawCentered(epd, info.timerClock, 108);
   epd.setFont(&FreeSans9pt7b);
   if (info.timerConfirm) {
     ui::drawCentered(epd, "Cancel the timer?", 142);
@@ -256,6 +250,7 @@ DeckHit deckHit(uint16_t x, uint16_t y, const DeckView &v) {
 }
 
 TimerHit timerHit(uint16_t x, uint16_t y) {
+  if (nav::hit(x, y) < 0) return TimerHit::Back;
   if (y < 148) return TimerHit::None;
   return x < kW / 2 ? TimerHit::Yes : TimerHit::No;
 }
@@ -359,8 +354,27 @@ void draw(const ScreenInfo &shownInfo) {
   if (small) avatar::draw(epd, kW - 52, 30, info.avatar, face, info.frame, 48);
   else avatar::draw(epd, (kW - kAvatarSize) / 2, 2, info.avatar, face, info.frame, kAvatarSize);
   drawGear();
-  if (info.momentIcon.length()) drawMomentIcon(info.momentIcon);
-  else drawHistoryIcon();
+  if (info.momentIcon.length()) {
+    drawMomentIcon(info.momentIcon);
+  } else if (info.timerChip.length()) {  // a running timer: its time left (a tap opens it); history below
+    epd.setFont(nullptr);
+    const int16_t w = 6 * info.timerChip.length() + 16;
+    epd.drawRoundRect(kW - w - 3, 4, w, 20, 5, kBlack);
+    const int16_t hx = kW - w + 3;
+    epd.drawFastHLine(hx, 8, 7, kBlack);
+    epd.drawFastHLine(hx, 19, 7, kBlack);
+    epd.drawTriangle(hx, 9, hx + 6, 9, hx + 3, 13, kBlack);
+    epd.fillTriangle(hx, 18, hx + 6, 18, hx + 3, 14, kBlack);
+    epd.setCursor(hx + 10, 10);
+    epd.print(info.timerChip);
+    const int16_t cx = kW - 18, cy = 42;  // the history clock, moved down
+    epd.drawCircle(cx, cy, 9, kBlack);
+    epd.drawCircle(cx, cy, 8, kBlack);
+    epd.drawFastVLine(cx, cy - 5, 6, kBlack);
+    epd.drawLine(cx, cy, cx + 4, cy + 3, kBlack);
+  } else {
+    drawHistoryIcon();
+  }
   if (info.replayable && !small) drawReplayButtons(info.replaying, info.replayLoop);
   if ((shownInfo.replaying || shownInfo.replayPaused) && !small) {  // how far the replay is, like a song's bar
     constexpr int16_t x = 8, y = 135, w = kW - 16, h = 6;
