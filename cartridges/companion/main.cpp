@@ -38,6 +38,7 @@
 #include "piece_buffer.h"
 #include "ui.h"
 #include "memories.h"
+#include "moments.h"
 #include "persona.h"
 #include "images/sleep_panda.h"
 #include "log.h"
@@ -1894,6 +1895,7 @@ void registerCompanionCommands() {
       reply["error"] = companions::find(id) ? "last" : "unknown companion";
       return;
     }
+    moments::companionRemoved(id);
     if (companions::active().id != before) {
       applyCompanion();
       setState(Talk::Offline, idleStatus());
@@ -2236,6 +2238,7 @@ void setup() {
   shell::begin(config);
   storage::begin();
   companions::begin();  // also points memories and history at the active companion
+  moments::begin();     // reminders, alarms, the companions' own lines, the timer
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
   voice::begin(player);
   loadSettings();

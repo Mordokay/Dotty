@@ -176,6 +176,14 @@ bool remove(const std::string &id) {
   return true;
 }
 
+std::string readText(const String &path) {
+  return readFile(path);
+}
+
+bool writeText(const String &path, const std::string &text) {
+  return writeFile(path, text);
+}
+
 bool logEvolution(const std::string &id, const std::string &line) {
   File f = SD_MMC.open(folder(id) + "/evolution.jsonl", FILE_APPEND);
   if (!f) return false;
