@@ -1346,8 +1346,10 @@ struct Firing {
   std::string line;   // all of it (for the history and the chat that may follow)
   std::string kind;   // reminder, alarm, spontaneous
   uint32_t hold = 0;  // the gap after a clip shown as text only (time to read it)
+  bool preview = false;  // played from the app: nothing moves on or is deleted
 } firing;
 std::vector<FireGroup> firingQueue;
+bool previewFiring = false;  // companion.moment.play: plays it without moving it on or deleting anything
 Ringing ringing;
 String missedAlarmLine;    // "Missed alarm 07:30" on the lock screen until the next unlock
 uint32_t lastMomentPoll = 0;
@@ -1456,12 +1458,16 @@ void startFiring(const FireGroup &g, bool beeps) {
   LOGI("moments", "firing %s's %s at %s: %u moment(s), %u clip(s)%s", g.companion.c_str(), kind.c_str(),
        localTimeText(g.minute * 60).c_str(), static_cast<unsigned>(g.ids.size()), static_cast<unsigned>(firing.clips.size()),
        firing.delivery == Delivery::Voice ? "" : firing.delivery == Delivery::BeepsAndText ? " (quiet: beeps and text)" : " (quiet: text only)");
+  firing.preview = previewFiring;
+  previewFiring = false;
   // Moved on now (a repeating one to its next time), so a pause or a restart never fires it twice.
-  for (const int id : g.ids)
-    if (Moment *m = list->find(id)) advance(*m, now, false);
-  moments::save(g.companion);
-  notifyMoments();
-  if (g.alarm) ringing.start(millis(), true);
+  if (!firing.preview) {
+    for (const int id : g.ids)
+      if (Moment *m = list->find(id)) advance(*m, now, false);
+    moments::save(g.companion);
+    notifyMoments();
+  }
+  if (g.alarm && !firing.preview) ringing.start(millis(), true);
   playFiring(beeps);
 }
 
@@ -1605,6 +1611,14 @@ void endFiring() {
   player.stop();
   player.setVolume(settings.volume);
   ringing.stop();
+  if (firing.preview) {  // the app's "Play on Dotty": as it was
+    LOGI("moments", "preview done");
+    firing.active = false;
+    momentOnScreen = false;
+    info.momentIcon = "";
+    setState(Talk::Offline, idleStatus());
+    return;
+  }
   keepAsLastLine();
   if (MomentList *list = moments::of(firing.group.companion)) {
     for (const int id : firing.group.ids) {  // one-offs are done: they go with their recordings (the history keeps them)
@@ -2513,6 +2527,187 @@ void registerKeyCommands() {
   });
 }
 
+// ---------- moments over Bluetooth (the app's Moments screen) ----------
+
+void dayNames(JsonArray out, uint8_t bits) {
+  static const char *kNames[] = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+  for (int i = 0; i < 7; i++)
+    if (bits & (1 << i)) out.add(kNames[i]);
+}
+
+void timerReply(JsonObject o) {
+  const TimerState &t = moments::timer();
+  const int64_t now = time(nullptr);
+  o["label"] = t.label;
+  o["endsAt"] = t.endsAt;
+  o["paused"] = t.paused;
+  o["left"] = t.secondsLeft(now);
+  o["tickEvery"] = t.tickEvery;
+  o["companion"] = t.companion;
+  o["ready"] = t.ready;
+}
+
+void rulesReply(JsonObject o) {
+  JsonDocument doc;
+  deserializeJson(doc, moments::rules().save());
+  for (JsonPairConst kv : doc.as<JsonObjectConst>()) o[kv.key()] = kv.value();
+}
+
+void registerMomentCommands() {
+  // {companion?}: every companion's when none is named. Times are local epoch seconds.
+  ble::on("companion.moments", [](JsonObjectConst args, JsonObject reply) {
+    reply["available"] = moments::available();
+    reply["max"] = MomentList::kMax;
+    const std::string only = args["companion"] | "";
+    JsonArray list = reply["moments"].to<JsonArray>();
+    for (const CompanionMoments &c : moments::all()) {
+      if (!only.empty() && c.companion != only) continue;
+      for (const Moment &m : c.list->all()) {
+        JsonObject o = list.add<JsonObject>();
+        o["id"] = m.id;
+        o["companion"] = c.companion;
+        o["kind"] = kindName(m.kind);
+        o["at"] = m.at;
+        o["repeat"] = repeatName(m.repeat);
+        if (m.repeat == Repeat::Days) dayNames(o["days"].to<JsonArray>(), m.days);
+        o["what"] = m.what;
+        o["style"] = m.style;
+        o["source"] = m.source;
+        o["ready"] = m.ready;
+        o["state"] = m.state == MomentState::Done ? "done" : m.state == MomentState::Missed ? "missed" : "upcoming";
+      }
+    }
+    if (moments::timer().running) timerReply(reply["timer"].to<JsonObject>());
+  });
+  // {id?, companion, kind, at, repeat?, days?, what, style?}: a new one (no id) or a change → {id}
+  ble::on("companion.moment.save", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | companions::active().id;
+    MomentList *list = moments::of(who);
+    auto fail = [&](const char *error) {
+      reply["ok"] = false;
+      reply["error"] = error;
+    };
+    if (!list) return fail(moments::available() ? "unknown companion" : "unavailable");
+    const int id = args["id"] | 0;
+    Moment m;
+    if (id) {
+      const Moment *old = list->find(id);
+      if (!old) return fail("no such moment");
+      m = *old;
+    } else {
+      m.source = "app";
+      m.created = time(nullptr);
+    }
+    if (!kindFromName(args["kind"] | kindName(m.kind), m.kind) || m.kind == MomentKind::Spontaneous) return fail("bad kind");
+    const int64_t at = args["at"] | m.at;
+    if (at != m.at || !id) {
+      if (at <= time(nullptr)) return fail("past");
+      m.at = at - at % 60;
+    }
+    if (!repeatFromName(args["repeat"] | repeatName(m.repeat), m.repeat)) return fail("bad repeat");
+    if (args["days"].is<JsonArrayConst>()) {
+      std::vector<std::string> days;
+      for (JsonVariantConst d : args["days"].as<JsonArrayConst>()) days.push_back(d | "");
+      m.days = dayBits(days);
+    }
+    if (m.repeat == Repeat::Days && !m.days) return fail("no days");
+    m.what = args["what"] | m.what.c_str();
+    m.style = args["style"] | m.style.c_str();
+    if (!validStyle(m.style)) return fail("bad style");
+    if (m.state != MomentState::Upcoming) m.state = MomentState::Upcoming;
+    const int saved = id ? (list->update(m) ? id : -1) : list->add(m);
+    if (saved < 0) return fail(static_cast<int>(list->all().size()) >= MomentList::kMax ? "full" : "bad moment");
+    moments::save(who);
+    LOGI("moments", "app %s %s's moment %d at %s: %s", id ? "changed" : "added", who.c_str(), saved,
+         localTimeText(m.at).c_str(), m.what.c_str());
+    reply["id"] = saved;
+    notifyMoments();
+  });
+  ble::on("companion.moment.delete", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | companions::active().id;
+    MomentList *list = moments::of(who);
+    const int id = args["id"] | 0;
+    if (!list || !list->remove(id)) {
+      reply["ok"] = false;
+      reply["error"] = "no such moment";
+      return;
+    }
+    moments::dropRecording(who, std::to_string(id));
+    moments::save(who);
+    notifyMoments();
+  });
+  // Plays it now on Dotty (a preview: it stays as it is).
+  ble::on("companion.moment.play", [](JsonObjectConst args, JsonObject reply) {
+    const std::string who = args["companion"] | companions::active().id;
+    MomentList *list = moments::of(who);
+    const int id = args["id"] | 0;
+    const Moment *m = list ? list->find(id) : nullptr;
+    if (!m || firing.active || momentBusy()) {
+      reply["ok"] = false;
+      reply["error"] = !m ? "no such moment" : "busy";
+      return;
+    }
+    FireGroup g;
+    g.companion = who;
+    g.minute = m->at / 60;
+    g.ids = {id};
+    previewFiring = true;
+    startFiring(g, true);
+  });
+  // No fields: the rules as they are; with fields: changed (values clamped).
+  ble::on("companion.moment.rules", [](JsonObjectConst args, JsonObject reply) {
+    bool changed = false;
+    for (JsonPairConst kv : args) changed = changed || strcmp(kv.key().c_str(), "cmd") != 0;
+    if (changed) {
+      std::string json;
+      serializeJson(args, json);
+      moments::rules().load(json);
+      if (!moments::saveRules()) {
+        reply["ok"] = false;
+        reply["error"] = "unavailable";
+        return;
+      }
+      notifyMoments();
+    }
+    rulesReply(reply["rules"].to<JsonObject>());
+  });
+  // {action: start|pause|resume|cancel, seconds?, label?, tickEvery?} → {timer}
+  ble::on("companion.timer", [](JsonObjectConst args, JsonObject reply) {
+    TimerState &t = moments::timer();
+    const std::string action = args["action"] | "";
+    const int64_t now = time(nullptr);
+    if (action == "start") {
+      if (t.running) {
+        reply["ok"] = false;
+        reply["error"] = "running";
+        return;
+      }
+      if (!t.start(args["seconds"] | 0, args["label"] | "", args["tickEvery"] | 0, companions::active().id, now)) {
+        reply["ok"] = false;
+        reply["error"] = "bad seconds";
+        return;
+      }
+    } else if (action == "pause") {
+      t.pause(now);
+    } else if (action == "resume") {
+      t.resume(now);
+    } else if (action == "cancel") {
+      if (t.running) moments::dropRecording(t.companion, "timer");
+      t.cancel();
+    } else if (!action.empty()) {
+      reply["ok"] = false;
+      reply["error"] = "bad action";
+      return;
+    }
+    if (!action.empty()) {
+      moments::saveTimer();
+      notifyTimer();
+      redraw = true;
+    }
+    if (t.running) timerReply(reply["timer"].to<JsonObject>());
+  });
+}
+
 void registerMacroCommands() {
   ble::on("companion.macros", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["macros"].to<JsonArray>();
@@ -2609,6 +2804,7 @@ void notifyReplay() {
 
 void registerCompanionCommands() {
   registerMacroCommands();
+  registerMomentCommands();
   registerKeyCommands();
   ble::on("companion.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["companions"].to<JsonArray>();
@@ -3421,6 +3617,22 @@ void loop() {
     for (const LastLine::Piece &p : lastLine.pieces) LOGI("last", "%6u ms %s", static_cast<unsigned>(p.ms), p.text.c_str());
   }
   if (input.key == 'Y') textModelTest();  // dev: the second-TLS measurement
+  if (input.key == '@') {  // dev: the app's moment commands, run here (an alarm + a reminder at one minute)
+    const int64_t at = time(nullptr) + 120;
+    const std::string who = companions::active().id;
+    const std::string cmds[] = {
+        "{\"cmd\":\"companion.moment.save\",\"companion\":\"" + who + "\",\"kind\":\"alarm\",\"at\":" +
+            std::to_string(at) + ",\"what\":\"time to get up\",\"style\":\"excited\"}",
+        "{\"cmd\":\"companion.moment.save\",\"companion\":\"" + who + "\",\"kind\":\"reminder\",\"at\":" +
+            std::to_string(at) + ",\"what\":\"take the vitamins\"}",
+        "{\"cmd\":\"companion.moment.rules\",\"perDay\":9}",
+        "{\"cmd\":\"companion.moments\"}",
+        "{\"cmd\":\"companion.timer\"}"};
+    for (const std::string &c : cmds) {
+      const std::string r = ble::runHere(c);
+      for (size_t at = 0; at < r.size(); at += 100) LOGI("dev", "%s", r.substr(at, 100).c_str());
+    }
+  }
   if (input.key == 'F') {  // dev: the next moment, now
     const int64_t now = time(nullptr);
     for (const CompanionMoments &c : moments::all()) {

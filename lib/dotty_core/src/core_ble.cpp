@@ -171,14 +171,12 @@ void refreshInfo() {
   infoChar->setValue(json.c_str());
 }
 
-void run(const char *json) {
+void runInto(const char *json, JsonDocument &reply) {
   JsonDocument request;
-  JsonDocument reply;
   if (deserializeJson(request, json) != DeserializationError::Ok || !request["cmd"].is<const char *>()) {
     LOGW("ble", "bad command: %s", json);
     reply["ok"] = false;
     reply["error"] = "bad json";
-    notify(reply);
     return;
   }
   const char *name = request["cmd"];
@@ -193,6 +191,11 @@ void run(const char *json) {
     it->second(request.as<JsonObjectConst>(), reply.as<JsonObject>());
     if (reply["ok"].isNull()) reply["ok"] = true;
   }
+}
+
+void run(const char *json) {
+  JsonDocument reply;
+  runInto(json, reply);
   notify(reply);
 }
 
@@ -360,6 +363,14 @@ int poll() {
 
 // Messages longer than one notification go out in pieces: every piece but the last starts
 // with kMoreFollows (0x1E), and the client appends pieces until one doesn't.
+std::string runHere(const std::string &json) {
+  JsonDocument reply;
+  runInto(json.c_str(), reply);
+  std::string out;
+  serializeJson(reply, out);
+  return out;
+}
+
 uint32_t connection() {
   return isConnected ? connectionCount : 0;
 }

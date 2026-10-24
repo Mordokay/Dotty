@@ -81,5 +81,8 @@ void start();
 // Advertise less often (~250 ms) while Wi-Fi is joining, leaving the shared radio to its scan.
 void advertiseSlowly(bool slow);
 bool running();
+// Runs a command here, as if the phone had sent it, and returns its reply (developer aid: serial
+// keys that drive a firmware's commands without a phone). On the loop only.
+std::string runHere(const std::string &json);
 
 }  // namespace ble

@@ -32,7 +32,13 @@ void load(const std::string &companion) {
   const String path = listPath(companion);
   const std::string json = companions::readText(path);
   if (json.empty()) return;  // none yet
-  if (!l.load(json)) {
+  if (l.load(json)) {  // finished one-offs from before they were removed when done
+    std::vector<int> done;
+    for (const Moment &m : l.all())
+      if (m.state == MomentState::Done) done.push_back(m.id);
+    for (const int id : done) l.remove(id);
+    if (!done.empty()) companions::writeText(path, l.save());
+  } else {
     LOGW("moments", "%s's moments.json is broken: set aside as moments.bad.json", companion.c_str());
     SD_MMC.remove(companions::folder(companion) + "/moments.bad.json");
     SD_MMC.rename(path, companions::folder(companion) + "/moments.bad.json");
