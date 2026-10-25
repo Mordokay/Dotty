@@ -75,6 +75,8 @@ uint32_t wakeAtMs = 0;
 // bluetoothWindow: when it ends (millis), 0 = closed; when it opened.
 uint32_t windowUntil = 0, windowOpenedAt = 0;
 uint32_t keepOnLockSeconds = 0;  // bluetoothOnLock
+bool quietLock = false;           // quietLockRefresh
+uint32_t quietFullAt = 0;
 
 // The place (core.place), read from NVS on first use.
 bool placeRead = false, placeKnown = false;
@@ -121,6 +123,14 @@ void IRAM_ATTR onBootButton() {
 
 String nowPlaying() {
   return cfg.nowPlaying ? cfg.nowPlaying() : String();
+}
+
+// A lock-screen redraw: the usual counting, or (quietLockRefresh) partial with a full one every 2 minutes.
+void refreshLock(bool full) {
+  if (!quietLock) return refresh(full);
+  if (millis() - quietFullAt > 120000) full = true;
+  if (full) quietFullAt = millis();
+  refresh(full, false);
 }
 
 // Draws the lock screen; true if it needs a full refresh (the firmware's own, see
@@ -266,7 +276,7 @@ void loopLock() {
     const bool appChanged = runLockedWake();
     if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
         batteryKey() != lockShownBattery) {
-      refresh(drawLock());
+      refreshLock(drawLock());
     }
     return;
   }
@@ -279,7 +289,7 @@ void loopLock() {
   const bool appChanged = runLockedWake();
   if (appChanged || now.tm_min != lockShownMinute || nowPlaying() != lockShownText ||
         batteryKey() != lockShownBattery) {
-    refresh(drawLock());
+    refreshLock(drawLock());
     epd.waitBusy();
     rtc.read(now);
   }
@@ -768,6 +778,12 @@ void endBluetoothWindow() {
 void bluetoothOnLock(uint32_t seconds) {
   keepOnLockSeconds = seconds;
 }
+
+void quietLockRefresh(bool on) {
+  quietLock = on;
+  quietFullAt = millis();
+}
+
 
 bool bluetoothWindowOpen() {
   return windowUntil != 0;

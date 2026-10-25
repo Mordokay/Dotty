@@ -68,9 +68,13 @@ check("route: every command ≤ 512 bytes", sizes.allSatisfy { $0 <= 512 })
 check("route: steps carry the route number and arrow", (msgs[2]["route"] as? Int) == 9 && (msgs[2]["arrow"] as? String) == "right")
 
 // Review fixes: a keepalive while standing still; arriving where the route ends short of the place
-check("progress: a step change or 10 m walking", RouteGeometry.progressDue(stepChanged: true, metresChanged: 0, mode: .walking, sinceLast: 1)
-      && RouteGeometry.progressDue(stepChanged: false, metresChanged: 12, mode: .walking, sinceLast: 1)
-      && !RouteGeometry.progressDue(stepChanged: false, metresChanged: 4, mode: .walking, sinceLast: 5))
+check("progress: a step change at once; 2 m walking, at most once a second (the user: an update every 1-2 s)",
+      RouteGeometry.progressDue(stepChanged: true, metresChanged: 0, mode: .walking, sinceLast: 0.2)
+      && RouteGeometry.progressDue(stepChanged: false, metresChanged: 3, mode: .walking, sinceLast: 1.2)
+      && !RouteGeometry.progressDue(stepChanged: false, metresChanged: 3, mode: .walking, sinceLast: 0.5)
+      && !RouteGeometry.progressDue(stepChanged: false, metresChanged: 1, mode: .walking, sinceLast: 5))
+check("progress: 10 m driving", !RouteGeometry.progressDue(stepChanged: false, metresChanged: 6, mode: .driving, sinceLast: 2)
+      && RouteGeometry.progressDue(stepChanged: false, metresChanged: 11, mode: .driving, sinceLast: 2))
 check("progress: every 15 s while standing still", RouteGeometry.progressDue(stepChanged: false, metresChanged: 0, mode: .walking, sinceLast: 15))
 check("arrived where the route ends, the place set back", RouteGeometry.arrived(toTarget: 60, leftAlong: 15, mode: .walking)
       && !RouteGeometry.arrived(toTarget: 60, leftAlong: 120, mode: .walking) && RouteGeometry.arrived(toTarget: 20, leftAlong: 300, mode: .walking))

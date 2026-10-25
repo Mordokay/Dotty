@@ -130,11 +130,12 @@ enum RouteGeometry {
     /// Off the route this close to the end is walking up to a set-back place, not getting lost.
     nonisolated static func rerouteAllowed(leftAlong: Double) -> Bool { leftAlong > 150 }
 
-    /// Progress goes to Dotty on a step change, on moving 10 / 25 / 50 m, and every 15 s even standing still
-    /// (Dotty takes 2 minutes of silence for a lost iPhone).
+    /// Progress goes to Dotty on a step change (at once), on moving 2 / 5 / 10 m at most once a second (the
+    /// user: the distance should tick along every second or two while walking, and stay put at a red light),
+    /// and every 15 s even standing still (Dotty takes 2 minutes of silence for a lost iPhone).
     nonisolated static func progressDue(stepChanged: Bool, metresChanged: Int, mode: NavMode, sinceLast: TimeInterval) -> Bool {
-        let threshold = mode == .driving ? 50 : mode == .cycling ? 25 : 10
-        return stepChanged || abs(metresChanged) >= threshold || sinceLast >= 15
+        let threshold = mode == .driving ? 10 : mode == .cycling ? 5 : 2
+        return stepChanged || (abs(metresChanged) >= threshold && sinceLast >= 1) || sinceLast >= 15
     }
 
     nonisolated static func directionWords(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> String {

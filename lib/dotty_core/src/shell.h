@@ -88,6 +88,9 @@ bool bluetoothWindowOpen();
 // While set (seconds > 0), locking keeps Bluetooth on as a window of that length instead of turning it off
 // (e.g. directions: the phone must stay connected through a lock); 0 = the usual.
 void bluetoothOnLock(uint32_t seconds);
+// While on, the lock screen's redraws (frequent ones, e.g. directions' distance) don't count toward the
+// every-30 full refresh (a flash every minute at one redraw a second or two); a full one every 2 minutes.
+void quietLockRefresh(bool on);
 
 // Shared hardware, ready after begin().
 extern EpdDisplay epd;

@@ -244,7 +244,7 @@ struct Trip {
   uint32_t relockAt = 0;
   NavProgress progress;
   uint32_t progressAt = 0, drawnAt = 0, windowAt = 0, rerouteSpokenAt = 0, confirmAt = 0;
-  int drawnStep = -1, drawnToTurn = -1;
+  int drawnStep = -1, drawnToTurn = -1, drawnLeft = -1;
   bool confirm = false, waiting = false;
 } trip;
 
@@ -3074,6 +3074,7 @@ void endTrip(const char *why, bool tellPhone) {
   for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
   trip = Trip();  // an unfinished lines fetch is just never collected
   shell::bluetoothOnLock(0);
+  shell::quietLockRefresh(false);
   navFake = false;
   navLockDirty = true;
   redraw = true;
@@ -3111,6 +3112,7 @@ void startRoute(const NavRoute &r) {
   trip.progressAt = millis();
   trip.drawnStep = -1;
   shell::bluetoothOnLock(120);  // locking keeps the phone connected (pollNav renews the window)
+  shell::quietLockRefresh(true);  // the lock card ticks along without a flash every minute
   navLockDirty = true;
   redraw = true;
   LOGI("nav", "%s %s to %s: %d steps, %d m", again ? "re-route" : "trip", modeName(r.mode), r.destination.c_str(),
@@ -3272,13 +3274,20 @@ void onNavProgress() {
   const ClipPlan::Play play = trip.clips.onProgress(trip.progress, trip.route.mode, busy, trip.route);
   if (play == ClipPlan::Play::Drop) LOGI("nav", "step %d passed before its line could play", trip.clips.playStep());
   else if (play != ClipPlan::Play::None) playClip(trip.clips.playStep(), play);
+  // The distance ticks along (the user: every second or two while walking, nothing at a red light): a redraw
+  // when what's shown changed, at most every 1.5 s unlocked, every 2 s locked (the lock card); a turn at once.
   const bool stepChanged = trip.progress.step != trip.drawnStep;
-  if (stepChanged) navLockDirty = true;
-  if (stepChanged || (abs(trip.progress.toTurn - trip.drawnToTurn) >= 10 && millis() - trip.drawnAt >= 3000)) {
+  if (stepChanged)
+    LOGI("nav", "step %d, %d m to the turn, %d m left", trip.progress.step, trip.progress.toTurn, trip.progress.left);
+  const bool changed = trip.progress.toTurn != trip.drawnToTurn || trip.progress.left != trip.drawnLeft;
+  const uint32_t every = shell::locked() ? 2000 : 1500;
+  if (stepChanged || (changed && millis() - trip.drawnAt >= every)) {
     trip.drawnStep = trip.progress.step;
     trip.drawnToTurn = trip.progress.toTurn;
+    trip.drawnLeft = trip.progress.left;
     trip.drawnAt = millis();
-    if (navShowing()) redraw = true;
+    if (shell::locked()) navLockDirty = true;
+    else if (navShowing()) redraw = true;
   }
 }
 
