@@ -29,6 +29,12 @@ struct CompanionView: View {
                 HStack {
                     Text("Companions").font(.lpTitle).foregroundStyle(Color.ink)
                     Spacer()
+                    NavigationLink { PlacesView() } label: {
+                        Image(systemName: "map").font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                    }
+                    .accessibilityLabel("Places")
+                    .padding(.trailing, Spacing.s)
                     NavigationLink { MomentsView() } label: {
                         Image(systemName: "clock").font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(Color.ink)

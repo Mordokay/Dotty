@@ -99,7 +99,7 @@ struct PlacePicker: View {
 
 /// MapKit's type-ahead search: `results` follow `update(_:)` as the user types.
 @MainActor @Observable
-private final class PlaceSearch: NSObject, @preconcurrency MKLocalSearchCompleterDelegate {
+final class PlaceSearch: NSObject, @preconcurrency MKLocalSearchCompleterDelegate {
     private(set) var results: [MKLocalSearchCompletion] = []
     @ObservationIgnored private let completer = MKLocalSearchCompleter()
 
