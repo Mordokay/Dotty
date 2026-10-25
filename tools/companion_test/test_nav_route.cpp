@@ -126,6 +126,14 @@ int main() {
   {
     ClipPlan plan;
     plan.reset(r);
+    plan.noClip(1);  // its line came back empty: said live, the next ones still recorded
+    const bool skipped = plan.nextToRecord(1) == 2;
+    CHECK("a step without a line is skipped for recording and said live",
+          skipped && plan.onProgress(at(1, 30), NavMode::Walking, false, r) == ClipPlan::Play::Live);
+  }
+  {
+    ClipPlan plan;
+    plan.reset(r);
     CHECK("an unspoken step never plays", plan.onProgress(at(0, 0), NavMode::Walking, false, r) == ClipPlan::Play::None);
   }
   return failures ? 1 : 0;

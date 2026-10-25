@@ -53,7 +53,9 @@ struct TurnTracker {
     }
     for (size_t i = 0; i < toolNames.size() && turn; i++) {
       o.apply[i] = true;
-      if (toolNames[i] == "recall" || toolNames[i] == "list_moments") continue;  // Dotty answers it with what it found
+      if (toolNames[i] == "recall" || toolNames[i] == "list_moments" || toolNames[i] == "navigate_to" ||
+          toolNames[i] == "find_nearby")
+        continue;  // Dotty answers it with what it found (the iPhone, for directions)
       if (toolNames[i] != "set_mood") o.answer[i] = true;
       else if (!moodAnswered_) o.answer[i] = moodAnswered_ = true;
     }

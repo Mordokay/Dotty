@@ -98,6 +98,7 @@ void ClipPlan::reset(const NavRoute &r) {
   spoken_.assign(n, false);
   ready_.assign(n, false);
   played_.assign(n, false);
+  noClip_.assign(n, false);
   for (int i = 0; i < n; i++) spoken_[i] = r.at(i).spoken();
   step_ = playStep_ = -1;
   due_ = false;
@@ -109,13 +110,17 @@ int ClipPlan::nextToRecord(int currentStep) const {
   for (int i = currentStep < 0 ? 0 : currentStep; i < n && seen < 3; i++) {
     if (!spoken_[i]) continue;
     seen++;
-    if (!ready_[i] && !played_[i]) return i;
+    if (!ready_[i] && !played_[i] && !noClip_[i]) return i;
   }
   return -1;
 }
 
 void ClipPlan::recorded(int i) {
   if (i >= 0 && i < static_cast<int>(ready_.size())) ready_[i] = true;
+}
+
+void ClipPlan::noClip(int i) {
+  if (i >= 0 && i < static_cast<int>(noClip_.size())) noClip_[i] = true;
 }
 
 bool ClipPlan::ready(int i) const {

@@ -76,12 +76,13 @@ class ClipPlan {
   void reset(const NavRoute &r);
   int nextToRecord(int currentStep) const;  // -1: nothing to do
   void recorded(int i);
+  void noClip(int i);  // no line for it (the writer left it out): said live, not recorded
   bool ready(int i) const;
   Play onProgress(const NavProgress &p, NavMode mode, bool busy, const NavRoute &r);
   int playStep() const { return playStep_; }  // the step the last Clip / Live / Drop was for
 
  private:
-  std::vector<bool> spoken_, ready_, played_;
+  std::vector<bool> spoken_, ready_, played_, noClip_;
   int step_ = -1, playStep_ = -1;
   bool due_ = false;  // the current step reached its trigger but couldn't play yet
 };

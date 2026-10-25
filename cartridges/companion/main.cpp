@@ -32,6 +32,9 @@
 #include "job_slot.h"
 #include "macro_store.h"
 #include "conversation.h"
+#include "nav_lines.h"
+#include "nav_route.h"
+#include "nav_screen.h"
 #include "recall.h"
 #include "relay_link.h"
 #include "relay_path.h"
@@ -67,7 +70,7 @@
 #include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.7.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.8.0");
 
 namespace {
 
@@ -159,7 +162,7 @@ std::string historyNewsCompanion;  // turns appended to history, and when talksT
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
 // moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
 MacroList macroList;  // the user's macros (data/macros.json), shared by every companion
-enum class Job { Write, Recall, Line, Plan, Fold };
+enum class Job { Write, Recall, Line, Plan, Fold, NavLines };
 Job jobKind = Job::Write;
 std::string jobCallId;           // recall's function call, answered with what was found
 bool writing = false;            // a job asked, its follow-up not sent yet
@@ -223,6 +226,46 @@ std::string firedContext;   // firedNote(…) for that chat
 bool momentOnScreen = false;  // a moment's text is up with no chat behind it (not a closed session)
 // Recording a moment's line (line_job.h): the reading's audio goes to lineRec, not the speaker.
 LineJob lineJob;
+
+// ---------- directions (nav_route.h, nav_lines.h, nav_screen.h) ----------
+// The iPhone finds the place and the way and follows you; Dotty holds the trip: the screen, each step's
+// clip (written by the text model, recorded by Live like a moment's line, ahead of you) played at the
+// trigger distance, and live lines for the start, re-routes and arrival.
+
+struct Trip {
+  bool active = false;
+  std::string companion;
+  NavRoute route;
+  ClipPlan clips;
+  std::vector<std::string> lines;  // per step ("" = say Apple's text live)
+  bool linesAsked = false, linesReady = false, linesRunning = false;
+  NavProgress progress;
+  uint32_t progressAt = 0, drawnAt = 0, windowAt = 0, rerouteSpokenAt = 0, confirmAt = 0;
+  int drawnStep = -1, drawnToTurn = -1;
+  bool confirm = false, waiting = false;
+} trip;
+
+// A question to the iPhone (navigate_to, find_nearby, a row of the nearby list) and its answer.
+struct NavAsk {
+  bool active = false, nearby = false, fromList = false;
+  int req = 0;
+  std::string callId, what, result;
+  bool resultReady = false;
+  uint32_t at = 0, routeAt = 0;
+} navAsk;
+int navReq = 0;
+NavRoute navPending;  // a route arriving in pieces
+std::vector<NearbyPlace> nearbyLast;
+int nearbyCount = -1;  // nav.places' count (-1 = not come yet)
+bool nearbyListPending = false, nearbyOpen = false;
+int nearbyPage = 0;
+uint32_t nearbyTouchedAt = 0;
+std::string nearbyWhat;
+std::vector<std::string> placeNames;  // the app's saved places (companion.places), for the instruction
+bool navLockDirty = false;            // the lock card changed: redraw it now
+bool navFake = false;                 // dev key '>': progress made up here
+uint32_t navFakeAt = 0;
+
 bool capturingLine = false;
 bool lineDiscard = false;  // a stopped reading's turn is still under way: its audio, words and end are dropped
 std::map<std::string, uint32_t> lineBackoff;  // "<companion>/<key>" → no new try before then (millis)
@@ -275,9 +318,16 @@ struct NoteSend {
 std::map<std::string, int> syncTries;  // recordings a wake asked the phone to sync, by name (no endless wakes)
 uint32_t lastSyncActivity = 0;
 uint32_t pendingTypedSince = 0;
+bool pendingTypedPhoneOnly = false;  // directions: through the iPhone or not at all (never a Wi-Fi race)
 bool lineScanStale = false;  // the wake's cached "lines left?" must be read again (the plan added some)
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 void dropPending();
+void queueTypedTurn(const std::string &text, const std::string &label, bool phoneOnly = false);
+std::string navKey(int i);
+bool navClipsDue();
+GeminiLive::ToolAnswer navTool(const ToolCall &c);
+void endTrip(const char *why, bool tellPhone);
+void pollNav();
 void saveConversation(const std::string &id, const Conversation &c);
 void openListLater(const std::string &companion, const std::string &name);
 void listPlay(int i);
@@ -1185,6 +1235,8 @@ void connect() {
     if (!section.empty()) personaSection += "\n\n" + section;
   }
   if (!macroList.all().empty()) personaSection += "\n\n" + macrosSection(macroList);  // its phrases → run_macro
+  personaSection += "\n\n" + navSection(placeNames, trip.active ? &trip.route : nullptr,
+                                         trip.active ? &trip.progress : nullptr, time(nullptr));  // places, a trip
   {  // the conversation so far: unlocking again carries it on (conversation.h)
     const Profile &who = companions::active();
     const std::string log = recentLog();
@@ -1486,6 +1538,7 @@ void showNote(const String &note) {
 
 // set_moment / cancel_moment / list_moments / start_timer / stop_timer from the model.
 GeminiLive::ToolAnswer applyMomentTool(const ToolCall &c) {
+  if (c.name == "navigate_to" || c.name == "stop_navigation" || c.name == "find_nearby") return navTool(c);
   const int64_t now = time(nullptr);
   const bool ours = sessionCompanion == companions::active().id;  // switched mid-chat: nothing lands
   TimerState &timer = moments::timer();
@@ -2138,6 +2191,7 @@ void pollMoments() {
 
 // Locked: when to wake next (the shell sleeps until the next minute anyway).
 void armLockedWake() {
+  if (navLockDirty) return (void)shell::wakeLockedAt(time(nullptr));  // the lock card's turn changed
   int64_t next = nextDue(moments::all());
   const TimerState &t = moments::timer();
   if (t.running && !t.paused && (!next || t.endsAt - 60 < next)) next = t.endsAt - 60;  // the last minute
@@ -2355,6 +2409,19 @@ LastSave *lineSave = nullptr;
 const char *lineNote = "Saving your reminder...";
 
 bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
+  // Directions first: the next clips of a trip (written already; recorded ahead of you).
+  if (navClipsDue() && (onlyCompanion.empty() || onlyCompanion == trip.companion)) {
+    const std::string key = navKey(trip.clips.nextToRecord(trip.progress.step));
+    const auto back = lineBackoff.find(trip.companion + "/" + key);
+    if (back == lineBackoff.end() || static_cast<int32_t>(back->second - millis()) <= 0) {
+      out = LineWork();
+      out.companion = trip.companion;
+      out.key = key;
+      out.words = 25;
+      out.signature = "nav";
+      return true;
+    }
+  }
   const int64_t now = time(nullptr);
   bool found = false;
   auto consider = [&](const LineWork &w) {
@@ -2494,6 +2561,11 @@ void lineSaved() {
   lineJob.saved(ok);
   if (!ok) return;
   const LineWork &w = lineJob.work();
+  if (w.key.rfind("nav-", 0) == 0) {  // a directions clip: ready to play (if it's still this route's)
+    const int i = atoi(w.key.c_str() + w.key.rfind('-') + 1);
+    if (trip.active && w.key == navKey(i)) trip.clips.recorded(i);
+    return;
+  }
   if (w.key == "timer") {
     moments::timer().line = lineJob.text();
     moments::timer().ready = true;
@@ -2549,6 +2621,15 @@ void pollLines() {
       for (const Topic &t : w.topics)
         if (t.kind == "alarm") lineNote = "Saving your alarm...";
       lineJob.start(w);
+      if (w.key.rfind("nav-", 0) == 0) {  // directions: the line is written already (navLinesRequest)
+        const size_t i = static_cast<size_t>(atoi(w.key.c_str() + w.key.rfind('-') + 1));
+        Written given;
+        given.ok = true;
+        given.text = i < trip.lines.size() ? trip.lines[i] : "";
+        lineNote = "Saving directions...";
+        lineJob.written(given);
+        return;
+      }
       if (w.ids.size() == 1 && w.key != "timer") {  // the companion's own lines come written (the plan)
         const MomentList *list = moments::of(w.companion);
         const Moment *m = list ? list->find(w.ids[0]) : nullptr;
@@ -2759,12 +2840,14 @@ void pollPhoneWake() {
   const int64_t now = time(nullptr);
   const bool chatting = !bgSession && (live.connected() || connecting || info.state == Talk::Listening);
   if (phoneWake.stage() == PhoneWake::Stage::Idle) {
-    if (chatting || firing.active || !moments::available() || !jobsDue()) return;
+    const bool navDue = navClipsDue() && relay::phoneReady();  // a trip's clips: at once, not on the wake clock
+    if (chatting || firing.active || !moments::available() || !(navDue || jobsDue())) return;
     loadWakeTimes();
     if (shell::locked()) {
-      if (now < phoneWake.nextWakeAt(lastWake, moments::rules().wakeEvery, true)) return;
+      if (!navDue && now < phoneWake.nextWakeAt(lastWake, moments::rules().wakeEvery, true)) return;
       shell::bluetoothWindow(40);
-    } else if (!relay::phoneReady() || (info.state != Talk::Offline && info.state != Talk::Error) || now - lastWake < 120) {
+    } else if (!relay::phoneReady() || (info.state != Talk::Offline && info.state != Talk::Error) ||
+               (!navDue && now - lastWake < 120)) {
       return;  // unlocked: only with the phone there and nothing else going on (and not over and over)
     }
     wakeVia = "nothing";
@@ -2917,10 +3000,11 @@ void typedTurn(const std::string &text, const std::string &label) {
 }
 
 // Sent once a session is ready (one is opened for it when there's none).
-void queueTypedTurn(const std::string &text, const std::string &label) {
+void queueTypedTurn(const std::string &text, const std::string &label, bool phoneOnly) {
   pendingTypedText = text;
   pendingTypedLabel = label;
   pendingTypedSince = millis();
+  pendingTypedPhoneOnly = phoneOnly;
 }
 
 void pollTypedTurn() {
@@ -2928,12 +3012,473 @@ void pollTypedTurn() {
   if (live.ready() && (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Offline)) {
     typedTurn(pendingTypedText, pendingTypedLabel);
     pendingTypedText.clear();
-  } else if (!live.connected() && !connecting && !awaitingConnect && info.state != Talk::Error) {
+  } else if (!live.connected() && !connecting && !awaitingConnect && info.state != Talk::Error &&
+             (!pendingTypedPhoneOnly || relay::phoneReady())) {
     connect();
   } else if (millis() - pendingTypedSince > 30000) {
     LOGW("note", "no session for the reaction: dropped");
     pendingTypedText.clear();
   }
+}
+
+std::string navKey(int i) {
+  return "nav-" + std::to_string(trip.route.route()) + "-" + std::to_string(i);
+}
+
+bool navClipsDue() {
+  return trip.active && trip.linesReady && storage::available() && canRecord() &&
+         trip.clips.nextToRecord(trip.progress.step) >= 0;
+}
+
+void loadPlaceNames() {
+  Preferences p;
+  p.begin("companion", true);
+  const String all = p.getString("places", "");
+  p.end();
+  placeNames.clear();
+  int start = 0;
+  while (start < static_cast<int>(all.length())) {
+    int nl = all.indexOf('\n', start);
+    if (nl < 0) nl = all.length();
+    if (nl > start) placeNames.push_back(all.substring(start, nl).c_str());
+    start = nl + 1;
+  }
+}
+
+void sendNav(const char *event, const std::function<void(JsonDocument &)> &fill) {
+  JsonDocument doc;
+  doc["event"] = event;
+  fill(doc);
+  ble::notify(doc);
+}
+
+void endTrip(const char *why, bool tellPhone) {
+  if (!trip.active) return;
+  LOGI("nav", "trip to %s ends: %s", trip.route.destination.c_str(), why);
+  if (tellPhone) sendNav("nav.stop", [](JsonDocument &) {});
+  if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("the trip ended");
+  for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
+  if (trip.linesRunning) jobs.cancel();
+  trip = Trip();
+  navFake = false;
+  navLockDirty = true;
+  redraw = true;
+}
+
+// A complete route: a new trip, or a re-route of this one.
+void startRoute(const NavRoute &r) {
+  const bool again = trip.active;
+  if (again) {
+    if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("re-routed");
+    for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
+    if (trip.linesRunning) jobs.cancel();
+  } else {
+    trip = Trip();
+    trip.active = true;
+    trip.companion = companions::active().id;
+  }
+  trip.route = r;
+  trip.clips.reset(r);
+  trip.lines.assign(r.count(), "");
+  trip.linesAsked = trip.linesReady = trip.linesRunning = false;
+  trip.progress = NavProgress();
+  trip.progress.route = r.route();
+  trip.progress.left = r.distance;
+  trip.progress.eta = r.eta;
+  for (int i = 0; i < r.count(); i++)
+    if (r.at(i).spoken()) {
+      trip.progress.step = i;
+      trip.progress.toTurn = r.at(i).distance;
+      break;
+    }
+  trip.progressAt = millis();
+  trip.drawnStep = -1;
+  navLockDirty = true;
+  redraw = true;
+  LOGI("nav", "%s %s to %s: %d steps, %d m", again ? "re-route" : "trip", modeName(r.mode), r.destination.c_str(),
+       r.count(), r.distance);
+}
+
+void answerNav(const std::string &result) {
+  navAsk.result = result;
+  navAsk.resultReady = true;
+}
+
+// The question's answer, once its own turn has ended (as recall's): a tool result to talk about, or, with
+// no call to answer (a list row) or no session any more, a typed turn.
+void pollNavAnswer() {
+  if (!navAsk.active) return;
+  if (!navAsk.resultReady) {
+    lastTurnAt = millis();  // the chat stays open meanwhile
+    if (navPending.route() && !navPending.complete() && navAsk.routeAt && millis() - navAsk.routeAt > 3000)
+      answerNav("The route didn't come through from the iPhone. Tell the user briefly and offer to try again.");
+    else if (millis() - navAsk.at > 20000)
+      answerNav("The iPhone didn't answer. Tell the user briefly that directions need their iPhone nearby, with the "
+                "Dotty app.");
+    return;
+  }
+  const bool spoke = firstAudioAt || !said.empty() || !textQueue.empty();
+  if (live.ready() && !navAsk.callId.empty()) {
+    if (live.inTurn() && (spoke || millis() - live.lastMessageAt() < 1500)) return;
+    live.answerTool(navAsk.callId, navAsk.nearby ? "find_nearby" : "navigate_to", navAsk.result);
+    if (info.state != Talk::Speaking) setState(Talk::Thinking);
+  } else {
+    queueTypedTurn(navAsk.result, navAsk.nearby ? "(nearby)" : "(directions)", true);
+  }
+  lastTurnAt = millis();
+  if (navAsk.nearby && !nearbyLast.empty()) nearbyListPending = true;
+  navAsk = NavAsk();
+}
+
+void askRoute(const std::string &query, const std::string &mode, const std::string &callId, bool fromList) {
+  navAsk = NavAsk();
+  navAsk.active = true;
+  navAsk.fromList = fromList;
+  navAsk.callId = callId;
+  navAsk.req = ++navReq;
+  navAsk.at = millis();
+  navPending = NavRoute();
+  sendNav("nav.request", [&](JsonDocument &d) {
+    d["req"] = navAsk.req;
+    d["query"] = query;
+    d["mode"] = mode;
+  });
+  LOGI("nav", "asked the iPhone for a route to \"%s\" (%s)", query.c_str(), mode.c_str());
+}
+
+// navigate_to / stop_navigation / find_nearby (answered later: the iPhone replies first).
+GeminiLive::ToolAnswer navTool(const ToolCall &c) {
+  if (c.name == "stop_navigation") {
+    endTrip("asked to stop", true);
+    return {"ok", false};
+  }
+  if (!relay::phoneReady())
+    return toolError("directions need the user's iPhone nearby with the Dotty app, and it isn't connected");
+  if (c.name == "find_nearby") {
+    navAsk = NavAsk();
+    navAsk.active = navAsk.nearby = true;
+    navAsk.callId = c.id;
+    navAsk.what = c.text;
+    navAsk.req = ++navReq;
+    navAsk.at = millis();
+    nearbyLast.clear();
+    nearbyCount = -1;
+    nearbyWhat = c.text;
+    const std::string mode = trip.active ? modeName(trip.route.mode) : "walking";
+    sendNav("nav.nearby", [&](JsonDocument &d) {
+      d["req"] = navAsk.req;
+      d["what"] = c.text;
+      d["mode"] = mode;
+    });
+    LOGI("nav", "asked the iPhone what's near: \"%s\"", c.text.c_str());
+    return {"", false};
+  }
+  bool missing = false;
+  const std::string name = nearbyQuery(c.text, nearbyLast, missing);
+  if (missing) return toolError("there's no such place in the last search");
+  NavMode mode = NavMode::Walking;
+  parseMode(c.kind, mode);
+  askRoute(c.text, modeName(mode), c.id, false);
+  if (name != c.text) LOGI("nav", "%s = %s", c.text.c_str(), name.c_str());
+  return {"", false};
+}
+
+NavView navView() {
+  NavView v;
+  const NavRoute &r = trip.route;
+  const NavProgress &p = trip.progress;
+  v.destination = r.destination;
+  const time_t eta = static_cast<time_t>(p.eta ? p.eta : r.eta);
+  tm t;
+  gmtime_r(&eta, &t);  // Dotty's clock is local
+  char clock[8];
+  snprintf(clock, sizeof(clock), "%d:%02d", t.tm_hour, t.tm_min);
+  v.clock = clock;
+  if (p.step >= 0 && p.step < r.count()) {
+    v.arrow = r.at(p.step).arrow;
+    v.exit = r.at(p.step).exit;
+    v.street = r.street(p.step).empty() ? r.text(p.step) : r.street(p.step);
+  }
+  v.toTurn = p.toTurn;
+  v.left = p.left;
+  const int64_t secs = (p.eta ? p.eta : r.eta) - static_cast<int64_t>(time(nullptr));
+  v.minutes = secs > 0 ? static_cast<int>((secs + 30) / 60) : 0;
+  v.confirm = trip.confirm;
+  v.waiting = trip.waiting;
+  return v;
+}
+
+// The chat is on screen (a question, a reply and 5 s after it), else the turn.
+bool navShowing() {
+  if (!trip.active || deckOpen || listOpen || nearbyOpen || settingsOpen || historyOpen) return false;
+  if (info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking) return false;
+  if (info.state == Talk::After && millis() - stateSince < 5000) return false;
+  return true;
+}
+
+void playClip(int i, ClipPlan::Play how) {
+  const NavRoute &r = trip.route;
+  if (shell::locked()) shell::wake();  // a turn: on screen too
+  if (how == ClipPlan::Play::Clip) {
+    const String wav = moments::recordingPath(trip.companion, navKey(i), "wav");
+    if (player.play(wav.c_str())) return (void)LOGI("nav", "clip %d played at %d m", i, trip.progress.toTurn);
+  }
+  const std::string line = trip.lines.size() > static_cast<size_t>(i) && !trip.lines[i].empty() ? trip.lines[i] : r.text(i);
+  if (relay::phoneReady() && canRecord()) {
+    queueTypedTurn("(Dotty, not the user: the next turn is coming up.) Say this to the user now, word for word: " + line,
+                   "(directions)", true);
+    LOGI("nav", "step %d said live at %d m", i, trip.progress.toTurn);
+  } else {
+    static const AudioPlayer::Note kTwo[] = {{79, 150}, {0, 120}, {79, 150}};
+    player.playNotes(kTwo, 3);
+    LOGI("nav", "step %d: two beeps (no voice) at %d m", i, trip.progress.toTurn);
+  }
+}
+
+void onNavProgress() {
+  const bool busy = info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking ||
+                    voice::playing() || player.isPlaying() || !pendingTypedText.empty();
+  const ClipPlan::Play play = trip.clips.onProgress(trip.progress, trip.route.mode, busy, trip.route);
+  if (play == ClipPlan::Play::Drop) LOGI("nav", "step %d passed before its line could play", trip.clips.playStep());
+  else if (play != ClipPlan::Play::None) playClip(trip.clips.playStep(), play);
+  const bool stepChanged = trip.progress.step != trip.drawnStep;
+  if (stepChanged) navLockDirty = true;
+  if (stepChanged || (abs(trip.progress.toTurn - trip.drawnToTurn) >= 10 && millis() - trip.drawnAt >= 3000)) {
+    trip.drawnStep = trip.progress.step;
+    trip.drawnToTurn = trip.progress.toTurn;
+    trip.drawnAt = millis();
+    if (navShowing()) redraw = true;
+  }
+}
+
+// The lines for the clips (one request), then each clip recorded through the line pipeline (nextLineWork).
+void pollNav() {
+  pollNavAnswer();
+  if (nearbyListPending && !navAsk.active && (info.state == Talk::After || info.state == Talk::Ready) &&
+      !voice::playing() && !live.inTurn()) {
+    nearbyListPending = false;
+    nearbyOpen = true;
+    nearbyPage = 0;
+    nearbyTouchedAt = millis();
+    redraw = true;
+  }
+  if (nearbyOpen && millis() - nearbyTouchedAt > 120000) {
+    nearbyOpen = false;
+    redraw = true;
+  }
+  if (!trip.active) return;
+  static bool wasShowing = false;  // back to the turn 5 s after a reply
+  if (navShowing() != wasShowing) {
+    wasShowing = navShowing();
+    redraw = true;
+  }
+  if (!shell::locked()) shell::wake();  // no auto-lock on a trip
+  else if (!shell::bluetoothWindowOpen() || millis() - trip.windowAt > 60000) {  // the phone stays connected
+    trip.windowAt = millis();
+    shell::bluetoothWindow(120);
+  }
+  if (trip.confirm && millis() - trip.confirmAt > 10000) {
+    trip.confirm = false;
+    redraw = true;
+  }
+  // The lines: once per route, through the phone (or the session's Wi-Fi).
+  if (!trip.linesAsked && storage::available() && !jobs.busy() && !writing && !planRunning && !lineJob.busy() &&
+      !foldRunning && relay::phoneReady()) {
+    const Profile *who = companions::find(trip.companion);
+    if (who) {
+      writerBody = navLinesRequest(*who, trip.companion == companions::active().id ? memories::store().promptSection() : "",
+                                   trip.route);
+      jobKind = Job::NavLines;
+      trip.linesAsked = trip.linesRunning = true;
+      LOGI("nav", "writing %d lines", trip.route.count());
+      launchJob();
+    }
+  }
+  if (trip.linesRunning) {
+    Written w;
+    if (jobs.take(w)) {
+      trip.linesRunning = false;
+      trip.linesReady = true;
+      if (w.tokens) usage::addTokens(w.tokens, sessionKey);
+      trip.lines = parseNavLines(w, trip.route);
+      int got = 0;
+      for (int i = 0; i < trip.route.count(); i++) {
+        got += !trip.lines[i].empty();
+        if (trip.route.at(i).spoken() && trip.lines[i].empty()) trip.clips.noClip(i);  // said live instead
+      }
+      LOGI("nav", "lines %s: %d of %d", w.ok ? "written" : w.error.c_str(), got, trip.route.count());
+      lineScanStale = true;
+    }
+  }
+  if (!storage::available()) trip.linesReady = true;  // no card: every step said live
+  // Progress: waiting for the iPhone, lost, or made up (dev key '>').
+  if (navFake && millis() - navFakeAt >= 1000) {
+    navFakeAt = millis();
+    NavProgress &p = trip.progress;
+    p.toTurn -= 4;  // a brisk walk, slow enough for clips to be recorded ahead
+    p.left = std::max(0, p.left - 4);
+    if (p.toTurn <= 0) {
+      if (p.step + 1 >= trip.route.count()) {
+        ble::runHere("{\"cmd\":\"nav.arrived\",\"route\":" + std::to_string(trip.route.route()) + "}");
+        return;
+      }
+      p.step++;
+      p.toTurn = trip.route.at(p.step).distance;
+    }
+    trip.progressAt = millis();
+    onNavProgress();
+  }
+  const uint32_t quiet = millis() - trip.progressAt;
+  if (quiet > 120000) {
+    info.note = "Lost the iPhone";
+    noteUntil = millis() + 5000;
+    LOGW("nav", "no progress for 2 minutes");
+    return endTrip("lost the iPhone", false);
+  }
+  if ((quiet > 30000) != trip.waiting) {
+    trip.waiting = quiet > 30000;
+    redraw = true;
+  }
+}
+
+void navTap(uint16_t x, uint16_t y) {
+  switch (navHit(x, y, navView())) {
+    case NavHit::Stop:
+      trip.confirm = true;
+      trip.confirmAt = millis();
+      break;
+    case NavHit::Yes:
+      endTrip("stopped on Dotty", true);
+      break;
+    case NavHit::No:
+      trip.confirm = false;
+      break;
+    default:
+      return;
+  }
+  redraw = true;
+}
+
+void nearbyTap(uint16_t x, uint16_t y) {
+  nearbyTouchedAt = millis();
+  const int pages = std::max(1, (static_cast<int>(nearbyLast.size()) + 3) / 4);
+  const int rows = std::min(4, static_cast<int>(nearbyLast.size()) - nearbyPage * 4);
+  const int hit = nearbyHit(x, y, rows);
+  if (hit == -2) nearbyOpen = false;
+  else if (hit == -3) nearbyPage = (nearbyPage + 1) % pages;
+  else if (hit >= 0) {
+    const NearbyPlace &p = nearbyLast[nearbyPage * 4 + hit];
+    nearbyOpen = false;
+    askRoute("nearby " + std::to_string(p.n), trip.active ? modeName(trip.route.mode) : "walking", "", true);
+  }
+  redraw = true;
+}
+
+void drawNearbyList() {
+  std::vector<NearbyRow> rows;
+  for (const NearbyPlace &p : nearbyLast) rows.push_back({p.name, nearbyRowDetail(p)});
+  drawNearby(nearbyWhat, rows, nearbyPage, std::max(1, (static_cast<int>(rows.size()) + 3) / 4));
+}
+
+void registerNavCommands() {
+  loadPlaceNames();
+  ble::on("companion.places", [](JsonObjectConst args, JsonObject) {
+    String all;
+    int n = 0;
+    for (JsonVariantConst v : args["names"].as<JsonArrayConst>())
+      if (n++ < 20) all += String(v.as<const char *>()) + "\n";
+    Preferences p;
+    p.begin("companion", false);
+    p.putString("places", all);
+    p.end();
+    loadPlaceNames();
+  });
+  ble::on("nav.route", [](JsonObjectConst args, JsonObject) {
+    const int req = args["req"] | 0;
+    const bool reroute = args["reroute"] | false;
+    if (!(navAsk.active && !navAsk.nearby && req == navAsk.req) && !(reroute && trip.active)) return;
+    const bool ok = navPending.begin(args);
+    navAsk.routeAt = millis();
+    if (ok || reroute) return;
+    if (!navPending.choices.empty()) {
+      std::string s = "More than one place matches:";
+      for (size_t i = 0; i < navPending.choices.size(); i++)
+        s += " " + navPending.choices[i].first + " (" + distanceWords(navPending.choices[i].second) + " away)" +
+             (i + 1 < navPending.choices.size() ? "," : ".");
+      answerNav(s + " Ask the user which one they mean.");
+    } else {
+      answerNav("No directions: " + (navPending.error.empty() ? std::string("the iPhone found no way there") : navPending.error) +
+                ". Tell the user briefly.");
+    }
+  });
+  ble::on("nav.step", [](JsonObjectConst args, JsonObject) {
+    if (!navPending.step(args) || !navPending.complete()) return;
+    const NavRoute done = navPending;
+    navPending = NavRoute();
+    if (done.reroute && trip.active) {
+      startRoute(done);
+      if (millis() - trip.rerouteSpokenAt > 60000 || !trip.rerouteSpokenAt) {
+        trip.rerouteSpokenAt = millis();
+        if (shell::locked()) shell::wake();
+        queueTypedTurn(navRerouteNote(done), "(directions)", true);
+      }
+      return;
+    }
+    startRoute(done);
+    if (navAsk.fromList && navAsk.active) {
+      navAsk = NavAsk();
+      queueTypedTurn(navStartNote(done, time(nullptr)), "(directions)", true);
+    } else {
+      answerNav(navStartNote(done, time(nullptr)));
+    }
+  });
+  ble::on("nav.progress", [](JsonObjectConst args, JsonObject) {
+    if (!trip.active || navFake || !parseProgress(args, trip.route.route(), trip.progress)) return;
+    trip.progressAt = millis();
+    onNavProgress();
+  });
+  ble::on("nav.arrived", [](JsonObjectConst args, JsonObject) {
+    if (!trip.active || (args["route"] | 0) != trip.route.route()) return;
+    const std::string where = trip.route.destination;
+    endTrip("arrived", false);
+    if (shell::locked()) shell::wake();
+    queueTypedTurn(navArrivedNote(where), "(directions)", true);
+  });
+  ble::on("nav.ended", [](JsonObjectConst args, JsonObject) {
+    if (trip.active && (args["route"] | 0) == trip.route.route()) endTrip(args["why"] | "the iPhone stopped", false);
+  });
+  ble::on("nav.places", [](JsonObjectConst args, JsonObject) {
+    if (!navAsk.active || !navAsk.nearby || (args["req"] | 0) != navAsk.req) return;
+    nearbyCount = (args["ok"] | false) ? (args["count"] | 0) : 0;
+    if (nearbyCount == 0) answerNav(nearbyResult(navAsk.what, {}));
+  });
+  ble::on("nav.place", [](JsonObjectConst args, JsonObject) {
+    if (!navAsk.active || !navAsk.nearby || (args["req"] | 0) != navAsk.req) return;
+    NearbyPlace p;
+    if (parseNearbyPlace(args, p) && nearbyLast.size() < 5) nearbyLast.push_back(p);
+    if (nearbyCount >= 0 && static_cast<int>(nearbyLast.size()) >= nearbyCount) answerNav(nearbyResult(navAsk.what, nearbyLast));
+  });
+}
+
+// Dev key '>': a made-up 5-step walk (no iPhone), progress 4 m a second.
+void fakeTrip() {
+  navAsk = NavAsk();
+  navAsk.active = navAsk.fromList = true;
+  navAsk.req = ++navReq;
+  navAsk.at = millis();
+  const int64_t now = time(nullptr);
+  ble::runHere("{\"cmd\":\"nav.route\",\"req\":" + std::to_string(navAsk.req) +
+               ",\"route\":900,\"ok\":true,\"destination\":\"Rossio\",\"mode\":\"walking\",\"distance\":450,\"eta\":" +
+               std::to_string(now + 360) + ",\"count\":5}");
+  const char *steps[] = {
+      R"("i":0,"text":"","street":"","distance":0,"arrow":"straight")",
+      R"("i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":120,"arrow":"right")",
+      R"("i":2,"text":"Take the 2nd exit at the roundabout onto Rua do Ouro","street":"Rua do Ouro","distance":80,"arrow":"roundabout","exit":2)",
+      R"("i":3,"text":"Turn slightly left onto Praca da Figueira","street":"Praca da Figueira","distance":150,"arrow":"slight-left")",
+      R"("i":4,"text":"Arrive at Rossio","street":"","distance":100,"arrow":"arrive")"};
+  for (const char *s : steps) ble::runHere(std::string("{\"cmd\":\"nav.step\",\"route\":900,") + s + "}");
+  navFake = true;
+  navFakeAt = millis();
 }
 
 void finishDeck(bool keep) {
@@ -3327,6 +3872,10 @@ void drawApp() {
     screens::drawDeck(deckView());
   } else if (listOpen) {
     screens::drawRecordings(recordingsView());
+  } else if (nearbyOpen) {
+    drawNearbyList();
+  } else if (navShowing()) {
+    drawNav(navView());
   } else if (settingsOpen) {
     screens::drawSettings(settingsView());
   } else if (historyOpen) {
@@ -3353,7 +3902,9 @@ void drawApp() {
 void onTap(uint16_t x, uint16_t y) {
   if (deckOpen) return deckTap(x, y);
   if (listOpen) return listTap(x, y);
-  if (firing.active) return tapFiring();  // snooze an alarm, stop anything else
+  if (nearbyOpen) return nearbyTap(x, y);
+  if (firing.active) return tapFiring();
+  if (navShowing()) return navTap(x, y);  // snooze an alarm, stop anything else
   if (timerShowing()) return timerTap(x, y);
   if (!settingsOpen && !historyOpen && canReplay()) {  // the replay buttons beside the avatar
     const ReplayHit hit = screens::replayHit(x, y);
@@ -3390,6 +3941,7 @@ void dropPending() {
   reaction.waiting = false;
   pendingTypedText.clear();
   restartAfterReply = false;  // the chat is closing anyway
+  nearbyOpen = nearbyListPending = false;
 }
 
 void onLock() {
@@ -4009,6 +4561,7 @@ void registerCompanionCommands() {
   registerMacroCommands();
   registerMomentCommands();
   registerRecordingCommands();
+  registerNavCommands();
   registerKeyCommands();
   ble::on("companion.list", [](JsonObjectConst, JsonObject reply) {
     JsonArray list = reply["companions"].to<JsonArray>();
@@ -4520,7 +5073,10 @@ const shell::Picture kOffPictures[] = {{kSleepPanda, kSleepPandaWidth, kSleepPan
 void setup() {
   shell::Config config;
   config.drawApp = drawApp;
-  config.drawLockWidget = drawLockAvatar;
+  config.drawLockWidget = [](Adafruit_GFX &gfx, const tm &now, int16_t maxHeight) -> int16_t {
+    if (trip.active && maxHeight >= 80) return drawNavLockCard(gfx, navView());  // the next turn
+    return drawLockAvatar(gfx, now, maxHeight);
+  };
   config.offPictures = kOffPictures;
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
@@ -4529,6 +5085,7 @@ void setup() {
     if (deckOpen) finishDeck(deck.lockOrPower(millis()) == NoteDeck::Event::Done);
   };
   config.beforePowerOff = [] {  // PWR held or the battery empty: the part being recorded is kept
+    endTrip("power off", true);
     if (deckOpen) finishDeck(deck.lockOrPower(millis()) == NoteDeck::Event::Done);
     else if (note::active()) note::finish(true);
   };
@@ -4537,7 +5094,11 @@ void setup() {
     const TimerState &t = moments::timer();
     return t.running ? String(t.lockLine(time(nullptr)).c_str()) : String();
   };
-  config.onLockedWake = [] { return false; };          // lets wakeLockedAt end a sleep (the loop does the work)
+  config.onLockedWake = [] {  // lets wakeLockedAt end a sleep (the loop does the work); a new turn redraws
+    const bool dirty = navLockDirty;
+    navLockDirty = false;
+    return dirty;
+  };
   shell::begin(config);
   storage::begin();
   companions::begin();  // also points memories and history at the active companion
@@ -4584,6 +5145,7 @@ void loop() {
     wasLocked = true;
     pollMoments();  // one due unlocks Dotty (shell::wake) and plays from the next pass
     pollTimer();
+    pollNav();  // a trip carries on locked (the phone stays connected; a turn wakes Dotty)
     if (phoneWake.stage() != PhoneWake::Stage::Idle || bgSession || connecting || lineJob.busy()) backgroundPoll();
     else pollPhoneWake();  // is one due?
     armLockedWake();
@@ -4786,6 +5348,7 @@ void loop() {
   pollLines();
   pollPhoneWake();
   pollList();
+  pollNav();
   pollNoteSend();
   pollReaction();
   pollTypedTurn();
@@ -4856,7 +5419,14 @@ void loop() {
     timerConfirm = true;
     redraw = true;
   }
-  if (listOpen && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
+  if (nearbyOpen && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
+      input.gesture != Touch::Gesture::LongPress) {  // the nearby list's pages
+    const int pages = std::max(1, (static_cast<int>(nearbyLast.size()) + 3) / 4);
+    const int step = input.gesture == Touch::Gesture::SwipeLeft || input.gesture == Touch::Gesture::SwipeUp ? 1 : -1;
+    nearbyPage = (nearbyPage + step + pages) % pages;
+    nearbyTouchedAt = millis();
+    redraw = true;
+  } else if (listOpen && input.gesture != Touch::Gesture::None && input.gesture != Touch::Gesture::Tap &&
       input.gesture != Touch::Gesture::LongPress) {  // left / up = next (page or recording), right / down = back
     listSwipe(input.gesture);
   } else if (input.gesture == Touch::Gesture::SwipeUp || input.gesture == Touch::Gesture::SwipeDown) {
@@ -4877,6 +5447,7 @@ void loop() {
 
   // Developer aids.
   if (input.key == 'r') simulatedHold = !simulatedHold;
+  if (input.key == '>') fakeTrip();  // a made-up walk, no iPhone
   if (input.key == '`') {  // directions plan, Task 1: the iPhone starts location from the background
     ble::notify("{\"event\":\"nav.probe\"}");
     LOGI("nav", "location probe asked");

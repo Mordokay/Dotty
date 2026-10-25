@@ -133,7 +133,7 @@ void drawNav(const NavView &v) {
   epd.setFont(&FreeSans9pt7b);
   nav::draw(epd, ui::fitText(epd, ui::printable(v.destination.c_str()), 96), nav::Icon::Close, nav::Icon::None,
             v.clock.c_str());
-  drawArrow(epd, v.arrow, v.exit, 52, 100, 96, kBlack);
+  drawArrow(epd, v.arrow, v.exit, 52, 94, 88, kBlack);
   String number, unit;
   splitDistance(v.toTurn, number, unit);
   epd.setFont(&FreeSansBold24pt7b);
