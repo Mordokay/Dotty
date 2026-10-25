@@ -4877,6 +4877,10 @@ void loop() {
 
   // Developer aids.
   if (input.key == 'r') simulatedHold = !simulatedHold;
+  if (input.key == '`') {  // directions plan, Task 1: the iPhone starts location from the background
+    ble::notify("{\"event\":\"nav.probe\"}");
+    LOGI("nav", "location probe asked");
+  }
   if (input.key == '#') {  // the next session starts without Google's resume (tests the conversation text)
     live.forgetResume();
     LOGI("conversation", "resume handle dropped");

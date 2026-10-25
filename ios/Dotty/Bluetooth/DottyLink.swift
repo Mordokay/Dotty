@@ -306,6 +306,10 @@ final class DottyLink: NSObject {
                 onRecordingEvent?(message)
                 return
             }
+            if message.event == "nav.probe" {  // directions plan, Task 1
+                LocationProbe.shared.run()
+                return
+            }
             if message.event == "companion.recordings" { onRecordingEvent?(message) }  // and the screens too
             lastEvent = message
             eventCount += 1

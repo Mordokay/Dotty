@@ -19,6 +19,14 @@ struct RelayLogView: View {
                     .buttonStyle(.quiet())
                     Text("Tap it, lock the iPhone at once, unlock after 30 s: the lines below say whether Apple's speech recognition kept going in the background.")
                         .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                    Button {
+                        LocationProbe.shared.askAlways()
+                    } label: {
+                        Label("Location probe: allow Always", systemImage: "location")
+                    }
+                    .buttonStyle(.quiet())
+                    Text("Allow Always, lock the iPhone, then send ` to Dotty: the lines below say whether location kept coming in the background for 2 minutes.")
+                        .font(.lpCaption).foregroundStyle(Color.inkFaint)
                     if relay.lines.isEmpty {
                         Text("Nothing yet. Hold BOOT on Dotty with this iPhone connected.").font(.lpCaption).foregroundStyle(Color.inkFaint)
                     }

@@ -7,7 +7,11 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
+		<string>location</string>
 	</array>
+	<!-- Directions: location keeps coming with the iPhone in a pocket, started when Dotty asks. -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Dotty guides you with directions while your iPhone is in your pocket.</string>
 	<!-- Voice notes recorded on Dotty become text on this iPhone (Apple's on-device recognition). -->
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Dotty turns your voice notes into text on this iPhone.</string>
