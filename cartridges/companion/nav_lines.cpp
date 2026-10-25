@@ -29,6 +29,35 @@ std::string distanceWords(int metres) {
   return out;
 }
 
+std::string navTripTopics(int route) {
+  static const char *const kTopics[] = {"street life and the people around",
+                                        "smells and food",
+                                        "history and old stories",
+                                        "music and sounds",
+                                        "buildings and architecture",
+                                        "the sky and the light",
+                                        "sport and keeping fit",
+                                        "plans and daydreams",
+                                        "animals (not birds)",
+                                        "your own little worries and quirks",
+                                        "trivia and odd facts",
+                                        "games and challenges on the way",
+                                        "the weather and the seasons",
+                                        "childhood memories",
+                                        "romance and gossip",
+                                        "science and how things work",
+                                        "art and colours",
+                                        "travel and faraway places",
+                                        "your own secret ambitions",
+                                        "superstitions and legends",
+                                        "fashion and what people wear",
+                                        "tiny mysteries along the way"};
+  const int n = sizeof(kTopics) / sizeof(kTopics[0]);
+  const unsigned u = static_cast<unsigned>(route) * 2654435761u;  // spread consecutive route numbers
+  const int a = static_cast<int>(u % n), b = (a + 1 + static_cast<int>((u / n) % (n - 1))) % n;
+  return std::string(kTopics[a]) + "; " + kTopics[b];
+}
+
 std::string navLinesRequest(const Profile &who, const std::string &memorySection, const NavRoute &r) {
   const std::string name = who.awake() ? who.name : "the companion";
   const int trigger = triggerMetres(r.mode);
@@ -49,13 +78,18 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
   system += " " + name + " is guiding the user (" + std::string(modeName(r.mode)) + ") to " + r.destination +
             ". Write a JSON array of " + std::to_string(spoken) +
             " objects, one per step in order: {\"turn\": the line said about " + std::to_string(trigger) +
-            " metres before that step, \"mid\": a halfway remark or \"\"}. Each turn line: the instruction first "
-            "and clear (\"In about " + std::to_string(trigger) + " metres, turn left onto Rua Augusta.\"), then "
-            "something spontaneous and fun in " + name + "'s own voice, and every line different in kind: an odd "
+            " metres before that step, \"mid\": a halfway remark or \"\"}. Each turn line: the instruction, plain and "
+            "clear, and around it something spontaneous and fun in " + name + "'s own voice. Vary where the "
+            "instruction sits: the start, the middle or the end of the line. At the start it may say the distance "
+            "(\"In about " + std::to_string(trigger) + " metres, turn left onto Rua Augusta\"); in the middle or at the "
+            "end, no distance (\"turn left at the next corner\", \"the left turn coming up\"). Every line different "
+            "in kind: an odd "
             "little thing you just noticed (made up, playful), a warning, a joke, encouragement, a thought about the "
-            "street or the place. Invent your own: never reuse a sentence, a joke, an image or a sign-off from one "
-            "line in another. A title or pet name for the user (whatever your character usually calls them) goes in "
-            "at most two lines of the whole array; the others don't address the user by any name. When a step says "
+            "street or the place. This trip, lean on " + navTripTopics(r.route()) + ". Invent your own: never reuse a "
+            "sentence, a joke, an image or a sign-off from one line in another. " +
+            (spoken > 1 ? "Only lines 1 and " + std::to_string(spoken) + " may" : std::string("Only line 1 may")) +
+            " call the user by a title or pet name (whatever your character usually calls them); every other line "
+            "speaks without any form of address. When a step says "
             "what you pass there, mention it now and then (not every time), as a friend would; only those places, "
             "never invent a place or a name. When the weather is given, let it colour a line or two, never every "
             "line. At most 40 words a line. \"mid\" only for steps marked long, on about half of them: something said "

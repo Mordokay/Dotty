@@ -32,7 +32,12 @@ final class NavigationService: NSObject {
 
     private(set) var trip: Trip?
     /// Moves along the route at walking speed instead of using GPS (Relay log › Simulate walk).
-    var simulate = false
+    var simulate = false {
+        didSet { if !simulate { simulatedHere = nil } }
+    }
+    /// While simulating: where the simulated walker is; it's the iPhone's position for everything (a new route
+    /// planned mid-walk started from the real GPS position, back at home).
+    @ObservationIgnored private var simulatedHere: CLLocation?
 
     @ObservationIgnored private weak var link: DottyLink?
     @ObservationIgnored private let manager = CLLocationManager()
@@ -348,6 +353,7 @@ final class NavigationService: NSObject {
 
     /// One fix (the last one if it's fresh), waiting up to 10 s.
     private func fix() async -> CLLocation? {
+        if simulate, let simulatedHere { return simulatedHere }
         if let here, Date().timeIntervalSince(here.timestamp) < 15 { return here }
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.allowsBackgroundLocationUpdates = true
@@ -416,8 +422,9 @@ final class NavigationService: NSObject {
             next = i
             break
         }
-        let toTurn = Int(RouteGeometry.metresAlong(t.line, from: p, to: t.turns[next]))
         t.left = leftAlong
+        // The arrival step's "turn" is where the last stretch begins: count down to the place itself.
+        let toTurn = t.steps[next].arrow == .arrive ? Int(leftAlong) : Int(RouteGeometry.metresAlong(t.line, from: p, to: t.turns[next]))
         t.eta = Date().addingTimeInterval(t.totalDistance > 0 ? t.totalTime * t.left / t.totalDistance : 0)
         let changed = RouteGeometry.progressDue(stepChanged: next != t.step, metresChanged: toTurn - t.sentToTurn, mode: t.mode,
                                                 sinceLast: Date().timeIntervalSince(t.sentAt))  // a keepalive every 15 s too
@@ -479,7 +486,9 @@ final class NavigationService: NSObject {
             for p in points {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, self.trip != nil, !Task.isCancelled else { return }
-                self.progress(at: CLLocation(latitude: p.latitude, longitude: p.longitude))
+                let here = CLLocation(latitude: p.latitude, longitude: p.longitude)
+                self.simulatedHere = here
+                self.progress(at: here)
             }
         }
     }

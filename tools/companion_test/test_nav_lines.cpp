@@ -3,6 +3,8 @@
 // (start, re-route, arrival, progress with a question), what the instruction says, nearby answers.
 #include <ArduinoJson.h>
 
+#include <set>
+
 #include "check.h"
 #include "nav_lines.h"
 
@@ -36,15 +38,36 @@ int main() {
     JsonDocument d = parse(navLinesRequest(who, "- Likes horses", r));
     const std::string sys = d["systemInstruction"]["parts"][0]["text"] | "";
     const std::string text = d["contents"][0]["parts"][0]["text"] | "";
-    CHECK("request: one line per step, instruction first, trigger distance, <= 40 words",
-          has(sys, "instruction first") && has(text, "40 metres") && has(sys, "40 words") && has(text, "Rua Augusta") &&
+    CHECK("request: one line per step, the instruction at the start, middle or end, <= 40 words",
+          has(sys, "the start, the middle or the end") && has(sys, "no distance") && has(text, "40 metres") && has(sys, "40 words") && has(text, "Rua Augusta") &&
               has(sys, "JSON array of 2"));
     CHECK("request: the weather, woven in now and then", has(text, "rain likely within the hour") && has(sys, "weather"));
     CHECK("request: a place passed goes with its step", has(text, "passing: Cafe Nicola, a cafe, on your left"));
     CHECK("request: in character with memories", has(sys, "Percival") && has(sys, "Likes horses"));
     CHECK("request: JSON answer", std::string(d["generationConfig"]["responseMimeType"] | "") == "application/json");
     CHECK("request: varied and spontaneous (the user: always \"my king\", the same things)",
-          has(sys, "different") && has(sys, "at most two lines") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
+          has(sys, "different") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
+    CHECK("request: only the first and last lines may address the user (titles were in every line)",
+          has(sys, "Only lines 1 and 2 may"));
+    {  // two topics a trip, from the route number: trips differ from each other (pigeons every time)
+      NavRoute other = r;
+      JsonDocument h2 = parse(R"({"req":1,"route":4,"ok":true,"destination":"Rossio","mode":"walking","distance":1400,"eta":1,"count":3})");
+      other.begin(h2.as<JsonObjectConst>());
+      for (const char *st : {R"({"route":4,"i":0,"text":"","street":"","distance":0,"arrow":"straight"})",
+                             R"({"route":4,"i":1,"text":"Turn right","street":"","distance":300,"arrow":"right"})",
+                             R"({"route":4,"i":2,"text":"Arrive","street":"","distance":0,"arrow":"arrive"})"}) {
+        JsonDocument d2 = parse(st);
+        other.step(d2.as<JsonObjectConst>());
+      }
+      const std::string a = navTripTopics(r.route()), b = navTripTopics(other.route());
+      CHECK("topics: two per trip, they change with the route", !a.empty() && a != b && has(a, "; ") && has(sys, a));
+      std::set<std::string> seen;  // 22 topics (the user: as much randomness as possible)
+      for (int route = 1; route < 3000; route++) {
+        const std::string t = navTripTopics(route);
+        seen.insert(t.substr(0, t.find("; ")));
+      }
+      CHECK_EQ("topics: 22 to draw from", static_cast<int>(seen.size()), 22);
+    }
     CHECK("request: no example sentences to parrot (it copied the pigeon word for word)",
           !has(sys, "pigeon") && !has(sys, "madmen") && has(sys, "Invent your own"));
     CHECK("request: halfway remarks on long stretches", has(sys, "\"mid\"") && has(sys, "halfway"));

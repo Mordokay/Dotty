@@ -24,6 +24,9 @@ struct NavLineSet {
   std::vector<std::string> turn, mid;
 };
 NavLineSet parseNavLines(const Written &w, const NavRoute &r);
+// Two topics for a trip's flavour, from its route number ("street life and music"): trips differ from each
+// other instead of the model's favourites (a pigeon every time).
+std::string navTripTopics(int route);
 
 std::string distanceWords(int metres);  // "350 m", "1.4 km"
 std::string navStartNote(const NavRoute &r, int64_t now);
