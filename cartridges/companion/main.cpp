@@ -3005,6 +3005,10 @@ void openDeck(const std::string &title) {
 
 // A typed turn (the user doesn't see the text; `label` is what the history and the screen show).
 void typedTurn(const std::string &text, const std::string &label) {
+  // Like a BOOT press: a clip being recorded on this session stops (else the reply counted as the clip's
+  // reading and the screen stayed on Thinking).
+  abortLine("a typed turn");
+  lineDiscard = false;
   stopReplay();
   beginLast();
   cancelWriter();
@@ -3281,7 +3285,11 @@ NavView navView() {
   v.levelDb = info.levelDb;
   if (info.state == Talk::Listening) v.talk = "Listening...";
   else if (info.state == Talk::Thinking || writing || reading) v.talk = "Thinking...";
-  else if (info.state == Talk::Speaking) v.talk = (who.awake() ? who.name : std::string("Your companion")) + " is answering...";
+  else if (info.state == Talk::Speaking) {  // his words as they're heard (paced by the audio), else who's answering
+    v.saying = info.said.length() > 0;
+    v.talk = v.saying ? std::string(info.said.c_str())
+                      : (who.awake() ? who.name : std::string("Your companion")) + " is answering...";
+  }
   return v;
 }
 

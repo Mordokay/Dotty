@@ -84,7 +84,7 @@ void drawArrow(Adafruit_GFX &g, Arrow a, int exit, int16_t cx, int16_t cy, int16
       thick(g, cx, baseY, cx, cy + r, w, color);
       const float deg = exit == 1 ? 90 : exit == 2 ? 0 : exit == 3 ? -90 : -135;
       const float rad = deg * PI / 180, ex = cx + sinf(rad) * r, ey = cy - cosf(rad) * r;
-      const float tx = cx + sinf(rad) * s * 0.42f, ty = cy - cosf(rad) * s * 0.42f;
+      const float tx = cx + sinf(rad) * s * 0.34f, ty = cy - cosf(rad) * s * 0.34f;  // clear of the top bar
       thick(g, ex, ey, tx, ty, w, color);
       head(g, tx + sinf(rad) * s * 0.08f, ty - cosf(rad) * s * 0.08f, deg, s * 0.16f, color);
       if (exit > 0) {
@@ -152,6 +152,16 @@ void drawNav(const NavView &v) {
         const int16_t x = 30 + i * 7, h = 3 + i / 2;
         if (i < bars) epd.fillRect(x, 188 - h, 5, h, kBlack);
         else epd.drawFastHLine(x, 187, 5, kBlack);
+      }
+      return;
+    }
+    if (v.saying) {  // the reply as it's heard: the page being filled (a third line turns the page)
+      epd.setFont(&FreeSans9pt7b);
+      const std::vector<String> all = ui::wrapText(epd, ui::printable(v.talk.c_str()), kW - 20, 60);
+      const size_t first = all.empty() ? 0 : (all.size() - 1) / 2 * 2;
+      for (size_t i = first; i < all.size() && i < first + 2; i++) {
+        epd.setCursor(12, 164 + static_cast<int16_t>(i - first) * 21);
+        epd.print(all[i]);
       }
       return;
     }

@@ -21,6 +21,7 @@ struct NavView {
   bool waiting = false;  // no progress for 30 s: "Waiting for your iPhone..."
   std::string talk;      // a chat on the way: "Listening...", "Thinking...", "Percival is answering..." ("" = none)
   bool listening = false;
+  bool saying = false;   // talk is the reply's words so far: shown two lines a page, the latest page
   int levelDb = -60;     // the microphone meter while listening
 };
 enum class NavHit { None, Stop, Yes, No };
