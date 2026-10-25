@@ -1,0 +1,178 @@
+#include "nav_lines.h"
+
+#include <ArduinoJson.h>
+
+namespace {
+
+std::string minutesWords(int64_t seconds) {
+  const int64_t m = seconds <= 0 ? 0 : (seconds + 30) / 60;
+  return std::to_string(m) + (m == 1 ? " minute" : " minutes");
+}
+
+int firstSpoken(const NavRoute &r) {
+  for (int i = 0; i < r.count(); i++)
+    if (r.at(i).spoken()) return i;
+  return -1;
+}
+
+std::string lower(std::string s) {
+  for (char &c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+}  // namespace
+
+std::string distanceWords(int metres) {
+  if (metres < 1000) return std::to_string(metres) + " m";
+  char out[16];
+  snprintf(out, sizeof(out), "%.1f km", metres / 1000.0);
+  return out;
+}
+
+std::string navLinesRequest(const Profile &who, const std::string &memorySection, const NavRoute &r) {
+  const std::string name = who.awake() ? who.name : "the companion";
+  const int trigger = triggerMetres(r.mode);
+  int spoken = 0;
+  std::string steps;
+  for (int i = 0; i < r.count(); i++) {
+    if (!r.at(i).spoken()) continue;
+    spoken++;
+    steps += std::to_string(spoken) + ". " + r.text(i);
+    if (!r.street(i).empty()) steps += " (street: " + r.street(i) + ")";
+    steps += "\n";
+  }
+  std::string system = writerCharacter(who, memorySection);
+  system += " " + name + " is guiding the user (" + std::string(modeName(r.mode)) + ") to " + r.destination +
+            ", one line for each step of the route, each said about " + std::to_string(trigger) +
+            " metres before that step. Write a JSON array of " + std::to_string(spoken) +
+            " strings, one per step in order. Each line: the instruction first and clear (\"In about " +
+            std::to_string(trigger) + " metres, turn right onto Rua Augusta.\"), then at most a few words of " + name +
+            "'s own flavour; at most 20 words; spoken English, first person, no emoji or stage directions. The last "
+            "step is the arrival. Only the JSON array.";
+  JsonDocument doc;
+  doc["systemInstruction"]["parts"][0]["text"] = system;
+  doc["contents"][0]["role"] = "user";
+  doc["contents"][0]["parts"][0]["text"] = "Going to " + r.destination + " (" + distanceWords(r.distance) +
+                                           "). Each line is said " + std::to_string(trigger) +
+                                           " metres before its step. The steps:\n" + steps;
+  doc["generationConfig"]["maxOutputTokens"] = 120 + 60 * spoken;
+  doc["generationConfig"]["responseMimeType"] = "application/json";
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+std::vector<std::string> parseNavLines(const Written &w, const NavRoute &r) {
+  std::vector<std::string> out(r.count());
+  if (!w.ok) return out;
+  std::string text = w.text;
+  const size_t open = text.find('['), close = text.rfind(']');  // code fences and chatter around the array
+  if (open == std::string::npos || close == std::string::npos || close < open) return out;
+  text = text.substr(open, close - open + 1);
+  JsonDocument doc;
+  if (deserializeJson(doc, text) != DeserializationError::Ok) return out;
+  JsonArrayConst lines = doc.as<JsonArrayConst>();
+  size_t next = 0;
+  for (int i = 0; i < r.count() && next < lines.size(); i++) {
+    if (!r.at(i).spoken()) continue;
+    out[i] = lines[next++] | "";
+  }
+  return out;
+}
+
+std::string navStartNote(const NavRoute &r, int64_t now) {
+  const int first = firstSpoken(r);
+  std::string s = "(Dotty, not the user: the directions are ready.) " + std::string(modeName(r.mode)) + " to " +
+                  r.destination + ", " + distanceWords(r.distance) + ", about " + minutesWords(r.eta - now) + ".";
+  if (first >= 0) s += " The first step: " + r.text(first) + ".";
+  s += " Tell the user in a few words of your own, then the first step, clearly.";
+  return s;
+}
+
+std::string navRerouteNote(const NavRoute &r) {
+  const int first = firstSpoken(r);
+  std::string s = "(Dotty, not the user: they went off the route; here's a new one to " + r.destination + ", " +
+                  distanceWords(r.distance) + ".)";
+  if (first >= 0) s += " The first step now: " + r.text(first) + ".";
+  s += " Tell them in a few words, then that step, clearly.";
+  return s;
+}
+
+std::string navArrivedNote(const std::string &destination) {
+  return "(Dotty, not the user: they have arrived at " + destination +
+         "; the directions are over.) Say so in a few words of your own.";
+}
+
+namespace {
+
+std::string tripWords(const NavRoute &r, const NavProgress &p, int64_t now) {
+  std::string s = std::string(modeName(r.mode)) + " to " + r.destination + ", " + distanceWords(p.left) + " and " +
+                  minutesWords(p.eta - now) + " left";
+  if (p.step >= 0 && p.step < r.count() && r.at(p.step).spoken())
+    s += "; next: " + r.text(p.step) + " in " + distanceWords(p.toTurn);
+  return s;
+}
+
+}  // namespace
+
+std::string navProgressNote(const NavRoute &r, const NavProgress &p, int64_t now) {
+  return "(Dotty, not the user: directions now: " + tripWords(r, p, now) + ".)";
+}
+
+std::string navSection(const std::vector<std::string> &placeNames, const NavRoute *trip, const NavProgress *p,
+                       int64_t now) {
+  std::string s;
+  if (!placeNames.empty()) {
+    s = "Saved places: ";
+    for (size_t i = 0; i < placeNames.size(); i++) s += (i ? ", " : "") + placeNames[i];
+    s += ".\n";
+  }
+  s += "Directions need the user's iPhone nearby (it finds the way). Walking unless they say ride, cycle or drive. "
+       "You can't plan public transport yet: say so and offer to walk them or to open Apple Maps on the iPhone.";
+  if (trip && p) s += "\nDirections under way: " + tripWords(*trip, *p, now) + ".";
+  return s;
+}
+
+bool parseNearbyPlace(JsonObjectConst msg, NearbyPlace &out) {
+  out.n = msg["n"] | 0;
+  out.name = msg["name"] | "";
+  out.category = msg["category"] | "";
+  out.street = msg["street"] | "";
+  out.direction = msg["direction"] | "";
+  out.phone = msg["phone"] | "";
+  out.distance = msg["distance"] | 0;
+  out.minutes = msg["minutes"] | 0;
+  return out.n > 0 && !out.name.empty();
+}
+
+std::string nearbyRowDetail(const NearbyPlace &p) {
+  return distanceWords(p.distance) + " - " + std::to_string(p.minutes) + " min";
+}
+
+std::string nearbyResult(const std::string &what, const std::vector<NearbyPlace> &places) {
+  if (places.empty())
+    return "Nothing found nearby for \"" + what + "\", even a little further out. Tell the user briefly.";
+  std::string s = "Places near the user for \"" + what + "\", nearest first:";
+  bool hospital = lower(what).find("hospital") != std::string::npos;
+  for (const NearbyPlace &p : places) {
+    s += "\n" + std::to_string(p.n) + ". " + p.name;
+    if (!p.street.empty()) s += ", " + p.street;
+    s += ": " + distanceWords(p.distance) + ", " + std::to_string(p.minutes) + " min, " + p.direction;
+    if (lower(p.category).find("hospital") != std::string::npos) hospital = true;
+  }
+  s += "\nTell the user about the nearest one or two in your own words and offer to take them there (\"the second "
+       "one\" is fine). You don't know their hours: never say whether a place is closed or not.";
+  if (hospital) s += " If it sounds urgent, tell them plainly to call 112 first.";
+  return s;
+}
+
+std::string nearbyQuery(const std::string &place, const std::vector<NearbyPlace> &last, bool &missing) {
+  missing = false;
+  const std::string l = lower(place);
+  if (l.rfind("nearby ", 0) != 0) return place;
+  const int n = atoi(l.c_str() + 7);
+  for (const NearbyPlace &p : last)
+    if (p.n == n) return p.name;
+  missing = true;
+  return place;
+}
