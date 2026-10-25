@@ -80,6 +80,20 @@ check("arrived where the route ends, the place set back", RouteGeometry.arrived(
       && !RouteGeometry.arrived(toTarget: 60, leftAlong: 120, mode: .walking) && RouteGeometry.arrived(toTarget: 20, leftAlong: 300, mode: .walking))
 check("no re-route near the end", !RouteGeometry.rerouteAllowed(leftAlong: 80) && RouteGeometry.rerouteAllowed(leftAlong: 400))
 
+// Places passed at a turn (the user: "to your left is a pretty cool restaurant"): which side, and the step carries it
+check("side: a place east of a walker heading north is on the right", RouteGeometry.sideWords(heading: 0, toward: 90) == "on your right")
+check("side: west of north is on the left", RouteGeometry.sideWords(heading: 0, toward: 270) == "on your left")
+check("side: straight ahead", RouteGeometry.sideWords(heading: 90, toward: 95) == "just ahead")
+let withPoi = [NavStepInfo(text: "Turn left", street: "Rua Augusta", distance: 100, arrow: .left, exit: nil, point: a, poi: "Cafe Nicola, a cafe, on your left")]
+let poiMsg = NavMessages.route(req: 1, route: 2, destination: "X", mode: .walking, distance: 100, eta: 0, steps: withPoi, reroute: false)
+check("route: a step carries its poi", (poiMsg[1]["poi"] as? String) == "Cafe Nicola, a cafe, on your left")
+
+// The weather where a trip starts (the user: "it'll probably rain, bring an umbrella")
+check("weather: rain likely", NavWeather.phrase(temperature: 14.2, code: 3, rainChance: 70) == "14 C, overcast; rain likely within the hour (70%)")
+check("weather: dry and sunny", NavWeather.phrase(temperature: 27.6, code: 0, rainChance: 5) == "28 C, clear sky")
+check("weather: raining now", NavWeather.phrase(temperature: 9, code: 63, rainChance: 90) == "9 C, rain")
+check("weather: a chance", NavWeather.phrase(temperature: 18, code: 2, rainChance: 35) == "18 C, partly cloudy; a chance of rain within the hour (35%)")
+
 // Nearby (Task 9): what you asked → a points-of-interest category, or free text
 check("nearby: ATM / cash machine → atm", NearbySearch.category("ATM") == .atm && NearbySearch.category("a cash machine") == .atm)
 check("nearby: hospital", NearbySearch.category("the nearest hospital") == .hospital)

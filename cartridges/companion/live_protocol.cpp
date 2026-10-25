@@ -176,6 +176,9 @@ std::string liveSetup(const LiveConfig &config) {
   JsonObject nav = declare("navigate_to", "Guide the user to a place, turn by turn (needs their iPhone nearby)");
   param(nav, "place", "STRING", true)["description"] =
       "a saved place's name, a place to search for near them, or \"nearby N\" for a find_nearby result";
+  param(nav, "then", "STRING", false)["description"] =
+      "only for a stop on the way: where to go on to after `place` (\"the pharmacy on the way to the mall\": place = the "
+      "pharmacy, then = the mall)";
   JsonObject navMode = param(nav, "mode", "STRING", false);
   for (const char *m : {"walking", "cycling", "driving"}) navMode["enum"].add(m);
   declare("stop_navigation", "Stop the directions");
@@ -242,6 +245,7 @@ LiveEvent liveParse(const std::string &message) {
     c.group = args["group"] | (args["topic"] | "");  // recall's topic travels as the group
     c.from = args["from"] | "";
     c.to = args["to"] | "";
+    c.then = args["then"] | "";
     c.kind = args["kind"] | (args["mode"] | "");  // navigate_to's mode travels as the kind
     c.at = args["at"] | "";
     c.repeat = args["repeat"] | "";
@@ -316,7 +320,8 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "call show_recordings and say a few words: the list opens on the screen after your reply. "
       "To guide the user somewhere (\"walk me home\", \"take me to the nearest pharmacy\"), call navigate_to: walking "
       "unless they say ride, cycle or drive; say only a few words (\"Let me find the way\") until its answer comes, "
-      "then tell them where and how far. Asked what's around (\"is there an ATM nearby?\"), call find_nearby; "
+      "then tell them where and how far. A new place during a trip replaces the trip (\"take me to the restaurant "
+      "instead\"); a stop on the way is place = the stop with \"then\" = where they're going. Asked what's around (\"is there an ATM nearby?\"), call find_nearby; "
       "\"take me there\" or \"the second one\" after it is navigate_to with \"nearby 1\", \"nearby 2\"... You don't "
       "know opening hours: never say a place is open or closed. To stop, stop_navigation. "
       "When the user wants to start afresh (\"let's start a new conversation\", \"switch tape\", \"let's change topic\", "

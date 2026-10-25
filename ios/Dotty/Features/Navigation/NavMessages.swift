@@ -16,6 +16,7 @@ enum NavMessages {
             var step: [String: Any] = ["cmd": "nav.step", "route": route, "i": i, "street": cut(s.street, 80),
                                        "distance": s.distance, "arrow": s.arrow.rawValue]
             if let exit = s.exit { step["exit"] = exit }
+            if let poi = s.poi, !poi.isEmpty { step["poi"] = cut(poi, 60) }
             step["text"] = fit(s.text, into: step)
             out.append(step)
         }

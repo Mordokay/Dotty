@@ -56,6 +56,24 @@ int main() {
   CHECK("route assembles from its steps", began && notYet && steps && stillNot && r.complete() && r.count() == 4 &&
                                               r.route() == 3 && r.destination == "Rossio" && r.mode == NavMode::Walking &&
                                               r.distance == 1400);
+  {
+    NavRoute pr;
+    JsonDocument h = routeMsg(7, 2);
+    pr.begin(h.as<JsonObjectConst>());
+    JsonDocument p0 = parse(R"({"route":7,"i":0,"text":"Head north","street":"","distance":50,"arrow":"straight"})");
+    JsonDocument p1 = parse(R"({"route":7,"i":1,"text":"Turn left","street":"Rua Augusta","distance":0,"arrow":"left","poi":"Cafe Nicola, a cafe, on your left"})");
+    pr.step(p0.as<JsonObjectConst>());
+    pr.step(p1.as<JsonObjectConst>());
+    JsonDocument leg = parse(R"({"req":0,"route":8,"ok":true,"destination":"Mall","mode":"walking","distance":900,"eta":1,"count":2,"continue":true})");
+    NavRoute second;
+    second.begin(leg.as<JsonObjectConst>());
+    CHECK("the second leg after a stop (continue)", second.continues && !pr.continues);
+    JsonDocument wet = parse(R"j({"req":1,"route":9,"ok":true,"destination":"X","mode":"walking","distance":100,"eta":1,"count":1,"weather":"14 C, cloudy; rain likely within the hour (70%)"})j");
+    NavRoute rainy;
+    rainy.begin(wet.as<JsonObjectConst>());
+    CHECK("the weather where the trip starts", rainy.weather == "14 C, cloudy; rain likely within the hour (70%)" && second.weather.empty());
+    CHECK("a place passed at a turn (poi)", pr.poi(1) == "Cafe Nicola, a cafe, on your left" && pr.poi(0).empty());
+  }
   CHECK("step text and street", r.text(1) == "Turn right onto Rua Augusta" && r.street(1) == "Rua 1" &&
                                     r.at(1).arrow == Arrow::Right && r.at(1).distance == 100);
   {
@@ -151,6 +169,43 @@ int main() {
     ClipPlan plan;
     plan.reset(r);
     CHECK("an unspoken step never plays", plan.onProgress(at(0, 0), NavMode::Walking, false, r) == ClipPlan::Play::None);
+  }
+  {  // Halfway remarks (the user, 2026-10-25): on a long stretch, once, halfway, only from a recorded clip.
+    NavRoute w;
+    JsonDocument h = routeMsg(5, 3);
+    w.begin(h.as<JsonObjectConst>());
+    JsonDocument a0 = stepMsg(5, 0, "Head north", "straight", 300);  // the 300 m stretch up to step 1's turn
+    JsonDocument a1 = stepMsg(5, 1, "Turn left", "left", 100);
+    JsonDocument a2 = stepMsg(5, 2, "Arrive", "arrive", 0);
+    w.step(a0.as<JsonObjectConst>());
+    w.step(a1.as<JsonObjectConst>());
+    w.step(a2.as<JsonObjectConst>());
+    CHECK("stretch before a turn, long stretches", stretchBefore(w, 1) == 300 && stretchBefore(w, 2) == 100 &&
+                                                       stretchBefore(w, 0) == 0 && longStretch(NavMode::Walking) == 250 &&
+                                                       longStretch(NavMode::Cycling) == 600 && longStretch(NavMode::Driving) == 2000);
+    auto at5 = [](int step, int toTurn) {
+      NavProgress p;
+      p.route = 5;
+      p.step = step;
+      p.toTurn = toTurn;
+      return p;
+    };
+    ClipPlan plan;
+    plan.reset(w);
+    plan.setMid(1, true);
+    plan.setMid(2, true);  // a short stretch: never played
+    const int toRecord = plan.nextMidToRecord(0);
+    const bool notReady = !plan.midDue(at5(1, 140), NavMode::Walking, false, w);
+    plan.midRecorded(1);
+    plan.midRecorded(2);
+    const bool early = !plan.midDue(at5(1, 160), NavMode::Walking, false, w);
+    const bool busy = !plan.midDue(at5(1, 145), NavMode::Walking, true, w);
+    const bool now = plan.midDue(at5(1, 140), NavMode::Walking, false, w);
+    const bool once = !plan.midDue(at5(1, 130), NavMode::Walking, false, w);
+    const bool shortStretch = !plan.midDue(at5(2, 50), NavMode::Walking, false, w);
+    CHECK("halfway remark: recorded first, then once halfway, not while busy, never on a short stretch",
+          toRecord == 1 && notReady && early && busy && now && once && shortStretch && plan.midStep() == 1);
+    CHECK("halfway remark: none left to record once recorded", plan.nextMidToRecord(0) == -1);
   }
   return failures ? 1 : 0;
 }

@@ -150,6 +150,8 @@ int main() {
   {
     const LiveEvent nav = liveParse(R"({"toolCall":{"functionCalls":[{"name":"navigate_to","args":{"place":"home","mode":"cycling"},"id":"n1"}]}})");
     CHECK("parse: navigate_to place and mode", nav.calls.size() == 1 && nav.calls[0].text == "home" && nav.calls[0].kind == "cycling");
+    const LiveEvent via = liveParse(R"({"toolCall":{"functionCalls":[{"name":"navigate_to","args":{"place":"the nearest pharmacy","then":"the shopping mall"},"id":"n2"}]}})");
+    CHECK("parse: navigate_to with a stop on the way (then)", via.calls.size() == 1 && via.calls[0].then == "the shopping mall");
   }
   const LiveEvent evolved = liveParse(R"({"toolCall":{"functionCalls":[{"name":"evolve","args":{"field":"traits","value":"a\nb","why":"braver"},"id":"e1"}]}})");
   CHECK("parse: evolve", evolved.calls.size() == 1 && evolved.calls[0].field == "traits" && evolved.calls[0].text == "a\nb" &&
@@ -195,6 +197,8 @@ int main() {
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
+  CHECK("instruction: a new place mid-trip replaces it; a stop on the way uses then",
+        noPlace.find("replaces the trip") != std::string::npos && noPlace.find("\"then\"") != std::string::npos);
   CHECK("instruction: directions and nearby", noPlace.find("call navigate_to") != std::string::npos &&
                                                  noPlace.find("call find_nearby") != std::string::npos &&
                                                  noPlace.find("never say a place is open") != std::string::npos);

@@ -39,31 +39,48 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
     spoken++;
     steps += std::to_string(spoken) + ". " + r.text(i);
     if (!r.street(i).empty()) steps += " (street: " + r.street(i) + ")";
+    if (!r.poi(i).empty()) steps += "; passing: " + r.poi(i);
+    const int stretch = stretchBefore(r, i);
+    if (stretch > 0) steps += "; walked before it: " + distanceWords(stretch);
+    if (stretch >= longStretch(r.mode)) steps += " (long: a halfway remark is possible)";
     steps += "\n";
   }
   std::string system = writerCharacter(who, memorySection);
   system += " " + name + " is guiding the user (" + std::string(modeName(r.mode)) + ") to " + r.destination +
-            ", one line for each step of the route, each said about " + std::to_string(trigger) +
-            " metres before that step. Write a JSON array of " + std::to_string(spoken) +
-            " strings, one per step in order. Each line: the instruction first and clear (\"In about " +
-            std::to_string(trigger) + " metres, turn right onto Rua Augusta.\"), then at most a few words of " + name +
-            "'s own flavour; at most 20 words; spoken English, first person, no emoji or stage directions. The last "
-            "step is the arrival. Only the JSON array.";
+            ". Write a JSON array of " + std::to_string(spoken) +
+            " objects, one per step in order: {\"turn\": the line said about " + std::to_string(trigger) +
+            " metres before that step, \"mid\": a halfway remark or \"\"}. Each turn line: the instruction first "
+            "and clear (\"In about " + std::to_string(trigger) + " metres, turn left onto Rua Augusta.\"), then "
+            "something spontaneous and fun in " + name + "'s own voice, and every line different in kind: a playful "
+            "made-up observation (\"and I just saw a pigeon walk into a lamppost\"), a warning (\"careful, these "
+            "streets are full of madmen\"), a joke, encouragement, a thought about the street or the place. Never "
+            "repeat a phrase, a joke or a sign-off; call the user by a title or pet name at most twice in the whole "
+            "trip. When a step says what you pass there, mention it now and then (not every time), as a friend would "
+            "(\"to your left is a lovely little cafe, we should try it sometime\"); only those places, never invent "
+            "a place or a name. When the weather is given, let it colour a line or two (\"it'll probably rain soon, so "
+            "let's be quick\"), never every line. At most 40 words a line. \"mid\" only for steps marked long, on about half of them: something "
+            "said halfway along that stretch, like a friend walking alongside (\"Feeling tired yet?\", \"Fancy "
+            "stopping for a glass of water?\"), at most 15 words, no directions in it; else \"\". The last step is "
+            "the arrival. Spoken English, first person, no emoji or stage directions. Only the JSON array.";
   JsonDocument doc;
   doc["systemInstruction"]["parts"][0]["text"] = system;
   doc["contents"][0]["role"] = "user";
-  doc["contents"][0]["parts"][0]["text"] = "Going to " + r.destination + " (" + distanceWords(r.distance) +
-                                           "). Each line is said " + std::to_string(trigger) +
+  doc["contents"][0]["parts"][0]["text"] = "Going to " + r.destination + " (" + distanceWords(r.distance) + ")." +
+                                           (r.weather.empty() ? std::string() : " The weather: " + r.weather + ".") +
+                                           " Each turn line is said " + std::to_string(trigger) +
                                            " metres before its step. The steps:\n" + steps;
-  doc["generationConfig"]["maxOutputTokens"] = 120 + 60 * spoken;
+  doc["generationConfig"]["maxOutputTokens"] = 200 + 150 * spoken;
+  doc["generationConfig"]["temperature"] = 1.1;  // spontaneous, not samey
   doc["generationConfig"]["responseMimeType"] = "application/json";
   std::string out;
   serializeJson(doc, out);
   return out;
 }
 
-std::vector<std::string> parseNavLines(const Written &w, const NavRoute &r) {
-  std::vector<std::string> out(r.count());
+NavLineSet parseNavLines(const Written &w, const NavRoute &r) {
+  NavLineSet out;
+  out.turn.assign(r.count(), "");
+  out.mid.assign(r.count(), "");
   if (!w.ok) return out;
   std::string text = w.text;
   const size_t open = text.find('['), close = text.rfind(']');  // code fences and chatter around the array
@@ -75,7 +92,13 @@ std::vector<std::string> parseNavLines(const Written &w, const NavRoute &r) {
   size_t next = 0;
   for (int i = 0; i < r.count() && next < lines.size(); i++) {
     if (!r.at(i).spoken()) continue;
-    out[i] = lines[next++] | "";
+    JsonVariantConst item = lines[next++];
+    if (item.is<const char *>()) {  // a plain string: just the turn
+      out.turn[i] = item.as<const char *>();
+      continue;
+    }
+    out.turn[i] = item["turn"] | "";
+    if (stretchBefore(r, i) >= longStretch(r.mode)) out.mid[i] = item["mid"] | "";
   }
   return out;
 }
@@ -98,7 +121,10 @@ std::string navRerouteNote(const NavRoute &r) {
   return s;
 }
 
-std::string navArrivedNote(const std::string &destination) {
+std::string navArrivedNote(const std::string &destination, const std::string &next) {
+  if (!next.empty())  // a stop on the way: the next leg is coming
+    return "(Dotty, not the user: they have arrived at " + destination + ", their stop on the way; next they go on to " +
+           next + ", and that route is on its way.) Say so in a few words of your own.";
   return "(Dotty, not the user: they have arrived at " + destination +
          "; the directions are over.) Say so in a few words of your own.";
 }

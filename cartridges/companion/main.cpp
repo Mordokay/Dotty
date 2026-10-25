@@ -238,6 +238,7 @@ struct Trip {
   NavRoute route;
   ClipPlan clips;
   NavLines lines;                  // per step ("" = say Apple's text live), in one PSRAM buffer
+  NavLines mids;                   // halfway remarks on long stretches ("" = none)
   bool linesAsked = false, linesReady = false;
   uint32_t linesFetch = 0, linesAt = 0;  // the lines' own fetch through the phone (never the chat's job slot)
   bool relock = false;                   // a turn woke a locked Dotty: lock again once it has been said
@@ -266,6 +267,7 @@ uint32_t nearbyTouchedAt = 0;
 std::string nearbyWhat;
 std::vector<std::string> placeNames;  // the app's saved places (companion.places), for the instruction
 bool navLockDirty = false;            // the lock card changed: redraw it now
+uint32_t navAwaitNext = 0;            // arrived at a stop on the way: the next leg's route is coming (since)
 bool navFake = false;                 // dev key '>': progress made up here
 uint32_t navFakeAt = 0;
 
@@ -326,7 +328,9 @@ bool lineScanStale = false;  // the wake's cached "lines left?" must be read aga
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 void dropPending();
 void queueTypedTurn(const std::string &text, const std::string &label, bool phoneOnly = false);
-std::string navKey(int i);
+std::string navKey(int i, bool mid = false);
+bool parseNavKey(const std::string &key, int &i, bool &mid);
+bool nextNavClip(int &i, bool &mid);
 bool navClipsDue();
 GeminiLive::ToolAnswer navTool(const ToolCall &c);
 void endTrip(const char *why, bool tellPhone);
@@ -2421,13 +2425,16 @@ const char *lineNote = "Saving your reminder...";
 bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
   // Directions first: the next clips of a trip (written already; recorded ahead of you).
   if (navClipsDue() && (onlyCompanion.empty() || onlyCompanion == trip.companion)) {
-    const std::string key = navKey(trip.clips.nextToRecord(trip.progress.step));
+    int next = 0;
+    bool mid = false;
+    nextNavClip(next, mid);
+    const std::string key = navKey(next, mid);
     const auto back = lineBackoff.find(trip.companion + "/" + key);
     if (back == lineBackoff.end() || static_cast<int32_t>(back->second - millis()) <= 0) {
       out = LineWork();
       out.companion = trip.companion;
       out.key = key;
-      out.words = 25;
+      out.words = 45;
       out.signature = "nav";
       return true;
     }
@@ -2572,9 +2579,10 @@ void lineSaved() {
   lineJob.saved(ok);
   if (!ok) return;
   const LineWork &w = lineJob.work();
-  if (w.key.rfind("nav-", 0) == 0) {  // a directions clip: ready to play (if it's still this route's)
-    const int i = atoi(w.key.c_str() + w.key.rfind('-') + 1);
-    if (trip.active && w.key == navKey(i)) trip.clips.recorded(i);
+  int navStep = 0;
+  bool navMid = false;
+  if (parseNavKey(w.key, navStep, navMid)) {  // a directions clip: ready to play (if it's still this route's)
+    if (trip.active && w.key == navKey(navStep, navMid)) navMid ? trip.clips.midRecorded(navStep) : trip.clips.recorded(navStep);
     return;
   }
   if (w.key == "timer") {
@@ -2634,11 +2642,12 @@ void pollLines() {
       for (const Topic &t : w.topics)
         if (t.kind == "alarm") lineNote = "Saving your alarm...";
       lineJob.start(w);
-      if (w.key.rfind("nav-", 0) == 0) {  // directions: the line is written already (navLinesRequest)
-        const size_t i = static_cast<size_t>(atoi(w.key.c_str() + w.key.rfind('-') + 1));
+      int navStep = 0;
+      bool navMid = false;
+      if (parseNavKey(w.key, navStep, navMid)) {  // directions: the line is written already (navLinesRequest)
         Written given;
         given.ok = true;
-        given.text = trip.lines.at(i);
+        given.text = navMid ? trip.mids.at(navStep) : trip.lines.at(navStep);
         lineNote = "Saving directions...";
         lineJob.written(given);
         return;
@@ -3035,13 +3044,33 @@ void pollTypedTurn() {
   }
 }
 
-std::string navKey(int i) {
-  return "nav-" + std::to_string(trip.route.route()) + "-" + std::to_string(i);
+// A trip's clip: "nav-<route>-<step>", a halfway remark "nav-<route>-<step>-mid".
+std::string navKey(int i, bool mid) {
+  return "nav-" + std::to_string(trip.route.route()) + "-" + std::to_string(i) + (mid ? "-mid" : "");
+}
+
+bool parseNavKey(const std::string &key, int &i, bool &mid) {
+  if (key.rfind("nav-", 0) != 0) return false;
+  mid = key.size() > 4 && key.compare(key.size() - 4, 4, "-mid") == 0;
+  const std::string base = mid ? key.substr(0, key.size() - 4) : key;
+  i = atoi(base.c_str() + base.rfind('-') + 1);
+  return true;
+}
+
+// The next clip to record: the turns ahead first, then halfway remarks (-1 = none).
+bool nextNavClip(int &i, bool &mid) {
+  i = trip.clips.nextToRecord(trip.progress.step);
+  mid = false;
+  if (i >= 0) return true;
+  i = trip.clips.nextMidToRecord(trip.progress.step);
+  mid = i >= 0;
+  return mid;
 }
 
 bool navClipsDue() {
-  return trip.active && trip.linesReady && storage::available() && canRecord() &&
-         trip.clips.nextToRecord(trip.progress.step) >= 0;
+  int i;
+  bool mid;
+  return trip.active && trip.linesReady && storage::available() && canRecord() && nextNavClip(i, mid);
 }
 
 void loadPlaceNames() {
@@ -3071,7 +3100,10 @@ void endTrip(const char *why, bool tellPhone) {
   LOGI("nav", "trip to %s ends: %s", trip.route.destination.c_str(), why);
   if (tellPhone) sendNav("nav.stop", [](JsonDocument &) {});
   if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("the trip ended");
-  for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
+  for (int i = 0; i < trip.route.count(); i++) {
+    moments::dropRecording(trip.companion, navKey(i));
+    moments::dropRecording(trip.companion, navKey(i, true));
+  }
   trip = Trip();  // an unfinished lines fetch is just never collected
   shell::bluetoothOnLock(0);
   shell::quietLockRefresh(false);
@@ -3085,7 +3117,10 @@ void startRoute(const NavRoute &r) {
   const bool again = trip.active;
   if (again) {
     if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("re-routed");
-    for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
+    for (int i = 0; i < trip.route.count(); i++) {
+      moments::dropRecording(trip.companion, navKey(i));
+      moments::dropRecording(trip.companion, navKey(i, true));
+    }
   } else {
     trip = Trip();
     trip.active = true;
@@ -3094,6 +3129,7 @@ void startRoute(const NavRoute &r) {
   trip.route = r;
   trip.clips.reset(r);
   trip.lines.clear();
+  trip.mids.clear();
   trip.linesAsked = trip.linesReady = false;
   trip.linesFetch = 0;
   trip.progress = NavProgress();
@@ -3154,7 +3190,8 @@ void pollNavAnswer() {
   navAsk = NavAsk();
 }
 
-void askRoute(const std::string &query, const std::string &mode, const std::string &callId, bool fromList) {
+void askRoute(const std::string &query, const std::string &mode, const std::string &callId, bool fromList,
+              const std::string &then = "") {
   navAsk = NavAsk();
   navAsk.active = true;
   navAsk.fromList = fromList;
@@ -3166,8 +3203,10 @@ void askRoute(const std::string &query, const std::string &mode, const std::stri
     d["req"] = navAsk.req;
     d["query"] = query;
     d["mode"] = mode;
+    if (!then.empty()) d["then"] = then;  // a stop on the way: the iPhone goes on there after arriving
   });
-  LOGI("nav", "asked the iPhone for a route to \"%s\" (%s)", query.c_str(), mode.c_str());
+  LOGI("nav", "asked the iPhone for a route to \"%s\" (%s)%s%s", query.c_str(), mode.c_str(), then.empty() ? "" : ", then ",
+       then.c_str());
 }
 
 // navigate_to / stop_navigation / find_nearby (answered later: the iPhone replies first).
@@ -3202,7 +3241,7 @@ GeminiLive::ToolAnswer navTool(const ToolCall &c) {
   if (missing) return toolError("there's no such place in the last search");
   NavMode mode = NavMode::Walking;
   parseMode(c.kind, mode);
-  askRoute(c.text, modeName(mode), c.id, false);
+  askRoute(c.text, modeName(mode), c.id, false, c.then);
   if (name != c.text) LOGI("nav", "%s = %s", c.text.c_str(), name.c_str());
   return {"", false};
 }
@@ -3249,7 +3288,11 @@ void playClip(int i, ClipPlan::Play how) {
   trip.relockAt = millis();
   if (how == ClipPlan::Play::Clip) {
     const String wav = moments::recordingPath(trip.companion, navKey(i), "wav");
-    if (player.play(wav.c_str())) return (void)LOGI("nav", "clip %d played at %d m", i, trip.progress.toTurn);
+    if (player.play(wav.c_str())) {
+      // In the history as its words: the next chat knows what it just said ("tell me more about that cafe").
+      history::append("", trip.lines.at(i), "neutral", 0, 0, "directions");
+      return (void)LOGI("nav", "clip %d played at %d m", i, trip.progress.toTurn);
+    }
   }
   const std::string written = trip.lines.at(i);
   const std::string line = written.empty() ? r.text(i) : written;
@@ -3274,6 +3317,14 @@ void onNavProgress() {
   const ClipPlan::Play play = trip.clips.onProgress(trip.progress, trip.route.mode, busy, trip.route);
   if (play == ClipPlan::Play::Drop) LOGI("nav", "step %d passed before its line could play", trip.clips.playStep());
   else if (play != ClipPlan::Play::None) playClip(trip.clips.playStep(), play);
+  else if (trip.clips.midDue(trip.progress, trip.route.mode, busy || shell::locked(), trip.route)) {  // halfway along
+    const int i = trip.clips.midStep();
+    const String wav = moments::recordingPath(trip.companion, navKey(i, true), "wav");
+    if (player.play(wav.c_str())) {
+      history::append("", trip.mids.at(i), "neutral", 0, 0, "directions");
+      LOGI("nav", "halfway remark %d played at %d m", i, trip.progress.toTurn);
+    }
+  }
   // The distance ticks along (the user: every second or two while walking, nothing at a red light): a redraw
   // when what's shown changed, at most every 1.5 s unlocked, every 2 s locked (the lock card); a turn at once.
   const bool stepChanged = trip.progress.step != trip.drawnStep;
@@ -3357,15 +3408,22 @@ void pollNav() {
         trip.linesAsked = millis() - trip.linesAt < 30000;  // once more after a quick failure, not forever
       } else {
         if (w.tokens) usage::addTokens(w.tokens, sessionKey);
-        const std::vector<std::string> lines = parseNavLines(w, trip.route);
-        trip.lines.set(lines);
+        const NavLineSet set = parseNavLines(w, trip.route);
+        trip.lines.set(set.turn);
+        trip.mids.set(set.mid);
         trip.linesReady = true;
-        int got = 0;
+        int got = 0, mids = 0;
         for (int i = 0; i < trip.route.count(); i++) {
-          got += !lines[i].empty();
-          if (trip.route.at(i).spoken() && lines[i].empty()) trip.clips.noClip(i);  // said live instead
+          got += !set.turn[i].empty();
+          mids += !set.mid[i].empty();
+          if (trip.route.at(i).spoken() && set.turn[i].empty()) trip.clips.noClip(i);  // said live instead
+          trip.clips.setMid(i, !set.mid[i].empty());
         }
-        LOGI("nav", "lines written: %d of %d", got, trip.route.count());
+        LOGI("nav", "lines written: %d of %d, %d halfway remarks", got, trip.route.count(), mids);
+        for (int i = 0; i < trip.route.count(); i++) {  // what it will say (to judge them on a walk)
+          if (!set.turn[i].empty()) LOGI("nav", "line %d: %s", i, set.turn[i].c_str());
+          if (!set.mid[i].empty()) LOGI("nav", "halfway %d: %s", i, set.mid[i].c_str());
+        }
         lineScanStale = true;
       }
     }
@@ -3456,14 +3514,22 @@ void registerNavCommands() {
   ble::on("nav.route", [](JsonObjectConst args, JsonObject reply) {
     const int req = args["req"] | 0;
     const bool reroute = args["reroute"] | false;
-    if (!(navAsk.active && !navAsk.nearby && req == navAsk.req) && !(reroute && trip.active)) {
+    const bool nextLeg = (args["continue"] | false) && navAwaitNext && millis() - navAwaitNext < 60000;
+    if (!(navAsk.active && !navAsk.nearby && req == navAsk.req) && !(reroute && trip.active) && !nextLeg) {
       reply["ok"] = false;  // nobody is waiting for it (given up, or no trip): the iPhone stops
       reply["error"] = "not wanted";
       return;
     }
     const bool ok = navPending.begin(args);
     navAsk.routeAt = millis();
-    if (ok || reroute) return;
+    if (nextLeg && !ok) {  // the way on from a stop on the way couldn't be found
+      navAwaitNext = 0;
+      queueTypedTurn("(Dotty, not the user: the way on to their next place couldn't be found: " + navPending.error +
+                         ".) Tell the user briefly and offer to try again.",
+                     "(directions)", true);
+      return;
+    }
+    if (ok || reroute || nextLeg) return;
     if (!navPending.choices.empty()) {
       std::string s = "More than one place matches:";
       for (size_t i = 0; i < navPending.choices.size(); i++)
@@ -3494,7 +3560,10 @@ void registerNavCommands() {
       return;
     }
     startRoute(done);
-    if (navAsk.fromList && navAsk.active) {
+    if (done.continues) {  // the next leg after a stop on the way
+      navAwaitNext = 0;
+      queueTypedTurn(navStartNote(done, time(nullptr)), "(directions)", true);
+    } else if (navAsk.fromList && navAsk.active) {
       navAsk = NavAsk();
       queueTypedTurn(navStartNote(done, time(nullptr)), "(directions)", true);
     } else {
@@ -3513,10 +3582,11 @@ void registerNavCommands() {
   });
   ble::on("nav.arrived", [](JsonObjectConst args, JsonObject) {
     if (!trip.active || (args["route"] | 0) != trip.route.route()) return;
-    const std::string where = trip.route.destination;
-    endTrip("arrived", false);
+    const std::string where = trip.route.destination, next = args["next"] | "";
+    endTrip(next.empty() ? "arrived" : "arrived at a stop on the way", false);
+    if (!next.empty()) navAwaitNext = millis();  // the iPhone sends the next leg (continue)
     if (shell::locked()) shell::wake();
-    queueTypedTurn(navArrivedNote(where), "(directions)", true);
+    queueTypedTurn(navArrivedNote(where, next), "(directions)", true);
   });
   ble::on("nav.ended", [](JsonObjectConst args, JsonObject) {
     if (trip.active && (args["route"] | 0) == trip.route.route()) endTrip(args["why"] | "the iPhone stopped", false);
@@ -3552,7 +3622,7 @@ void fakeTrip() {
                std::to_string(now + 360) + ",\"count\":5}");
   const char *steps[] = {
       R"("i":0,"text":"","street":"","distance":120,"arrow":"straight")",
-      R"("i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":80,"arrow":"right")",
+      R"("i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":300,"arrow":"right","poi":"Cafe Nicola, a cafe, on your left")",
       R"("i":2,"text":"Take the 2nd exit at the roundabout onto Rua do Ouro","street":"Rua do Ouro","distance":150,"arrow":"roundabout","exit":2)",
       R"("i":3,"text":"Turn slightly left onto Praca da Figueira","street":"Praca da Figueira","distance":100,"arrow":"slight-left")",
       R"("i":4,"text":"Arrive at Rossio","street":"","distance":0,"arrow":"arrive")"};

@@ -21,6 +21,7 @@ struct NavStepInfo: Sendable {
     let arrow: NavArrow
     let exit: Int?
     let point: CLLocationCoordinate2D  // the turn: the start of this step's line
+    var poi: String? = nil             // a place passed there ("Cafe Nicola, a cafe, on your left")
 }
 
 /// Directions maths, kept pure for the Swift checks (directions plan, Task 8): arrows from the route's
@@ -136,6 +137,14 @@ enum RouteGeometry {
     nonisolated static func progressDue(stepChanged: Bool, metresChanged: Int, mode: NavMode, sinceLast: TimeInterval) -> Bool {
         let threshold = mode == .driving ? 10 : mode == .cycling ? 5 : 2
         return stepChanged || (abs(metresChanged) >= threshold && sinceLast >= 1) || sinceLast >= 15
+    }
+
+    /// Which side something is on for someone heading `heading` (degrees): "on your left", "on your right", "just ahead".
+    nonisolated static func sideWords(heading: Double, toward: Double) -> String {
+        var d = toward - heading
+        while d > 180 { d -= 360 }
+        while d < -180 { d += 360 }
+        return abs(d) < 20 ? "just ahead" : d > 0 ? "on your right" : "on your left"
     }
 
     nonisolated static func directionWords(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> String {

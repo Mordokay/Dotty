@@ -24,6 +24,7 @@ final class NavigationService: NSObject {
         var sentAt = Date.distantPast
         var offSince: Date?
         var lastReroute = Date.distantPast
+        var then: String?  // a stop on the way: where to go on to after arriving
         var left: Double = 0
         var eta = Date()
     }
@@ -87,7 +88,9 @@ final class NavigationService: NSObject {
         let req = m["req"] as? Int ?? 0
         let mode = NavMode(rawValue: m["mode"] as? String ?? "walking") ?? .walking
         switch m.event {
-        case "nav.request": Task { await request(req: req, query: m["query"] as? String ?? "", mode: mode) }
+        case "nav.request":
+            let then = (m["then"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            Task { await request(req: req, query: m["query"] as? String ?? "", mode: mode, then: then) }
         case "nav.nearby": Task { await nearby(req: req, what: m["what"] as? String ?? "", mode: mode) }
         case "nav.stop":
             if req > 0 { abandoned.insert(req) }  // a request still being worked out: don't start it
@@ -98,48 +101,83 @@ final class NavigationService: NSObject {
 
     // MARK: - Finding the place and the way
 
-    private func request(req: Int, query: String, mode: NavMode) async {
-        log("request \(req): \"\(query)\" (\(mode.rawValue))")
+    private enum Resolved {
+        case found(MKMapItem, String)
+        case choices([(name: String, distance: Int)])
+        case failed(String)
+    }
+
+    /// A saved place, a find_nearby result ("nearby 2"), else Apple Maps around you (asking which one when
+    /// two with the same name are far apart, unless `allowChoices` is off: then the nearest).
+    private func resolve(_ query: String, from: CLLocation, allowChoices: Bool) async -> Resolved {
+        let lower = query.lowercased()
+        if lower.hasPrefix("nearby "), let n = Int(lower.dropFirst(7)) {  // a find_nearby result
+            guard n >= 1, n <= lastNearby.count else { return .failed("that nearby place isn't known any more: search again") }
+            return .found(lastNearby[n - 1], lastNearby[n - 1].name ?? query)
+        }
+        if let saved = PlacesStore.shared.match(query) {
+            return .found(MKMapItem(location: CLLocation(latitude: saved.latitude, longitude: saved.longitude), address: nil), saved.name)
+        }
+        let search = MKLocalSearch.Request()
+        search.naturalLanguageQuery = query
+        search.region = MKCoordinateRegion(center: from.coordinate, latitudinalMeters: 40_000, longitudinalMeters: 40_000)
+        guard let items = try? await MKLocalSearch(request: search).start().mapItems, !items.isEmpty else {
+            return .failed("nothing called \"\(query)\" was found nearby")
+        }
+        let nearestWanted = !allowChoices || ["nearest", "closest", "nearby", "near me"].contains { lower.contains($0) }
+        let sameName = items.filter { ($0.name ?? "").lowercased() == (items[0].name ?? "").lowercased() }
+        let spread = sameName.count >= 2 && sameName[0].location.distance(from: sameName[1].location) > 300
+        if spread && !nearestWanted {  // which one? the companion asks
+            return .choices(NearbySearch.nearest(sameName, distance: { $0.location.distance(from: from) })
+                .prefix(3).map { (name: ($0.name ?? query) + (street($0).isEmpty ? "" : " on " + street($0)),
+                                 distance: Int($0.location.distance(from: from))) })
+        }
+        let target = nearestWanted ? NearbySearch.nearest(items, distance: { $0.location.distance(from: from) })[0] : items[0]
+        return .found(target, target.name ?? query)
+    }
+
+    /// Dotty asks: a route to `query`; `then` = where to go on to after it (a stop on the way).
+    private func request(req: Int, query: String, mode: NavMode, then: String?) async {
+        log("request \(req): \"\(query)\" (\(mode.rawValue))" + (then.map { ", then \"\($0)\"" } ?? ""))
         let background = UIApplication.shared.beginBackgroundTask(withName: "nav-request")
         defer { UIApplication.shared.endBackgroundTask(background) }
         guard authorized() else {
             return await fail(req, "location isn't allowed for the Dotty app: it needs \"Always\" (Settings › Dotty › Location)")
         }
         guard let from = await fix() else { return await fail(req, "the iPhone couldn't tell where it is") }
-        let target: MKMapItem
-        let name: String
-        let lower = query.lowercased()
-        if lower.hasPrefix("nearby "), let n = Int(lower.dropFirst(7)) {  // a find_nearby result
-            guard n >= 1, n <= lastNearby.count else { return await fail(req, "that nearby place isn't known any more: search again") }
-            target = lastNearby[n - 1]
-            name = target.name ?? query
-        } else if let saved = PlacesStore.shared.match(query) {
-            target = MKMapItem(location: CLLocation(latitude: saved.latitude, longitude: saved.longitude), address: nil)
-            name = saved.name
-        } else {
-            let search = MKLocalSearch.Request()
-            search.naturalLanguageQuery = query
-            search.region = MKCoordinateRegion(center: from.coordinate, latitudinalMeters: 40_000, longitudinalMeters: 40_000)
-            guard let items = try? await MKLocalSearch(request: search).start().mapItems, !items.isEmpty else {
-                return await fail(req, "nothing called \"\(query)\" was found nearby")
+        switch await resolve(query, from: from, allowChoices: true) {
+        case .failed(let why): return await fail(req, why)
+        case .choices(let choices): return await send([NavMessages.failure(req: req, route: nextRoute(), error: nil, choices: choices)])
+        case .found(let target, let name):
+            guard let route = await directions(from: from.coordinate, to: target, mode: mode) else {
+                return await fail(req, "no \(mode.rawValue) route was found to \(name)")
             }
-            let nearestWanted = ["nearest", "closest", "nearby", "near me"].contains { lower.contains($0) }
-            let sameName = items.filter { ($0.name ?? "").lowercased() == (items[0].name ?? "").lowercased() }
-            let spread = sameName.count >= 2 && sameName[0].location.distance(from: sameName[1].location) > 300
-            if spread && !nearestWanted {  // which one? the companion asks
-                let choices = NearbySearch.nearest(sameName, distance: { $0.location.distance(from: from) })
-                    .prefix(3).map { (name: ($0.name ?? query) + (street($0).isEmpty ? "" : " on " + street($0)),
-                                     distance: Int($0.location.distance(from: from))) }
-                return await send([NavMessages.failure(req: req, route: nextRoute(), error: nil, choices: Array(choices))])
-            }
-            target = nearestWanted ? NearbySearch.nearest(items, distance: { $0.location.distance(from: from) })[0] : items[0]
-            name = target.name ?? query
+            guard !abandoned.contains(req) else { return log("request \(req) was given up on by Dotty") }
+            start(route: route, req: req, name: name, target: target.location.coordinate, mode: mode, reroute: false,
+                  then: then, continuing: false)
+        }
+    }
+
+    /// Arrived at a stop on the way: the next leg, from here, on its own (Dotty waits for it: continue).
+    private func continueTo(_ next: String, mode: NavMode) async {
+        let background = UIApplication.shared.beginBackgroundTask(withName: "nav-continue")
+        defer { UIApplication.shared.endBackgroundTask(background) }
+        guard let from = await fix() else { return await failNext("the iPhone couldn't tell where it is") }
+        guard case .found(let target, let name) = await resolve(next, from: from, allowChoices: false) else {
+            return await failNext("\(next) couldn't be found")
         }
         guard let route = await directions(from: from.coordinate, to: target, mode: mode) else {
-            return await fail(req, "no \(mode.rawValue) route was found to \(name)")
+            return await failNext("no \(mode.rawValue) route was found to \(name)")
         }
-        guard !abandoned.contains(req) else { return log("request \(req) was given up on by Dotty") }
-        start(route: route, req: req, name: name, target: target.location.coordinate, mode: mode, reroute: false)
+        start(route: route, req: 0, name: name, target: target.location.coordinate, mode: mode, reroute: false, then: nil,
+              continuing: true)
+    }
+
+    private func failNext(_ why: String) async {
+        log("next leg failed: \(why)")
+        var m = NavMessages.failure(req: 0, route: nextRoute(), error: why, choices: [])
+        m["continue"] = true
+        await send([m])
     }
 
     private func directions(from: CLLocationCoordinate2D, to: MKMapItem, mode: NavMode) async -> MKRoute? {
@@ -160,20 +198,83 @@ final class NavigationService: NSObject {
         return routeCounter
     }
 
-    private func start(route: MKRoute, req: Int, name: String, target: CLLocationCoordinate2D, mode: NavMode, reroute: Bool) {
-        let steps = RouteGeometry.steps(from: route)
+    private func start(route: MKRoute, req: Int, name: String, target: CLLocationCoordinate2D, mode: NavMode, reroute: Bool,
+                       then: String? = nil, continuing: Bool = false) {
+        let keepThen = reroute ? trip?.then : then  // a re-route keeps the stop on the way
+        Task {
+            let line = route.polyline.coordinates
+            let plain = RouteGeometry.steps(from: route)
+            let turns = plain.map { RouteGeometry.project(line, $0.point).segment + (RouteGeometry.project(line, $0.point).t > 0.5 ? 1 : 0) }
+            // Both at once, each at most ~3 s: places at the turns ("to your left is a lovely cafe") and the weather.
+            async let withPlaces = Self.placesAtTurns(plain, line: line, turns: turns)
+            async let weather = reroute ? nil : NavWeather.fetch(at: line.first ?? target)
+            let steps = await withPlaces
+            begin(route: route, steps: steps, turns: turns, req: req, name: name, target: target, mode: mode, reroute: reroute,
+                  then: keepThen, continuing: continuing, weather: await weather)
+        }
+    }
+
+    /// A notable place within ~60 m of each turn and which side it's on, for the companion to mention now and
+    /// then (the user's ask). At most 3 s: the route isn't held up by it.
+    private nonisolated static func placesAtTurns(_ steps: [NavStepInfo], line: [CLLocationCoordinate2D], turns: [Int]) async -> [NavStepInfo] {
+        var out = steps
+        let found: [(Int, String)] = await withTaskGroup(of: [(Int, String)].self) { outer in
+            outer.addTask {
+                await withTaskGroup(of: (Int, String?).self) { group in
+                    for i in steps.indices where !steps[i].text.isEmpty && steps[i].arrow != .arrive && i < 16 {
+                        let k = turns[i]
+                        let heading = k > 0 && k < line.count ? RouteGeometry.bearing(line[k - 1], line[k])
+                            : k + 1 < line.count ? RouteGeometry.bearing(line[k], line[k + 1]) : 0
+                        let point = steps[i].point
+                        group.addTask { (i, await placeNear(point, heading: heading)) }
+                    }
+                    var list: [(Int, String)] = []
+                    for await (i, poi) in group { if let poi { list.append((i, poi)) } }
+                    return list
+                }
+            }
+            outer.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return []
+            }
+            let first = await outer.next() ?? []
+            outer.cancelAll()
+            return first
+        }
+        for (i, poi) in found { out[i].poi = poi }
+        return out
+    }
+
+    private nonisolated static func placeNear(_ point: CLLocationCoordinate2D, heading: Double) async -> String? {
+        let request = MKLocalPointsOfInterestRequest(center: point, radius: 60)
+        request.pointOfInterestFilter = MKPointOfInterestFilter(including: [.restaurant, .cafe, .bakery, .museum, .park,
+                                                                            .theater, .nightlife, .landmark, .castle])
+        guard let items = try? await MKLocalSearch(request: request).start().mapItems else { return nil }
+        let here = CLLocation(latitude: point.latitude, longitude: point.longitude)
+        guard let best = items.min(by: { $0.location.distance(from: here) < $1.location.distance(from: here) }),
+              let name = best.name else { return nil }
+        let kind = NearbySearch.name(best.pointOfInterestCategory).lowercased()
+        let side = RouteGeometry.sideWords(heading: heading, toward: RouteGeometry.bearing(point, best.location.coordinate))
+        return kind.isEmpty ? "\(name), \(side)" : "\(name), a \(kind), \(side)"
+    }
+
+    private func begin(route: MKRoute, steps: [NavStepInfo], turns: [Int], req: Int, name: String, target: CLLocationCoordinate2D,
+                       mode: NavMode, reroute: Bool, then: String?, continuing: Bool, weather: String?) {
+        guard !abandoned.contains(req) || reroute else { return log("request \(req) was given up on by Dotty") }
         let line = route.polyline.coordinates
-        let turns = steps.map { step in RouteGeometry.project(line, step.point).segment + (RouteGeometry.project(line, step.point).t > 0.5 ? 1 : 0) }
         var t = Trip(route: nextRoute(), mode: mode, destination: name, target: target, line: line, turns: turns, steps: steps,
                      totalTime: route.expectedTravelTime, totalDistance: route.distance)
         t.step = RouteGeometry.firstSpoken(steps.map(\.text))
+        t.then = then
         t.left = route.distance
         t.eta = Date().addingTimeInterval(route.expectedTravelTime)
         if trip != nil { t.lastReroute = Date() }  // replacing a route: the next re-route waits its 20 s
         trip = t
         log("\(reroute ? "re-route" : "route") \(t.route) to \(name): \(steps.count) steps, \(Int(route.distance)) m")
-        let messages = NavMessages.route(req: reroute ? 0 : req, route: t.route, destination: name, mode: mode,
+        var messages = NavMessages.route(req: reroute ? 0 : req, route: t.route, destination: name, mode: mode,
                                          distance: Int(route.distance), eta: localEpoch(t.eta), steps: steps, reroute: reroute)
+        if continuing { messages[0]["continue"] = true }  // the next leg after a stop on the way
+        if let weather { messages[0]["weather"] = weather }
         Task { await send(messages) }
         follow()
     }
@@ -293,10 +394,15 @@ final class NavigationService: NSObject {
         }
         // Arrived?
         if RouteGeometry.arrived(toTarget: RouteGeometry.distance(p, t.target), leftAlong: leftAlong, mode: t.mode) {
-            let route = t.route
-            log("arrived at \(t.destination)")
+            let route = t.route, next = t.then, mode = t.mode
+            log("arrived at \(t.destination)" + (next.map { ", next \($0)" } ?? ""))
             finish()
-            Task { await send([["cmd": "nav.arrived", "route": route]]) }
+            Task {
+                var arrived: [String: Any] = ["cmd": "nav.arrived", "route": route]
+                if let next { arrived["next"] = next }
+                await send([arrived])
+                if let next { await continueTo(next, mode: mode) }  // the next leg, on its own
+            }
             return
         }
         // The next turn: the first step whose turn lies ahead of where you are on the line.

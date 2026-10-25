@@ -34,6 +34,7 @@ struct ToolCall {
   std::string id, name, mood, text, group;
   std::string field, why;  // evolve (its value travels as the text)
   std::string from, to;    // recall's dates (its question travels as the text, its topic as the group)
+  std::string then;        // navigate_to: a place to go on to after this one (a stop on the way)
   int memoryId = -1;
   int seconds = 0;  // long_reply
   int resultId = -1;  // set by Dotty: the memory remember created, sent back so the model can name it

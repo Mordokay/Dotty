@@ -21,10 +21,10 @@ int main() {
   NavRoute r;
   {
     JsonDocument head = parse(R"({"req":1,"route":3,"ok":true,"destination":"Rossio","mode":"walking","distance":1400,"eta":)" +
-                              std::to_string(now + 18 * 60) + R"(,"count":3})");
+                              std::to_string(now + 18 * 60) + R"j(,"count":3,"weather":"14 C, cloudy; rain likely within the hour (70%)"})j");
     r.begin(head.as<JsonObjectConst>());
     for (const char *s : {R"({"route":3,"i":0,"text":"","street":"","distance":0,"arrow":"straight"})",
-                          R"({"route":3,"i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":300,"arrow":"right"})",
+                          R"({"route":3,"i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":300,"arrow":"right","poi":"Cafe Nicola, a cafe, on your left"})",
                           R"({"route":3,"i":2,"text":"Arrive at Rossio","street":"","distance":200,"arrow":"arrive"})"}) {
       JsonDocument d = parse(s);
       r.step(d.as<JsonObjectConst>());
@@ -36,24 +36,35 @@ int main() {
     JsonDocument d = parse(navLinesRequest(who, "- Likes horses", r));
     const std::string sys = d["systemInstruction"]["parts"][0]["text"] | "";
     const std::string text = d["contents"][0]["parts"][0]["text"] | "";
-    CHECK("request: one line per step, instruction first, trigger distance, <= 20 words",
-          has(sys, "instruction first") && has(text, "40 metres") && has(sys, "20 words") && has(text, "Rua Augusta") &&
+    CHECK("request: one line per step, instruction first, trigger distance, <= 40 words",
+          has(sys, "instruction first") && has(text, "40 metres") && has(sys, "40 words") && has(text, "Rua Augusta") &&
               has(sys, "JSON array of 2"));
+    CHECK("request: the weather, woven in now and then", has(text, "rain likely within the hour") && has(sys, "weather"));
+    CHECK("request: a place passed goes with its step", has(text, "passing: Cafe Nicola, a cafe, on your left"));
     CHECK("request: in character with memories", has(sys, "Percival") && has(sys, "Likes horses"));
     CHECK("request: JSON answer", std::string(d["generationConfig"]["responseMimeType"] | "") == "application/json");
+    CHECK("request: varied and spontaneous (the user: always \"my king\", the same things)",
+          has(sys, "different") && has(sys, "at most twice") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
+    CHECK("request: halfway remarks on long stretches", has(sys, "\"mid\"") && has(sys, "halfway"));
+    CHECK("request: places passed, mentioned now and then, never invented", has(sys, "never invent") && has(sys, "now and then"));
   }
   {
     Written ok3{true, R"(["Right onto Rua Augusta, my lord!","Here we are!"])", "", 0};
     Written fenced{true, "```json\n[\"a\",\"b\"]\n```", "", 0};
     Written ok1{true, R"(["only one"])", "", 0};
     Written failed;
-    const std::vector<std::string> lines = parseNavLines(ok3, r);
-    CHECK("parse: one line per spoken step, empty for the unspoken", lines.size() == 3 && lines[0].empty() &&
-                                                                          lines[1] == "Right onto Rua Augusta, my lord!" &&
-                                                                          lines[2] == "Here we are!");
-    CHECK("parse: code fences tolerated", parseNavLines(fenced, r)[2] == "b");
-    CHECK("parse: a short array leaves the rest empty", parseNavLines(ok1, r)[1] == "only one" && parseNavLines(ok1, r)[2].empty());
-    CHECK("parse: failed write -> all empty", parseNavLines(failed, r) == std::vector<std::string>(3));
+    const NavLineSet lines = parseNavLines(ok3, r);
+    CHECK("parse: one line per spoken step, empty for the unspoken", lines.turn.size() == 3 && lines.turn[0].empty() &&
+                                                                          lines.turn[1] == "Right onto Rua Augusta, my lord!" &&
+                                                                          lines.turn[2] == "Here we are!");
+    CHECK("parse: code fences tolerated", parseNavLines(fenced, r).turn[2] == "b");
+    CHECK("parse: a short array leaves the rest empty", parseNavLines(ok1, r).turn[1] == "only one" && parseNavLines(ok1, r).turn[2].empty());
+    CHECK("parse: failed write -> all empty", parseNavLines(failed, r).turn == std::vector<std::string>(3));
+    Written objects{true, R"([{"turn":"Right onto Rua Augusta.","mid":"Feeling tired yet?"},{"turn":"Here we are!","mid":"x"}])", "", 0};
+    const NavLineSet o = parseNavLines(objects, r);
+    // r's step 1 follows a 0 m stretch (not long): its halfway remark is dropped; the arrival's follows 300 m: kept.
+    CHECK("parse: turn + mid objects, mid kept only on long stretches", o.turn[1] == "Right onto Rua Augusta." &&
+                                                                           o.mid.size() == 3 && o.mid[1].empty() && o.mid[2] == "x");
   }
   {
     const std::string s = navStartNote(r, now);
@@ -62,6 +73,9 @@ int main() {
     CHECK("reroute note: off the route, the new first step", has(navRerouteNote(r), "off the route") &&
                                                                  has(navRerouteNote(r), "Turn right onto Rua Augusta"));
     CHECK("arrived note", has(navArrivedNote("Rossio"), "arrived") && has(navArrivedNote("Rossio"), "Rossio"));
+    CHECK("arrived at a stop on the way: what's next", has(navArrivedNote("the pharmacy", "the shopping mall"), "the pharmacy") &&
+                                                           has(navArrivedNote("the pharmacy", "the shopping mall"), "next") &&
+                                                           has(navArrivedNote("the pharmacy", "the shopping mall"), "the shopping mall"));
   }
   {
     NavProgress p;

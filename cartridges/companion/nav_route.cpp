@@ -32,6 +32,14 @@ bool parseArrow(const std::string &name, Arrow &out) {
   return false;
 }
 
+int longStretch(NavMode m) {
+  return m == NavMode::Driving ? 2000 : m == NavMode::Cycling ? 600 : 250;
+}
+
+int stretchBefore(const NavRoute &r, int i) {
+  return i > 0 && i < r.count() ? r.at(i - 1).distance : 0;
+}
+
 int triggerMetres(NavMode m) {
   return m == NavMode::Driving ? 300 : m == NavMode::Cycling ? 100 : 40;
 }
@@ -39,11 +47,13 @@ int triggerMetres(NavMode m) {
 NavRoute &NavRoute::operator=(const NavRoute &o) {
   if (this == &o) return *this;
   destination = o.destination;
+  weather = o.weather;
   error = o.error;
   mode = o.mode;
   distance = o.distance;
   eta = o.eta;
   reroute = o.reroute;
+  continues = o.continues;
   choices = o.choices;
   route_ = o.route_;
   req_ = o.req_;
@@ -73,6 +83,8 @@ bool NavRoute::begin(JsonObjectConst msg) {
   distance = msg["distance"] | 0;
   eta = msg["eta"] | static_cast<int64_t>(0);
   reroute = msg["reroute"] | false;
+  continues = msg["continue"] | false;
+  weather = msg["weather"] | "";
   count_ = msg["count"] | 0;
   if (count_ < 0 || count_ > 200) count_ = 0;
   steps_.reserve(std::max(kStepsReserved, static_cast<size_t>(count_)));
@@ -91,6 +103,10 @@ bool NavRoute::step(JsonObjectConst msg) {
   s.streetAt = static_cast<uint32_t>(buffer_.size());
   s.streetLen = static_cast<uint32_t>(street.size());
   buffer_ += street;
+  const std::string poi = msg["poi"] | "";
+  s.poiAt = static_cast<uint32_t>(buffer_.size());
+  s.poiLen = static_cast<uint32_t>(poi.size());
+  buffer_ += poi;
   s.distance = msg["distance"] | 0;
   parseArrow(msg["arrow"] | "straight", s.arrow);
   s.exit = msg["exit"] | 0;
@@ -118,6 +134,11 @@ std::string NavRoute::text(int i) const {
   return buffer_.substr(steps_[i].textAt, steps_[i].textLen);
 }
 
+std::string NavRoute::poi(int i) const {
+  if (i < 0 || i >= count_) return "";
+  return buffer_.substr(steps_[i].poiAt, steps_[i].poiLen);
+}
+
 std::string NavRoute::street(int i) const {
   if (i < 0 || i >= count_) return "";
   return buffer_.substr(steps_[i].streetAt, steps_[i].streetLen);
@@ -139,6 +160,10 @@ void ClipPlan::reset(const NavRoute &r) {
   ready_.assign(n, false);
   played_.assign(n, false);
   noClip_.assign(n, false);
+  hasMid_.assign(n, false);
+  midReady_.assign(n, false);
+  midPlayed_.assign(n, false);
+  midStep_ = -1;
   for (int i = 0; i < n; i++) spoken_[i] = r.at(i).spoken();
   step_ = playStep_ = -1;
   due_ = false;
@@ -157,6 +182,31 @@ int ClipPlan::nextToRecord(int currentStep) const {
 
 void ClipPlan::recorded(int i) {
   if (i >= 0 && i < static_cast<int>(ready_.size())) ready_[i] = true;
+}
+
+void ClipPlan::setMid(int i, bool hasLine) {
+  if (i >= 0 && i < static_cast<int>(hasMid_.size())) hasMid_[i] = hasLine;
+}
+
+int ClipPlan::nextMidToRecord(int currentStep) const {
+  const int n = static_cast<int>(hasMid_.size());
+  for (int i = currentStep < 0 ? 0 : currentStep; i < n && i < currentStep + 3; i++)
+    if (hasMid_[i] && !midReady_[i] && !midPlayed_[i]) return i;
+  return -1;
+}
+
+void ClipPlan::midRecorded(int i) {
+  if (i >= 0 && i < static_cast<int>(midReady_.size())) midReady_[i] = true;
+}
+
+bool ClipPlan::midDue(const NavProgress &p, NavMode mode, bool busy, const NavRoute &r) {
+  const int i = p.step;
+  if (i < 0 || i >= static_cast<int>(hasMid_.size()) || !hasMid_[i] || !midReady_[i] || midPlayed_[i] || busy) return false;
+  const int stretch = stretchBefore(r, i);
+  if (stretch < longStretch(mode) || p.toTurn > stretch / 2 || p.toTurn <= triggerMetres(mode) + 30) return false;
+  midPlayed_[i] = true;
+  midStep_ = i;
+  return true;
 }
 
 void ClipPlan::noClip(int i) {
