@@ -39,7 +39,7 @@ int main() {
     const std::string sys = d["systemInstruction"]["parts"][0]["text"] | "";
     const std::string text = d["contents"][0]["parts"][0]["text"] | "";
     CHECK("request: one line per step, the instruction at the start, middle or end, <= 40 words",
-          has(sys, "the start, the middle or the end") && has(sys, "no distance") && has(text, "40 metres") && has(sys, "40 words") && has(text, "Rua Augusta") &&
+          has(sys, "the start, the middle or the end") && has(sys, "no distance") && has(text, "said " + std::to_string(triggerFor(r, 1)) + " metres before") && has(sys, "40 words") && has(text, "Rua Augusta") &&
               has(sys, "JSON array of 2"));
     CHECK("request: the weather, woven in now and then", has(text, "rain likely within the hour") && has(sys, "weather"));
     CHECK("request: a place passed goes with its step", has(text, "passing: Cafe Nicola, a cafe, on your left"));
@@ -48,7 +48,7 @@ int main() {
     CHECK("request: varied and spontaneous (the user: always \"my king\", the same things)",
           has(sys, "different") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
     CHECK("request: only the first and last lines may address the user (titles were in every line)",
-          has(sys, "Only lines 1 and 2 may"));
+          has(sys, "Only lines 1 and 2 may") && has(sys, "every remark speaks without any title"));
     {  // two topics a trip, from the route number: trips differ from each other (pigeons every time)
       NavRoute other = r;
       JsonDocument h2 = parse(R"({"req":1,"route":4,"ok":true,"destination":"Rossio","mode":"walking","distance":1400,"eta":1,"count":3})");
@@ -70,7 +70,9 @@ int main() {
     }
     CHECK("request: no example sentences to parrot (it copied the pigeon word for word)",
           !has(sys, "pigeon") && !has(sys, "madmen") && has(sys, "Invent your own"));
-    CHECK("request: halfway remarks on long stretches", has(sys, "\"mid\"") && has(sys, "halfway"));
+    CHECK("request: an exact number of remarks per stretch (the user: more than one on a long stretch)",
+          has(sys, "\"remarks\"") && remarkPoints(r, 2).size() >= 3 &&
+              has(text, "remarks: " + std::to_string(remarkPoints(r, 2).size())));
     CHECK("request: places passed, mentioned now and then, never invented", has(sys, "never invent") && has(sys, "now and then"));
   }
   {
@@ -85,11 +87,15 @@ int main() {
     CHECK("parse: code fences tolerated", parseNavLines(fenced, r).turn[2] == "b");
     CHECK("parse: a short array leaves the rest empty", parseNavLines(ok1, r).turn[1] == "only one" && parseNavLines(ok1, r).turn[2].empty());
     CHECK("parse: failed write -> all empty", parseNavLines(failed, r).turn == std::vector<std::string>(3));
-    Written objects{true, R"([{"turn":"Right onto Rua Augusta.","mid":"Feeling tired yet?"},{"turn":"Here we are!","mid":"x"}])", "", 0};
+    Written objects{true, R"([{"turn":"Right onto Rua Augusta.","remarks":["Feeling tired yet?"]},{"turn":"Here we are!","remarks":["a","b","c","d","e"]}])", "", 0};
     const NavLineSet o = parseNavLines(objects, r);
-    // r's step 1 follows a 0 m stretch (not long): its halfway remark is dropped; the arrival's follows 300 m: kept.
-    CHECK("parse: turn + mid objects, mid kept only on long stretches", o.turn[1] == "Right onto Rua Augusta." &&
-                                                                           o.mid.size() == 3 && o.mid[1].empty() && o.mid[2] == "x");
+    // r's step 1 follows a 0 m stretch (no remark points): its remark is dropped; step 2 keeps as many as it has points.
+    CHECK("parse: turn + remarks, as many as the stretch's points", o.turn[1] == "Right onto Rua Augusta." &&
+                                                                       o.remarks.size() == 3 && o.remarks[1].empty() &&
+                                                                       o.remarks[2].size() == remarkPoints(r, 2).size() &&
+                                                                       o.remarks[2][0] == "a");
+    Written old{true, R"([{"turn":"x"},{"turn":"y","mid":"Thirsty?"}])", "", 0};
+    CHECK("parse: a single \"mid\" counts as the first remark", parseNavLines(old, r).remarks[2].at(0) == "Thirsty?");
   }
   {
     const std::string s = navStartNote(r, now);

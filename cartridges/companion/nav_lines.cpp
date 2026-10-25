@@ -60,7 +60,6 @@ std::string navTripTopics(int route) {
 
 std::string navLinesRequest(const Profile &who, const std::string &memorySection, const NavRoute &r) {
   const std::string name = who.awake() ? who.name : "the companion";
-  const int trigger = triggerMetres(r.mode);
   int spoken = 0;
   std::string steps;
   for (int i = 0; i < r.count(); i++) {
@@ -71,17 +70,18 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
     if (!r.poi(i).empty()) steps += "; passing: " + r.poi(i);
     const int stretch = stretchBefore(r, i);
     if (stretch > 0) steps += "; walked before it: " + distanceWords(stretch);
-    if (stretch >= longStretch(r.mode)) steps += " (long: a halfway remark is possible)";
+    steps += "; said " + std::to_string(triggerFor(r, i)) + " metres before it";
+    steps += "; remarks: " + std::to_string(remarkPoints(r, i).size());
     steps += "\n";
   }
   std::string system = writerCharacter(who, memorySection);
   system += " " + name + " is guiding the user (" + std::string(modeName(r.mode)) + ") to " + r.destination +
             ". Write a JSON array of " + std::to_string(spoken) +
-            " objects, one per step in order: {\"turn\": the line said about " + std::to_string(trigger) +
-            " metres before that step, \"mid\": a halfway remark or \"\"}. Each turn line: the instruction, plain and "
+            " objects, one per step in order: {\"turn\": the line said the given metres before that step, "
+            "\"remarks\": exactly the given number of remarks, in order}. Each turn line: the instruction, plain and "
             "clear, and around it something spontaneous and fun in " + name + "'s own voice. Vary where the "
             "instruction sits: the start, the middle or the end of the line. At the start it may say the distance "
-            "(\"In about " + std::to_string(trigger) + " metres, turn left onto Rua Augusta\"); in the middle or at the "
+            "(\"In about 50 metres, turn left onto Rua Augusta\", with that step's own metres); in the middle or at the "
             "end, no distance (\"turn left at the next corner\", \"the left turn coming up\"). Every line different "
             "in kind: an odd "
             "little thing you just noticed (made up, playful), a warning, a joke, encouragement, a thought about the "
@@ -89,20 +89,19 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
             "sentence, a joke, an image or a sign-off from one line in another. " +
             (spoken > 1 ? "Only lines 1 and " + std::to_string(spoken) + " may" : std::string("Only line 1 may")) +
             " call the user by a title or pet name (whatever your character usually calls them); every other line "
-            "speaks without any form of address. When a step says "
+            "and every remark speaks without any title or form of address (no majesty, no my lord). When a step says "
             "what you pass there, mention it now and then (not every time), as a friend would; only those places, "
             "never invent a place or a name. When the weather is given, let it colour a line or two, never every "
-            "line. At most 40 words a line. \"mid\" only for steps marked long, on about half of them: something said "
-            "halfway along that stretch, like a friend walking alongside (how they're doing, a drink, a rest), at "
-            "most 15 words, no directions in it; else \"\". The last step is "
+            "line. At most 40 words a line. Remarks are said one after another along the stretch walked before that step's turn, like a friend walking "
+            "alongside: how they're doing, a drink, a rest, something seen, a thought, a question; at most 20 words "
+            "each, no directions in them, each one different. The last step is "
             "the arrival. Spoken English, first person, no emoji or stage directions. Only the JSON array.";
   JsonDocument doc;
   doc["systemInstruction"]["parts"][0]["text"] = system;
   doc["contents"][0]["role"] = "user";
   doc["contents"][0]["parts"][0]["text"] = "Going to " + r.destination + " (" + distanceWords(r.distance) + ")." +
                                            (r.weather.empty() ? std::string() : " The weather: " + r.weather + ".") +
-                                           " Each turn line is said " + std::to_string(trigger) +
-                                           " metres before its step. The steps:\n" + steps;
+                                           " The steps:\n" + steps;
   doc["generationConfig"]["maxOutputTokens"] = 200 + 150 * spoken;
   doc["generationConfig"]["temperature"] = 1.1;  // spontaneous, not samey
   doc["generationConfig"]["responseMimeType"] = "application/json";
@@ -114,7 +113,7 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
 NavLineSet parseNavLines(const Written &w, const NavRoute &r) {
   NavLineSet out;
   out.turn.assign(r.count(), "");
-  out.mid.assign(r.count(), "");
+  out.remarks.assign(r.count(), {});
   if (!w.ok) return out;
   std::string text = w.text;
   const size_t open = text.find('['), close = text.rfind(']');  // code fences and chatter around the array
@@ -132,7 +131,10 @@ NavLineSet parseNavLines(const Written &w, const NavRoute &r) {
       continue;
     }
     out.turn[i] = item["turn"] | "";
-    if (stretchBefore(r, i) >= longStretch(r.mode)) out.mid[i] = item["mid"] | "";
+    const size_t want = remarkPoints(r, i).size();
+    for (JsonVariantConst m : item["remarks"].as<JsonArrayConst>())
+      if (out.remarks[i].size() < want && m.is<const char *>()) out.remarks[i].push_back(m.as<const char *>());
+    if (out.remarks[i].empty() && want && item["mid"].is<const char *>()) out.remarks[i].push_back(item["mid"].as<const char *>());
   }
   return out;
 }

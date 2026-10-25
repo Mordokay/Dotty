@@ -15,13 +15,14 @@
 // instruction says about places and a trip, and the answers about places nearby. Plain C++ (host-tested).
 
 // One generateContent body asking for a JSON array: per spoken step a turn line (the instruction first and
-// clear, then something different each time: a made-up observation, a warning, a joke... the user found
-// them samey) and, on about half the long stretches, a halfway remark ("feeling tired yet?").
+// clear, anywhere in the line, then something different each time... the user found them samey), said at
+// the step's own distance (triggerFor), and the remarks along the stretch before it (remarkPoints).
 std::string navLinesRequest(const Profile &who, const std::string &memorySection, const NavRoute &r);
-// Per step (index = step; "" for an unspoken step, a missing or failed line): the turn line, and the halfway
-// remark (kept only after a long stretch).
+// Per step (index = step; "" for an unspoken step, a missing or failed line): the turn line, and the remarks
+// along the stretch before it.
 struct NavLineSet {
-  std::vector<std::string> turn, mid;
+  std::vector<std::string> turn;
+  std::vector<std::vector<std::string>> remarks;  // per step, as many as remarkPoints (fewer if it wrote fewer)
 };
 NavLineSet parseNavLines(const Written &w, const NavRoute &r);
 // Two topics for a trip's flavour, from its route number ("street life and music"): trips differ from each

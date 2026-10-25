@@ -121,7 +121,8 @@ int main() {
     plan.reset(r);
     plan.recorded(1);
     int plays = 0;
-    for (int d : {45, 38, 42, 35}) {
+    const int t1 = triggerFor(r, 1);  // the step's own distance (random 30-60 m walking)
+    for (int d : {t1 + 5, t1 - 2, t1 + 2, t1 - 5}) {
       const ClipPlan::Play p = plan.onProgress(at(1, d), NavMode::Walking, false, r);
       if (p == ClipPlan::Play::Clip || p == ClipPlan::Play::Live) plays++;
     }
@@ -131,22 +132,22 @@ int main() {
   {
     ClipPlan fresh;
     fresh.reset(r);
-    CHECK("not ready → Live", fresh.onProgress(at(2, 38), NavMode::Walking, false, r) == ClipPlan::Play::Live);
+    CHECK("not ready → Live", fresh.onProgress(at(2, 25), NavMode::Walking, false, r) == ClipPlan::Play::Live);
   }
   {
     ClipPlan plan;
     plan.reset(r);
     plan.recorded(2);
-    CHECK("busy → None, then Clip when free", plan.onProgress(at(2, 38), NavMode::Walking, true, r) == ClipPlan::Play::None &&
-                                                  plan.onProgress(at(2, 35), NavMode::Walking, false, r) == ClipPlan::Play::Clip);
+    CHECK("busy → None, then Clip when free", plan.onProgress(at(2, 25), NavMode::Walking, true, r) == ClipPlan::Play::None &&
+                                                  plan.onProgress(at(2, 24), NavMode::Walking, false, r) == ClipPlan::Play::Clip);
   }
   {
     ClipPlan plan;
     plan.reset(r);
     plan.recorded(3);
-    CHECK("a passed step's clip is dropped", plan.onProgress(at(2, 30), NavMode::Walking, true, r) == ClipPlan::Play::None &&
+    CHECK("a passed step's clip is dropped", plan.onProgress(at(2, 25), NavMode::Walking, true, r) == ClipPlan::Play::None &&
                                                  plan.onProgress(at(3, 300), NavMode::Walking, false, r) == ClipPlan::Play::Drop &&
-                                                 plan.onProgress(at(3, 30), NavMode::Walking, false, r) == ClipPlan::Play::Clip);
+                                                 plan.onProgress(at(3, 25), NavMode::Walking, false, r) == ClipPlan::Play::Clip);
   }
   {
     ClipPlan plan;
@@ -154,7 +155,7 @@ int main() {
     plan.noClip(1);  // its line came back empty: said live, the next ones still recorded
     const bool skipped = plan.nextToRecord(1) == 2;
     CHECK("a step without a line is skipped for recording and said live",
-          skipped && plan.onProgress(at(1, 30), NavMode::Walking, false, r) == ClipPlan::Play::Live);
+          skipped && plan.onProgress(at(1, 25), NavMode::Walking, false, r) == ClipPlan::Play::Live);
   }
   CHECK("the steps array past the PSRAM threshold too", r.stepBytes() > 4096);
   {
@@ -170,19 +171,29 @@ int main() {
     plan.reset(r);
     CHECK("an unspoken step never plays", plan.onProgress(at(0, 0), NavMode::Walking, false, r) == ClipPlan::Play::None);
   }
-  {  // Halfway remarks (the user, 2026-10-25): on a long stretch, once, halfway, only from a recorded clip.
+  {  // Remarks along long stretches and a turn distance that isn't always 40 m (the user, 2026-10-25)
     NavRoute w;
-    JsonDocument h = routeMsg(5, 3);
+    JsonDocument h = routeMsg(5, 4);
     w.begin(h.as<JsonObjectConst>());
-    JsonDocument a0 = stepMsg(5, 0, "Head north", "straight", 300);  // the 300 m stretch up to step 1's turn
-    JsonDocument a1 = stepMsg(5, 1, "Turn left", "left", 100);
-    JsonDocument a2 = stepMsg(5, 2, "Arrive", "arrive", 0);
-    w.step(a0.as<JsonObjectConst>());
-    w.step(a1.as<JsonObjectConst>());
-    w.step(a2.as<JsonObjectConst>());
-    CHECK("stretch before a turn, long stretches", stretchBefore(w, 1) == 300 && stretchBefore(w, 2) == 100 &&
-                                                       stretchBefore(w, 0) == 0 && longStretch(NavMode::Walking) == 250 &&
-                                                       longStretch(NavMode::Cycling) == 600 && longStretch(NavMode::Driving) == 2000);
+    JsonDocument a0 = stepMsg(5, 0, "Head north", "straight", 363);  // the 363 m stretch up to step 1's turn
+    JsonDocument a1 = stepMsg(5, 1, "Turn left", "left", 120);
+    JsonDocument a2 = stepMsg(5, 2, "Turn right", "right", 70);
+    JsonDocument a3 = stepMsg(5, 3, "Arrive", "arrive", 0);
+    for (JsonDocument *d : {&a0, &a1, &a2, &a3}) w.step(d->as<JsonObjectConst>());
+    bool inRange = true, varies = false;
+    for (int i = 0; i < 4; i++) {
+      const int t = triggerFor(w, i);
+      inRange = inRange && t >= 30 && t <= 60 && t == triggerFor(w, i);  // walking 30-60 m, the same every time asked
+      varies = varies || t != triggerFor(w, 0);
+    }
+    CHECK("turn distance: 30-60 m walking, random per step, repeatable", inRange && varies);
+    CHECK("stretch before a turn", stretchBefore(w, 1) == 363 && stretchBefore(w, 2) == 120 && stretchBefore(w, 0) == 0);
+    const std::vector<int> p1 = remarkPoints(w, 1), p2 = remarkPoints(w, 2), p3 = remarkPoints(w, 3);
+    bool ordered = p1.size() == 4;
+    for (size_t k = 0; k < p1.size(); k++)
+      ordered = ordered && p1[k] < 363 && p1[k] > triggerFor(w, 1) + 25 && (k == 0 || p1[k] < p1[k - 1] - 45);
+    CHECK("remarks: 363 m gives 4 (every 50-80 m), before the turn's own line", ordered);
+    CHECK("remarks: 120 m gives 1, 70 m none", p2.size() == 1 && p3.empty());
     auto at5 = [](int step, int toTurn) {
       NavProgress p;
       p.route = 5;
@@ -192,20 +203,26 @@ int main() {
     };
     ClipPlan plan;
     plan.reset(w);
-    plan.setMid(1, true);
-    plan.setMid(2, true);  // a short stretch: never played
-    const int toRecord = plan.nextMidToRecord(0);
-    const bool notReady = !plan.midDue(at5(1, 140), NavMode::Walking, false, w);
-    plan.midRecorded(1);
-    plan.midRecorded(2);
-    const bool early = !plan.midDue(at5(1, 160), NavMode::Walking, false, w);
-    const bool busy = !plan.midDue(at5(1, 145), NavMode::Walking, true, w);
-    const bool now = plan.midDue(at5(1, 140), NavMode::Walking, false, w);
-    const bool once = !plan.midDue(at5(1, 130), NavMode::Walking, false, w);
-    const bool shortStretch = !plan.midDue(at5(2, 50), NavMode::Walking, false, w);
-    CHECK("halfway remark: recorded first, then once halfway, not while busy, never on a short stretch",
-          toRecord == 1 && notReady && early && busy && now && once && shortStretch && plan.midStep() == 1);
-    CHECK("halfway remark: none left to record once recorded", plan.nextMidToRecord(0) == -1);
+    for (int k = 0; k < 4; k++) plan.setRemark(1, k, true);
+    plan.setRemark(2, 0, true);
+    int ri = -1, rk = -1;
+    const bool first = plan.nextRemarkToRecord(1, ri, rk) && ri == 1 && rk == 0;
+    int di = -1, dk = -1;
+    ClipPlan fresh = plan;  // not recorded when its point comes: skipped for good (never said live)
+    const bool notReady = !fresh.remarkDue(at5(1, p1[0] - 1), false, w, di, dk);
+    for (int k = 0; k < 4; k++) plan.remarkRecorded(1, k);
+    const bool early = !plan.remarkDue(at5(1, p1[0] + 5), false, w, di, dk);
+    const bool busy = !plan.remarkDue(at5(1, p1[0] - 1), true, w, di, dk);
+    const bool now = plan.remarkDue(at5(1, p1[0] - 2), false, w, di, dk) && di == 1 && dk == 0;
+    const bool once = !plan.remarkDue(at5(1, p1[0] - 3), false, w, di, dk);
+    // Two points passed while busy: only the latest plays, the earlier is skipped.
+    const bool skip = plan.remarkDue(at5(1, p1[2] - 1), false, w, di, dk) && dk == 2 && !plan.remarkDue(at5(1, p1[2] - 2), false, w, di, dk);
+    CHECK("remarks: recorded in order, each once at its point, not while busy, a missed one skipped",
+          first && notReady && early && busy && now && once && skip);
+    int ni = -1, nk = -1;
+    plan.remarkRecorded(2, 0);
+    CHECK("remarks: none left to record", !plan.nextRemarkToRecord(1, ni, nk));
+    CHECK("remark index: flattened by step, then remark", plan.remarkIndex(1, 3) == 3 && plan.remarkIndex(2, 0) == 4);
   }
   return failures ? 1 : 0;
 }

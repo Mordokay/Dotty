@@ -238,7 +238,7 @@ struct Trip {
   NavRoute route;
   ClipPlan clips;
   NavLines lines;                  // per step ("" = say Apple's text live), in one PSRAM buffer
-  NavLines mids;                   // halfway remarks on long stretches ("" = none)
+  NavLines remarks;                // the remarks along the stretches, flattened (ClipPlan::remarkIndex)
   bool linesAsked = false, linesReady = false;
   uint32_t linesFetch = 0, linesAt = 0;  // the lines' own fetch through the phone (never the chat's job slot)
   bool relock = false;                   // a turn woke a locked Dotty: lock again once it has been said
@@ -328,9 +328,10 @@ bool lineScanStale = false;  // the wake's cached "lines left?" must be read aga
 const char *wakeVia = "nothing";  // how the last wake reached the internet (the log, for the battery measurements)
 void dropPending();
 void queueTypedTurn(const std::string &text, const std::string &label, bool phoneOnly = false);
-std::string navKey(int i, bool mid = false);
-bool parseNavKey(const std::string &key, int &i, bool &mid);
-bool nextNavClip(int &i, bool &mid);
+std::string navKey(int i, int remark = -1);
+bool parseNavKey(const std::string &key, int &i, int &remark);
+bool nextNavClip(int &i, int &remark);
+std::string remarkText(int i, int k);
 bool navClipsDue();
 GeminiLive::ToolAnswer navTool(const ToolCall &c);
 void endTrip(const char *why, bool tellPhone);
@@ -2425,10 +2426,9 @@ const char *lineNote = "Saving your reminder...";
 bool nextLineWork(LineWork &out, const std::string &onlyCompanion) {
   // Directions first: the next clips of a trip (written already; recorded ahead of you).
   if (navClipsDue() && (onlyCompanion.empty() || onlyCompanion == trip.companion)) {
-    int next = 0;
-    bool mid = false;
-    nextNavClip(next, mid);
-    const std::string key = navKey(next, mid);
+    int next = 0, remark = -1;
+    nextNavClip(next, remark);
+    const std::string key = navKey(next, remark);
     const auto back = lineBackoff.find(trip.companion + "/" + key);
     if (back == lineBackoff.end() || static_cast<int32_t>(back->second - millis()) <= 0) {
       out = LineWork();
@@ -2580,9 +2580,10 @@ void lineSaved() {
   if (!ok) return;
   const LineWork &w = lineJob.work();
   int navStep = 0;
-  bool navMid = false;
-  if (parseNavKey(w.key, navStep, navMid)) {  // a directions clip: ready to play (if it's still this route's)
-    if (trip.active && w.key == navKey(navStep, navMid)) navMid ? trip.clips.midRecorded(navStep) : trip.clips.recorded(navStep);
+  int navRemark = -1;
+  if (parseNavKey(w.key, navStep, navRemark)) {  // a directions clip: ready to play (if it's still this route's)
+    if (trip.active && w.key == navKey(navStep, navRemark))
+      navRemark >= 0 ? trip.clips.remarkRecorded(navStep, navRemark) : trip.clips.recorded(navStep);
     return;
   }
   if (w.key == "timer") {
@@ -2643,11 +2644,11 @@ void pollLines() {
         if (t.kind == "alarm") lineNote = "Saving your alarm...";
       lineJob.start(w);
       int navStep = 0;
-      bool navMid = false;
-      if (parseNavKey(w.key, navStep, navMid)) {  // directions: the line is written already (navLinesRequest)
+      int navRemark = -1;
+      if (parseNavKey(w.key, navStep, navRemark)) {  // directions: the line is written already (navLinesRequest)
         Written given;
         given.ok = true;
-        given.text = navMid ? trip.mids.at(navStep) : trip.lines.at(navStep);
+        given.text = navRemark >= 0 ? remarkText(navStep, navRemark) : trip.lines.at(navStep);
         lineNote = "Saving directions...";
         lineJob.written(given);
         return;
@@ -3044,33 +3045,43 @@ void pollTypedTurn() {
   }
 }
 
-// A trip's clip: "nav-<route>-<step>", a halfway remark "nav-<route>-<step>-mid".
-std::string navKey(int i, bool mid) {
-  return "nav-" + std::to_string(trip.route.route()) + "-" + std::to_string(i) + (mid ? "-mid" : "");
+// A trip's clip: "nav-<route>-<step>", a remark along the stretch before it "nav-<route>-<step>-r<k>".
+std::string navKey(int i, int remark) {
+  return "nav-" + std::to_string(trip.route.route()) + "-" + std::to_string(i) +
+         (remark >= 0 ? "-r" + std::to_string(remark) : std::string());
 }
 
-bool parseNavKey(const std::string &key, int &i, bool &mid) {
+bool parseNavKey(const std::string &key, int &i, int &remark) {
   if (key.rfind("nav-", 0) != 0) return false;
-  mid = key.size() > 4 && key.compare(key.size() - 4, 4, "-mid") == 0;
-  const std::string base = mid ? key.substr(0, key.size() - 4) : key;
+  const size_t r = key.rfind("-r");
+  remark = r != std::string::npos && r > 4 ? atoi(key.c_str() + r + 2) : -1;
+  const std::string base = remark >= 0 ? key.substr(0, r) : key;
   i = atoi(base.c_str() + base.rfind('-') + 1);
   return true;
 }
 
-// The next clip to record: the turns ahead first, then halfway remarks (-1 = none).
-bool nextNavClip(int &i, bool &mid) {
+std::string remarkText(int i, int k) {
+  return trip.remarks.at(static_cast<size_t>(trip.clips.remarkIndex(i, k)));
+}
+
+// The next clip to record: the turns ahead first, then the remarks along the stretches (remark -1 = a turn).
+bool nextNavClip(int &i, int &remark) {
   i = trip.clips.nextToRecord(trip.progress.step);
-  mid = false;
+  remark = -1;
   if (i >= 0) return true;
-  i = trip.clips.nextMidToRecord(trip.progress.step);
-  mid = i >= 0;
-  return mid;
+  return trip.clips.nextRemarkToRecord(trip.progress.step, i, remark);
 }
 
 bool navClipsDue() {
-  int i;
-  bool mid;
-  return trip.active && trip.linesReady && storage::available() && canRecord() && nextNavClip(i, mid);
+  int i, remark;
+  return trip.active && trip.linesReady && storage::available() && canRecord() && nextNavClip(i, remark);
+}
+
+void dropNavClips() {
+  for (int i = 0; i < trip.route.count(); i++) {
+    moments::dropRecording(trip.companion, navKey(i));
+    for (int k = 0; k < trip.clips.remarkCount(i); k++) moments::dropRecording(trip.companion, navKey(i, k));
+  }
 }
 
 void loadPlaceNames() {
@@ -3100,10 +3111,7 @@ void endTrip(const char *why, bool tellPhone) {
   LOGI("nav", "trip to %s ends: %s", trip.route.destination.c_str(), why);
   if (tellPhone) sendNav("nav.stop", [](JsonDocument &) {});
   if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("the trip ended");
-  for (int i = 0; i < trip.route.count(); i++) {
-    moments::dropRecording(trip.companion, navKey(i));
-    moments::dropRecording(trip.companion, navKey(i, true));
-  }
+  dropNavClips();
   trip = Trip();  // an unfinished lines fetch is just never collected
   shell::bluetoothOnLock(0);
   shell::quietLockRefresh(false);
@@ -3117,10 +3125,7 @@ void startRoute(const NavRoute &r) {
   const bool again = trip.active;
   if (again) {
     if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("re-routed");
-    for (int i = 0; i < trip.route.count(); i++) {
-      moments::dropRecording(trip.companion, navKey(i));
-      moments::dropRecording(trip.companion, navKey(i, true));
-    }
+    dropNavClips();
   } else {
     trip = Trip();
     trip.active = true;
@@ -3129,7 +3134,7 @@ void startRoute(const NavRoute &r) {
   trip.route = r;
   trip.clips.reset(r);
   trip.lines.clear();
-  trip.mids.clear();
+  trip.remarks.clear();
   trip.linesAsked = trip.linesReady = false;
   trip.linesFetch = 0;
   trip.progress = NavProgress();
@@ -3180,6 +3185,9 @@ void pollNavAnswer() {
   const bool spoke = firstAudioAt || !said.empty() || !textQueue.empty();
   if (live.ready() && !navAsk.callId.empty()) {
     if (live.inTurn() && (spoke || millis() - live.lastMessageAt() < 1500)) return;
+    // The first reply ("Let me find the way") must have finished playing: once it ends the screen goes to
+    // After, and an answer's audio arriving then was dropped (only its text was kept).
+    if (info.state == Talk::Speaking || voice::playing()) return;
     live.answerTool(navAsk.callId, navAsk.nearby ? "find_nearby" : "navigate_to", navAsk.result);
     if (info.state != Talk::Speaking) setState(Talk::Thinking);
   } else {
@@ -3317,12 +3325,14 @@ void onNavProgress() {
   const ClipPlan::Play play = trip.clips.onProgress(trip.progress, trip.route.mode, busy, trip.route);
   if (play == ClipPlan::Play::Drop) LOGI("nav", "step %d passed before its line could play", trip.clips.playStep());
   else if (play != ClipPlan::Play::None) playClip(trip.clips.playStep(), play);
-  else if (trip.clips.midDue(trip.progress, trip.route.mode, busy || shell::locked(), trip.route)) {  // halfway along
-    const int i = trip.clips.midStep();
-    const String wav = moments::recordingPath(trip.companion, navKey(i, true), "wav");
-    if (player.play(wav.c_str())) {
-      history::append("", trip.mids.at(i), "neutral", 0, 0, "directions");
-      LOGI("nav", "halfway remark %d played at %d m", i, trip.progress.toTurn);
+  else {  // a remark along the stretch (only unlocked: Dotty isn't woken for chatter)
+    int i = -1, k = -1;
+    if (trip.clips.remarkDue(trip.progress, busy || shell::locked(), trip.route, i, k)) {
+      const String wav = moments::recordingPath(trip.companion, navKey(i, k), "wav");
+      if (player.play(wav.c_str())) {
+        history::append("", remarkText(i, k), "neutral", 0, 0, "directions");
+        LOGI("nav", "remark %d.%d played at %d m", i, k, trip.progress.toTurn);
+      }
     }
   }
   // The distance ticks along (the user: every second or two while walking, nothing at a red light): a redraw
@@ -3410,19 +3420,24 @@ void pollNav() {
         if (w.tokens) usage::addTokens(w.tokens, sessionKey);
         const NavLineSet set = parseNavLines(w, trip.route);
         trip.lines.set(set.turn);
-        trip.mids.set(set.mid);
-        trip.linesReady = true;
-        int got = 0, mids = 0;
+        std::vector<std::string> flat;  // the remarks, flattened as ClipPlan counts them
+        int got = 0, said = 0;
         for (int i = 0; i < trip.route.count(); i++) {
           got += !set.turn[i].empty();
-          mids += !set.mid[i].empty();
           if (trip.route.at(i).spoken() && set.turn[i].empty()) trip.clips.noClip(i);  // said live instead
-          trip.clips.setMid(i, !set.mid[i].empty());
+          for (int k = 0; k < trip.clips.remarkCount(i); k++) {
+            const std::string text = k < static_cast<int>(set.remarks[i].size()) ? set.remarks[i][k] : std::string();
+            flat.push_back(text);
+            trip.clips.setRemark(i, k, !text.empty());
+            said += !text.empty();
+          }
         }
-        LOGI("nav", "lines written: %d of %d, %d halfway remarks", got, trip.route.count(), mids);
+        trip.remarks.set(flat);
+        trip.linesReady = true;
+        LOGI("nav", "lines written: %d of %d, %d remarks", got, trip.route.count(), said);
         for (int i = 0; i < trip.route.count(); i++) {  // what it will say (to judge them on a walk)
-          if (!set.turn[i].empty()) LOGI("nav", "line %d: %s", i, set.turn[i].c_str());
-          if (!set.mid[i].empty()) LOGI("nav", "halfway %d: %s", i, set.mid[i].c_str());
+          if (!set.turn[i].empty()) LOGI("nav", "line %d (%d m): %s", i, triggerFor(trip.route, i), set.turn[i].c_str());
+          for (size_t k = 0; k < set.remarks[i].size(); k++) LOGI("nav", "remark %d.%u: %s", i, static_cast<unsigned>(k), set.remarks[i][k].c_str());
         }
         lineScanStale = true;
       }

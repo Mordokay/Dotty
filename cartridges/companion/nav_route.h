@@ -24,7 +24,7 @@ bool parseMode(const std::string &name, NavMode &out);
 const char *modeName(NavMode m);
 bool parseArrow(const std::string &name, Arrow &out);
 int triggerMetres(NavMode m);  // a step's clip plays this far before its turn: 40 / 100 / 300
-int longStretch(NavMode m);    // a stretch this long may get a halfway remark: 250 / 600 / 2000
+
 
 struct NavStep {
   int distance = 0;
@@ -89,6 +89,13 @@ class NavLines {
 
 // The stretch walked up to step i's turn (MapKit: a step's distance is what comes after its turn).
 int stretchBefore(const NavRoute &r, int i);
+// How far before step i's turn its line plays: random per step (walking 30-60 m, cycling 80-150, driving
+// 250-400; the user found a fixed 40 m predictable), the same every time it's asked (seeded by route + step).
+int triggerFor(const NavRoute &r, int i);
+// Where the remarks along the stretch before step i play (metres to the turn, far to near): one a little after
+// the previous turn, then every 50-80 m walking (150-250 cycling, 600-900 driving), stopping before the turn's
+// own line; 4 at most (the user: long stretches deserve more than one remark).
+std::vector<int> remarkPoints(const NavRoute &r, int i);
 
 struct NavProgress {
   int route = 0, step = 0, toTurn = 0, left = 0;
@@ -109,16 +116,20 @@ class ClipPlan {
   bool ready(int i) const;
   Play onProgress(const NavProgress &p, NavMode mode, bool busy, const NavRoute &r);
   int playStep() const { return playStep_; }  // the step the last Clip / Live / Drop was for
-  // Halfway remarks on long stretches (the user: "feeling tired yet?"): recorded after the turn clips, played
-  // once halfway along the stretch, only from a recorded clip (never live: chatter costs nothing extra).
-  void setMid(int i, bool hasLine);
-  int nextMidToRecord(int currentStep) const;
-  void midRecorded(int i);
-  bool midDue(const NavProgress &p, NavMode mode, bool busy, const NavRoute &r);
-  int midStep() const { return midStep_; }
+  // Remarks along the stretches (remarkPoints): recorded after the turn clips, each played once at its point,
+  // only from a recorded clip (never live: chatter costs nothing extra); one missed while busy is skipped.
+  void setRemark(int i, int k, bool hasLine);
+  bool nextRemarkToRecord(int currentStep, int &i, int &k) const;
+  void remarkRecorded(int i, int k);
+  bool remarkDue(const NavProgress &p, bool busy, const NavRoute &r, int &i, int &k);
+  int remarkIndex(int i, int k) const;  // flattened: step by step, remark by remark
+  int remarkCount(int i) const;
 
  private:
-  std::vector<bool> spoken_, ready_, played_, noClip_, hasMid_, midReady_, midPlayed_;
-  int step_ = -1, playStep_ = -1, midStep_ = -1;
+  std::vector<bool> spoken_, ready_, played_, noClip_;
+  std::vector<std::vector<int>> points_;            // per step: remarkPoints
+  std::vector<int> offset_;                         // per step: its first remark's flat index
+  std::vector<bool> remarkHas_, remarkReady_, remarkPlayed_;  // flat
+  int step_ = -1, playStep_ = -1;
   bool due_ = false;  // the current step reached its trigger but couldn't play yet
 };
