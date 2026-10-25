@@ -44,7 +44,9 @@ int main() {
     CHECK("request: in character with memories", has(sys, "Percival") && has(sys, "Likes horses"));
     CHECK("request: JSON answer", std::string(d["generationConfig"]["responseMimeType"] | "") == "application/json");
     CHECK("request: varied and spontaneous (the user: always \"my king\", the same things)",
-          has(sys, "different") && has(sys, "at most twice") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
+          has(sys, "different") && has(sys, "at most two lines") && (d["generationConfig"]["temperature"] | 0.0) >= 1.0);
+    CHECK("request: no example sentences to parrot (it copied the pigeon word for word)",
+          !has(sys, "pigeon") && !has(sys, "madmen") && has(sys, "Invent your own"));
     CHECK("request: halfway remarks on long stretches", has(sys, "\"mid\"") && has(sys, "halfway"));
     CHECK("request: places passed, mentioned now and then, never invented", has(sys, "never invent") && has(sys, "now and then"));
   }

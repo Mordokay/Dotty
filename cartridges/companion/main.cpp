@@ -3572,6 +3572,7 @@ void registerNavCommands() {
   });
   ble::on("nav.progress", [](JsonObjectConst args, JsonObject reply) {
     if (navFake) return;
+    if (navPending.route() && (args["route"] | 0) == navPending.route()) return;  // its steps are still arriving
     if (!trip.active || !parseProgress(args, trip.route.route(), trip.progress)) {
       reply["ok"] = false;  // not the trip Dotty holds: the iPhone stops following
       reply["error"] = "not this trip";

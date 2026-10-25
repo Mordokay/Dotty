@@ -25,6 +25,7 @@ final class NavigationService: NSObject {
         var offSince: Date?
         var lastReroute = Date.distantPast
         var then: String?  // a stop on the way: where to go on to after arriving
+        var ready = false  // all its steps are with Dotty: progress may go (before, Dotty can't place it)
         var left: Double = 0
         var eta = Date()
     }
@@ -275,7 +276,10 @@ final class NavigationService: NSObject {
                                          distance: Int(route.distance), eta: localEpoch(t.eta), steps: steps, reroute: reroute)
         if continuing { messages[0]["continue"] = true }  // the next leg after a stop on the way
         if let weather { messages[0]["weather"] = weather }
-        Task { await send(messages) }
+        Task {
+            await send(messages)
+            if trip?.route == t.route { trip?.ready = true }
+        }
         follow()
     }
 
@@ -334,7 +338,7 @@ final class NavigationService: NSObject {
 
     private func follow() {
         guard let trip else { return }
-        if simulate { return simulateWalk() }
+        if simulate { simulateWalk() }  // still with location on: it keeps the app running in the background
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.activityType = trip.mode == .driving ? .automotiveNavigation : trip.mode == .cycling ? .otherNavigation : .fitness
         manager.allowsBackgroundLocationUpdates = true
@@ -376,7 +380,7 @@ final class NavigationService: NSObject {
     }
 
     private func progress(at location: CLLocation) {
-        guard var t = trip else { return }
+        guard var t = trip, t.ready else { return }
         let p = location.coordinate
         // Off the route for a while: a new one from here (at most every 20 s).
         let off = RouteGeometry.distanceToRoute(t.line, p)

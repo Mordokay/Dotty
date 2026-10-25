@@ -51,16 +51,16 @@ std::string navLinesRequest(const Profile &who, const std::string &memorySection
             " objects, one per step in order: {\"turn\": the line said about " + std::to_string(trigger) +
             " metres before that step, \"mid\": a halfway remark or \"\"}. Each turn line: the instruction first "
             "and clear (\"In about " + std::to_string(trigger) + " metres, turn left onto Rua Augusta.\"), then "
-            "something spontaneous and fun in " + name + "'s own voice, and every line different in kind: a playful "
-            "made-up observation (\"and I just saw a pigeon walk into a lamppost\"), a warning (\"careful, these "
-            "streets are full of madmen\"), a joke, encouragement, a thought about the street or the place. Never "
-            "repeat a phrase, a joke or a sign-off; call the user by a title or pet name at most twice in the whole "
-            "trip. When a step says what you pass there, mention it now and then (not every time), as a friend would "
-            "(\"to your left is a lovely little cafe, we should try it sometime\"); only those places, never invent "
-            "a place or a name. When the weather is given, let it colour a line or two (\"it'll probably rain soon, so "
-            "let's be quick\"), never every line. At most 40 words a line. \"mid\" only for steps marked long, on about half of them: something "
-            "said halfway along that stretch, like a friend walking alongside (\"Feeling tired yet?\", \"Fancy "
-            "stopping for a glass of water?\"), at most 15 words, no directions in it; else \"\". The last step is "
+            "something spontaneous and fun in " + name + "'s own voice, and every line different in kind: an odd "
+            "little thing you just noticed (made up, playful), a warning, a joke, encouragement, a thought about the "
+            "street or the place. Invent your own: never reuse a sentence, a joke, an image or a sign-off from one "
+            "line in another. A title or pet name for the user (whatever your character usually calls them) goes in "
+            "at most two lines of the whole array; the others don't address the user by any name. When a step says "
+            "what you pass there, mention it now and then (not every time), as a friend would; only those places, "
+            "never invent a place or a name. When the weather is given, let it colour a line or two, never every "
+            "line. At most 40 words a line. \"mid\" only for steps marked long, on about half of them: something said "
+            "halfway along that stretch, like a friend walking alongside (how they're doing, a drink, a rest), at "
+            "most 15 words, no directions in it; else \"\". The last step is "
             "the arrival. Spoken English, first person, no emoji or stage directions. Only the JSON array.";
   JsonDocument doc;
   doc["systemInstruction"]["parts"][0]["text"] = system;
