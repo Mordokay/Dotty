@@ -794,7 +794,9 @@ void startRecall(const ToolCall &c) {
 }
 
 void cancelWriter() {
-  jobs.cancel();  // a running task's result is dropped
+  // Only the chat's own text-model job (a long answer, a recall): a trip's lines, a fold, the plan or a
+  // moment's line belong to someone else (a typed turn once dropped a trip's lines this way).
+  if (jobKind == Job::Write || jobKind == Job::Recall) jobs.cancel();  // a running task's result is dropped
   jobPending = false;
   writing = reading = questionDone = written = false;
   readingRest.clear();
@@ -2516,7 +2518,8 @@ void abortLine(const char *why) {
   lineJob.abort();
   capturingLine = false;
   lineRec.reset(0);
-  lineCooldownUntil = millis() + 60000;
+  // A trip's clip (a lock mid-recording is normal on a walk) tries again in seconds, others in a minute.
+  lineCooldownUntil = millis() + (lineJob.work().key.rfind("nav-", 0) == 0 ? 3000 : 60000);
 }
 
 void lineSaveTask(void *arg) {
@@ -2586,8 +2589,9 @@ void pollLines() {
   lineSaved();
   if (lineJob.step() == LineJob::Step::Done || lineJob.step() == LineJob::Step::Failed) {
     if (lineJob.step() == LineJob::Step::Failed) {
-      lineCooldownUntil = millis() + 60000;
-      lineBackoff[lineJob.work().companion + "/" + lineJob.work().key] = millis() + 30 * 60 * 1000;  // not every wake
+      const bool nav = lineJob.work().key.rfind("nav-", 0) == 0;  // a trip's clip: retried soon (or said live)
+      lineCooldownUntil = millis() + (nav ? 3000 : 60000);
+      lineBackoff[lineJob.work().companion + "/" + lineJob.work().key] = millis() + (nav ? 20000 : 30 * 60 * 1000);  // not every wake
       if (bgSession) bgFailures++;
     }
     lineJob.reset();
@@ -2609,7 +2613,9 @@ void pollLines() {
   }
   switch (lineJob.step()) {
     case LineJob::Step::Idle: {
-      if (!idleChat || !roomForWriter || jobs.busy() || planRunning || static_cast<int32_t>(millis() - lineCooldownUntil) < 0)
+      // A trip's clips are written already: only Live's reading (through the phone), no second TLS connection.
+      if (!idleChat || (!roomForWriter && !navClipsDue()) || jobs.busy() || planRunning ||
+          static_cast<int32_t>(millis() - lineCooldownUntil) < 0)
         return;
       if (millis() - lastLineScan < 3000) return;
       lastLineScan = millis();

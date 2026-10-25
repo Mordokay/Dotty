@@ -36,6 +36,11 @@ struct NavStep {
 
 class NavRoute {
  public:
+  static constexpr size_t kBufferBytes = 8192;  // well past the 4 KB PSRAM threshold
+  NavRoute() = default;
+  // Copies keep the buffer that big: a plain string copy shrinks to its size (internal RAM).
+  NavRoute(const NavRoute &o) { *this = o; }
+  NavRoute &operator=(const NavRoute &o);
   // A new route (nav.route): false when it isn't one (error or choices, kept for the companion).
   bool begin(JsonObjectConst navRoute);
   bool step(JsonObjectConst navStep);  // false: another route, or out of range

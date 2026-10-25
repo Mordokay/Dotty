@@ -34,9 +34,30 @@ int triggerMetres(NavMode m) {
   return m == NavMode::Driving ? 300 : m == NavMode::Cycling ? 100 : 40;
 }
 
+NavRoute &NavRoute::operator=(const NavRoute &o) {
+  if (this == &o) return *this;
+  destination = o.destination;
+  error = o.error;
+  mode = o.mode;
+  distance = o.distance;
+  eta = o.eta;
+  reroute = o.reroute;
+  choices = o.choices;
+  route_ = o.route_;
+  req_ = o.req_;
+  count_ = o.count_;
+  received_ = o.received_;
+  steps_ = o.steps_;
+  buffer_.clear();
+  buffer_.reserve(kBufferBytes);
+  buffer_ = o.buffer_;  // assigning into the reserved capacity keeps it
+  if (buffer_.capacity() < kBufferBytes) buffer_.reserve(kBufferBytes);
+  return *this;
+}
+
 bool NavRoute::begin(JsonObjectConst msg) {
   *this = NavRoute();
-  buffer_.reserve(4096);  // past the PSRAM threshold: the route's texts never sit in internal RAM
+  buffer_.reserve(kBufferBytes);  // past the PSRAM threshold: the route's texts never sit in internal RAM
   req_ = msg["req"] | 0;
   route_ = msg["route"] | 0;
   error = msg["error"] | "";

@@ -72,7 +72,14 @@ int main() {
                                                      parseProgress(p3.as<JsonObjectConst>(), 3, p) && p.toTurn == 50 && p.left == 900);
   }
   CHECK("empty first step: not spoken", !r.at(0).spoken() && r.at(1).spoken());
-  CHECK("texts in one buffer", r.textBytes() >= 4096);
+  CHECK("texts in one buffer, past the PSRAM threshold", r.textBytes() > 4096);
+  {
+    const NavRoute copy = r;
+    NavRoute assigned;
+    assigned = r;
+    CHECK("a copied route keeps its buffer past the threshold (copies shrink a string to its size)",
+          copy.textBytes() > 4096 && assigned.textBytes() > 4096 && copy.text(1) == r.text(1));
+  }
   {
     JsonDocument bad = parse(R"({"req":1,"route":4,"ok":false,"error":"no route"})");
     NavRoute f;
