@@ -83,6 +83,10 @@ void drawIcon(Adafruit_GFX &gfx, Icon icon, int16_t cx, int16_t cy, uint16_t col
       gfx.drawFastVLine(cx - 1, cy - 2, 9, color);
       gfx.drawFastVLine(cx + 2, cy - 2, 9, color);
       break;
+    case Icon::Close:  // an X
+      thickLine(gfx, cx - 8, cy - 8, cx + 8, cy + 8, color);
+      thickLine(gfx, cx - 8, cy + 8, cx + 8, cy - 8, color);
+      break;
     case Icon::Info:  // an "i" in a ring
       gfx.drawCircle(cx, cy, 11, color);
       gfx.drawCircle(cx, cy, 10, color);
