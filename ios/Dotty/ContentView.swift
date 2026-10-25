@@ -20,6 +20,7 @@ struct ContentView: View {
         .task {
             RelayService.shared.attach(link)      // chats through this iPhone: app-wide, background too
             RecordingService.shared.attach(link)  // voice notes from Dotty (after the relay: it chains onReady)
+            NavigationService.shared.attach(link)  // directions and "what's nearby" (chains onReady too)
         }
         .preferredColorScheme(.dark)
         .animation(.settle, value: link.paired)

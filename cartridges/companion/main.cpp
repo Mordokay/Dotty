@@ -3110,7 +3110,7 @@ void pollNavAnswer() {
   if (!navAsk.active) return;
   if (!navAsk.resultReady) {
     lastTurnAt = millis();  // the chat stays open meanwhile
-    if (navPending.route() && !navPending.complete() && navAsk.routeAt && millis() - navAsk.routeAt > 3000)
+    if (navPending.route() && !navPending.complete() && navAsk.routeAt && millis() - navAsk.routeAt > 10000)
       answerNav("The route didn't come through from the iPhone. Tell the user briefly and offer to try again.");
     else if (millis() - navAsk.at > 20000)
       answerNav("The iPhone didn't answer. Tell the user briefly that directions need their iPhone nearby, with the "

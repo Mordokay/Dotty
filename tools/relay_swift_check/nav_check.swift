@@ -4,6 +4,7 @@
 //        && swiftc $TMP/n.swift -o $TMP/n && $TMP/n
 // (Tasks 8-9 add RouteGeometry.swift, NavMessages.swift and NearbySearch.swift to the cat.)
 import CoreLocation
+import MapKit
 import Foundation
 
 var failed = 0
@@ -65,6 +66,16 @@ let sizes = msgs.map { (try? JSONSerialization.data(withJSONObject: $0).count) ?
 check("route: one header + 40 steps", msgs.count == 41 && (msgs[0]["count"] as? Int) == 40 && (msgs[0]["cmd"] as? String) == "nav.route")
 check("route: every command ≤ 512 bytes", sizes.allSatisfy { $0 <= 512 })
 check("route: steps carry the route number and arrow", (msgs[2]["route"] as? Int) == 9 && (msgs[2]["arrow"] as? String) == "right")
+
+// Nearby (Task 9): what you asked → a points-of-interest category, or free text
+check("nearby: ATM / cash machine → atm", NearbySearch.category("ATM") == .atm && NearbySearch.category("a cash machine") == .atm)
+check("nearby: hospital", NearbySearch.category("the nearest hospital") == .hospital)
+check("nearby: coffee → cafe", NearbySearch.category("good coffee") == .cafe)
+check("nearby: toilet → restroom", NearbySearch.category("a toilet") == .restroom)
+check("nearby: a sushi place → free text", NearbySearch.category("a sushi place") == nil)
+let picked = NearbySearch.nearest([("C", 900.0), ("A", 120.0), ("B", 450.0), ("D", 1000.0), ("E", 50.0), ("F", 2000.0)], distance: { $0.1 })
+check("nearby: nearest first, at most 5", picked.map(\.0) == ["E", "A", "B", "C", "D"])
+check("nearby: walking minutes", NearbySearch.minutes(metres: 150, mode: .walking) == 2 && NearbySearch.minutes(metres: 10, mode: .walking) == 1)
 
 print(failed == 0 ? "ALL PASS" : "\(failed) FAILED")
 exit(failed == 0 ? 0 : 1)

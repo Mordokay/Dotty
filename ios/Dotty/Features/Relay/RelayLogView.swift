@@ -27,6 +27,12 @@ struct RelayLogView: View {
                     .buttonStyle(.quiet())
                     Text("Allow Always, lock the iPhone, then send ` to Dotty: the lines below say whether location kept coming in the background for 2 minutes.")
                         .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                    Toggle("Simulate walks", isOn: Binding(get: { NavigationService.shared.simulate },
+                                                           set: { NavigationService.shared.simulate = $0 }))
+                        .toggleStyle(.light())
+                        .font(.lpBody).foregroundStyle(Color.ink)
+                    Text("Directions then move along the route at walking speed instead of using GPS: ask Dotty to walk you somewhere and watch it from your desk.")
+                        .font(.lpCaption).foregroundStyle(Color.inkFaint)
                     if relay.lines.isEmpty {
                         Text("Nothing yet. Hold BOOT on Dotty with this iPhone connected.").font(.lpCaption).foregroundStyle(Color.inkFaint)
                     }

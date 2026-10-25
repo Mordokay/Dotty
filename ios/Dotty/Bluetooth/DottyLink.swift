@@ -52,6 +52,7 @@ final class DottyLink: NSObject {
     // Voice notes (Features/Recordings): their audio (0x1F 0x02 …) and rec.* / companion.recordings events.
     @ObservationIgnored var onRecordingRaw: ((Data) -> Void)?
     @ObservationIgnored var onRecordingEvent: ((DottyMessage) -> Void)?
+    @ObservationIgnored var onNavEvent: ((DottyMessage) -> Void)?  // directions (NavigationService)
     @ObservationIgnored var onReady: (() -> Void)?  // each time a connection is ready (the relay says hello)
     @ObservationIgnored private var writeReady: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var subscribed = false
@@ -308,6 +309,10 @@ final class DottyLink: NSObject {
             }
             if message.event == "nav.probe" {  // directions plan, Task 1
                 LocationProbe.shared.run()
+                return
+            }
+            if let event = message.event, event.hasPrefix("nav.") {
+                onNavEvent?(message)
                 return
             }
             if message.event == "companion.recordings" { onRecordingEvent?(message) }  // and the screens too
