@@ -21,6 +21,7 @@ final class NavigationService: NSObject {
         var totalTime: TimeInterval
         var totalDistance: Double
         var step = 0, sentToTurn = -1000
+        var sentAt = Date.distantPast
         var offSince: Date?
         var lastReroute = Date.distantPast
         var left: Double = 0
@@ -39,6 +40,7 @@ final class NavigationService: NSObject {
     @ObservationIgnored private var lastNearby: [MKMapItem] = []
     @ObservationIgnored private var disconnectedSince: Date?
     @ObservationIgnored private var simulation: Task<Void, Never>?
+    @ObservationIgnored private var abandoned: Set<Int> = []  // requests Dotty gave up on (nav.stop {req})
 
     override init() {
         super.init()
@@ -87,7 +89,9 @@ final class NavigationService: NSObject {
         switch m.event {
         case "nav.request": Task { await request(req: req, query: m["query"] as? String ?? "", mode: mode) }
         case "nav.nearby": Task { await nearby(req: req, what: m["what"] as? String ?? "", mode: mode) }
-        case "nav.stop": stop(why: nil)
+        case "nav.stop":
+            if req > 0 { abandoned.insert(req) }  // a request still being worked out: don't start it
+            stop(why: nil)
         default: break
         }
     }
@@ -99,13 +103,14 @@ final class NavigationService: NSObject {
         let background = UIApplication.shared.beginBackgroundTask(withName: "nav-request")
         defer { UIApplication.shared.endBackgroundTask(background) }
         guard authorized() else {
-            return await fail(req, "location isn't allowed for the Dotty app (it needs Always, in Settings › Dotty › Location)")
+            return await fail(req, "location isn't allowed for the Dotty app: it needs \"Always\" (Settings › Dotty › Location)")
         }
         guard let from = await fix() else { return await fail(req, "the iPhone couldn't tell where it is") }
         let target: MKMapItem
         let name: String
         let lower = query.lowercased()
-        if lower.hasPrefix("nearby "), let n = Int(lower.dropFirst(7)), n >= 1, n <= lastNearby.count {
+        if lower.hasPrefix("nearby "), let n = Int(lower.dropFirst(7)) {  // a find_nearby result
+            guard n >= 1, n <= lastNearby.count else { return await fail(req, "that nearby place isn't known any more: search again") }
             target = lastNearby[n - 1]
             name = target.name ?? query
         } else if let saved = PlacesStore.shared.match(query) {
@@ -133,6 +138,7 @@ final class NavigationService: NSObject {
         guard let route = await directions(from: from.coordinate, to: target, mode: mode) else {
             return await fail(req, "no \(mode.rawValue) route was found to \(name)")
         }
+        guard !abandoned.contains(req) else { return log("request \(req) was given up on by Dotty") }
         start(route: route, req: req, name: name, target: target.location.coordinate, mode: mode, reroute: false)
     }
 
@@ -182,7 +188,16 @@ final class NavigationService: NSObject {
         guard let link else { return }
         for var m in messages {
             guard let cmd = m.removeValue(forKey: "cmd") as? String else { continue }
-            do { try await link.send(cmd, m, timeout: 5) } catch { log("\(cmd) not sent: \(error.localizedDescription)"); return }
+            do {
+                try await link.send(cmd, m, timeout: 5)
+            } catch DottyError.refused(let why) {  // Dotty doesn't hold this route (gave up, or ended the trip)
+                log("\(cmd) refused: \(why)")
+                if cmd.hasPrefix("nav.") && trip?.route == m["route"] as? Int { finish() }
+                return
+            } catch {
+                log("\(cmd) not sent: \(error.localizedDescription)")
+                return
+            }
         }
     }
 
@@ -197,6 +212,18 @@ final class NavigationService: NSObject {
     }
 
     // MARK: - Following you
+
+    /// Directions start from the pocket: "Always" is asked for when the Places screen opens (iOS first asks
+    /// While Using, then offers Always).
+    func askAlways() {
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse: manager.requestAlwaysAuthorization()
+        default: break
+        }
+    }
+
+    var hasAlways: Bool { manager.authorizationStatus == .authorizedAlways }
 
     private func authorized() -> Bool {
         let s = manager.authorizationStatus
@@ -237,6 +264,7 @@ final class NavigationService: NSObject {
     }
 
     fileprivate func got(_ location: CLLocation) {
+        guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 50 || trip == nil else { return }  // a wild fix
         here = location
         resolveFixes(location)
         if trip == nil {
@@ -256,14 +284,15 @@ final class NavigationService: NSObject {
         } else {
             t.offSince = nil
         }
+        let leftAlong = RouteGeometry.metresAlong(t.line, from: p, to: t.line.count - 1)
         if let since = t.offSince, RouteGeometry.offRoute(distanceFromRoute: off, mode: t.mode, since: Date().timeIntervalSince(since)),
-           Date().timeIntervalSince(t.lastReroute) > 20 {
+           Date().timeIntervalSince(t.lastReroute) > 20, RouteGeometry.rerouteAllowed(leftAlong: leftAlong) {
             t.lastReroute = Date()
             trip = t
             return reroute(from: p)
         }
         // Arrived?
-        if RouteGeometry.arrived(distance: RouteGeometry.distance(p, t.target), mode: t.mode) {
+        if RouteGeometry.arrived(toTarget: RouteGeometry.distance(p, t.target), leftAlong: leftAlong, mode: t.mode) {
             let route = t.route
             log("arrived at \(t.destination)")
             finish()
@@ -278,12 +307,15 @@ final class NavigationService: NSObject {
             break
         }
         let toTurn = Int(RouteGeometry.metresAlong(t.line, from: p, to: t.turns[next]))
-        t.left = RouteGeometry.metresAlong(t.line, from: p, to: t.line.count - 1)
+        t.left = leftAlong
         t.eta = Date().addingTimeInterval(t.totalDistance > 0 ? t.totalTime * t.left / t.totalDistance : 0)
-        let threshold = t.mode == .driving ? 50 : t.mode == .cycling ? 25 : 10
-        let changed = next != t.step || abs(toTurn - t.sentToTurn) >= threshold
+        let changed = RouteGeometry.progressDue(stepChanged: next != t.step, metresChanged: toTurn - t.sentToTurn, mode: t.mode,
+                                                sinceLast: Date().timeIntervalSince(t.sentAt))  // a keepalive every 15 s too
         t.step = next
-        if changed { t.sentToTurn = toTurn }
+        if changed {
+            t.sentToTurn = toTurn
+            t.sentAt = Date()
+        }
         trip = t
         guard changed else { return }
         Task {
@@ -297,7 +329,7 @@ final class NavigationService: NSObject {
         log("off the route: a new one")
         Task {
             let target = MKMapItem(location: CLLocation(latitude: t.target.latitude, longitude: t.target.longitude), address: nil)
-            guard let route = await directions(from: p, to: target, mode: t.mode), trip != nil else { return }
+            guard let route = await directions(from: p, to: target, mode: t.mode), trip?.route == t.route else { return }  // still that trip
             start(route: route, req: 0, name: t.destination, target: t.target, mode: t.mode, reroute: true)
         }
     }

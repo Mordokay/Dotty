@@ -52,6 +52,8 @@ class NavRoute {
   std::string text(int i) const;
   std::string street(int i) const;
   size_t textBytes() const { return buffer_.capacity(); }
+  size_t stepBytes() const { return steps_.capacity() * sizeof(NavStep); }
+  static constexpr size_t kStepsReserved = 4200 / sizeof(NavStep) + 1;  // the steps array in PSRAM too
 
   std::string destination, error;
   NavMode mode = NavMode::Walking;
@@ -64,6 +66,21 @@ class NavRoute {
   int route_ = 0, req_ = 0, count_ = 0, received_ = 0;
   std::vector<NavStep> steps_;
   std::string buffer_;
+};
+
+// Each step's line (written by the text model), in one buffer past the PSRAM threshold: a string per
+// line would put several KB in internal RAM for the whole trip.
+class NavLines {
+ public:
+  void set(const std::vector<std::string> &lines);
+  void clear() { at_.clear(), buffer_.clear(); }
+  std::string at(size_t i) const;
+  size_t count() const { return at_.size(); }
+  size_t bufferBytes() const { return buffer_.capacity(); }
+
+ private:
+  std::string buffer_;
+  std::vector<std::pair<uint32_t, uint32_t>> at_;  // offset, length
 };
 
 struct NavProgress {

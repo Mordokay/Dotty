@@ -162,7 +162,7 @@ std::string historyNewsCompanion;  // turns appended to history, and when talksT
 // follow-up goes out once the question's turn and the job are both done (or it has been quiet for a
 // moment: a recall may come without words); the speaker's stream stays open, so it's one reply.
 MacroList macroList;  // the user's macros (data/macros.json), shared by every companion
-enum class Job { Write, Recall, Line, Plan, Fold, NavLines };
+enum class Job { Write, Recall, Line, Plan, Fold };
 Job jobKind = Job::Write;
 std::string jobCallId;           // recall's function call, answered with what was found
 bool writing = false;            // a job asked, its follow-up not sent yet
@@ -237,8 +237,11 @@ struct Trip {
   std::string companion;
   NavRoute route;
   ClipPlan clips;
-  std::vector<std::string> lines;  // per step ("" = say Apple's text live)
-  bool linesAsked = false, linesReady = false, linesRunning = false;
+  NavLines lines;                  // per step ("" = say Apple's text live), in one PSRAM buffer
+  bool linesAsked = false, linesReady = false;
+  uint32_t linesFetch = 0, linesAt = 0;  // the lines' own fetch through the phone (never the chat's job slot)
+  bool relock = false;                   // a turn woke a locked Dotty: lock again once it has been said
+  uint32_t relockAt = 0;
   NavProgress progress;
   uint32_t progressAt = 0, drawnAt = 0, windowAt = 0, rerouteSpokenAt = 0, confirmAt = 0;
   int drawnStep = -1, drawnToTurn = -1;
@@ -1212,7 +1215,12 @@ void connect() {
   // with Bluetooth left on (mbedTLS in PSRAM made that fit; Bluetooth goes off once Wi-Fi has won and
   // the grace window is over).
   const bool distrusted = relayDistrustUntil && static_cast<int32_t>(relayDistrustUntil - millis()) > 0;
-  const bool phone = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText)) && !distrusted;
+  // On a trip the phone always takes the chat (Bluetooth must stay up for the directions).
+  const bool phone = relay::phoneReady() && relay::phoneHasKey(keyHint(sessionKeyText)) && (!distrusted || trip.active);
+  if (!phone && pendingTypedPhoneOnly && !pendingTypedText.empty() && info.state != Talk::Listening) {
+    LOGW("nav", "a directions line needs the iPhone's relay: not raced over Wi-Fi");
+    return;
+  }
   path.press(millis(), phone);
   phoneWasReady = phone;
   power::setWakeLock(power::kWakeLockNetwork, true);
@@ -2613,14 +2621,13 @@ void pollLines() {
   }
   switch (lineJob.step()) {
     case LineJob::Step::Idle: {
-      // A trip's clips are written already: only Live's reading (through the phone), no second TLS connection.
-      if (!idleChat || (!roomForWriter && !navClipsDue()) || jobs.busy() || planRunning ||
-          static_cast<int32_t>(millis() - lineCooldownUntil) < 0)
-        return;
+      if (!idleChat || jobs.busy() || planRunning || static_cast<int32_t>(millis() - lineCooldownUntil) < 0) return;
       if (millis() - lastLineScan < 3000) return;
       lastLineScan = millis();
       LineWork w;
       if (!nextLineWork(w, sessionCompanion)) return;
+      // A trip's clip is written already (only Live's reading); anything else needs room for the writer.
+      if (!roomForWriter && w.key.rfind("nav-", 0) != 0) return;
       const Profile *who = companions::find(w.companion);
       if (!who) return;
       lineNote = w.key == "timer" ? "Saving your timer..." : "Saving your reminder...";
@@ -2631,7 +2638,7 @@ void pollLines() {
         const size_t i = static_cast<size_t>(atoi(w.key.c_str() + w.key.rfind('-') + 1));
         Written given;
         given.ok = true;
-        given.text = i < trip.lines.size() ? trip.lines[i] : "";
+        given.text = trip.lines.at(i);
         lineNote = "Saving directions...";
         lineJob.written(given);
         return;
@@ -2835,7 +2842,7 @@ void endPhoneWake(const char *how) {
     net::disconnect();
     power::setWakeLock(power::kWakeLockNetwork, false);
   }
-  shell::endBluetoothWindow();
+  if (!trip.active) shell::endBluetoothWindow();  // a trip keeps the phone connected while locked
   LOGI("wake", "phone wake: done in %lu s via %s", static_cast<unsigned long>((millis() - bgOpenedAt) / 1000), how);
   phoneWake.end();
   bgSession = false;
@@ -2903,7 +2910,7 @@ void pollPhoneWake() {
   const PhoneWake::Stage stage = phoneWake.poll(millis(), phone, true, done);
   if (stage == PhoneWake::Stage::Done) return endPhoneWake(wakeVia);
   if (stage == PhoneWake::Stage::Phone && shell::locked()) shell::bluetoothWindow(30);  // kept open while it works
-  if (stage == PhoneWake::Stage::Wifi && shell::bluetoothWindowOpen()) shell::endBluetoothWindow();
+  if (stage == PhoneWake::Stage::Wifi && shell::bluetoothWindowOpen() && !trip.active) shell::endBluetoothWindow();
   // A session that didn't open, or a phone that didn't answer its setup in 10 s.
   if (bgSession && awaitingConnect && !connecting && !live.connected()) {
     LOGW("wake", "the recording session didn't open: %s", connectError.c_str());
@@ -3015,6 +3022,7 @@ void queueTypedTurn(const std::string &text, const std::string &label, bool phon
 
 void pollTypedTurn() {
   if (pendingTypedText.empty()) return;
+  if (bgSession && (capturingLine || lineJob.busy())) return;  // never into a clip being recorded
   if (live.ready() && (info.state == Talk::Ready || info.state == Talk::After || info.state == Talk::Offline)) {
     typedTurn(pendingTypedText, pendingTypedLabel);
     pendingTypedText.clear();
@@ -3064,8 +3072,8 @@ void endTrip(const char *why, bool tellPhone) {
   if (tellPhone) sendNav("nav.stop", [](JsonDocument &) {});
   if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("the trip ended");
   for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
-  if (trip.linesRunning) jobs.cancel();
-  trip = Trip();
+  trip = Trip();  // an unfinished lines fetch is just never collected
+  shell::bluetoothOnLock(0);
   navFake = false;
   navLockDirty = true;
   redraw = true;
@@ -3077,7 +3085,6 @@ void startRoute(const NavRoute &r) {
   if (again) {
     if (lineJob.busy() && lineJob.work().key.rfind("nav-", 0) == 0) abortLine("re-routed");
     for (int i = 0; i < trip.route.count(); i++) moments::dropRecording(trip.companion, navKey(i));
-    if (trip.linesRunning) jobs.cancel();
   } else {
     trip = Trip();
     trip.active = true;
@@ -3085,20 +3092,25 @@ void startRoute(const NavRoute &r) {
   }
   trip.route = r;
   trip.clips.reset(r);
-  trip.lines.assign(r.count(), "");
-  trip.linesAsked = trip.linesReady = trip.linesRunning = false;
+  trip.lines.clear();
+  trip.linesAsked = trip.linesReady = false;
+  trip.linesFetch = 0;
   trip.progress = NavProgress();
   trip.progress.route = r.route();
   trip.progress.left = r.distance;
   trip.progress.eta = r.eta;
-  for (int i = 0; i < r.count(); i++)
+  int before = 0;  // a step's distance is what comes after its turn: the first turn is the steps before it
+  for (int i = 0; i < r.count(); i++) {
     if (r.at(i).spoken()) {
       trip.progress.step = i;
-      trip.progress.toTurn = r.at(i).distance;
+      trip.progress.toTurn = before;
       break;
     }
+    before += r.at(i).distance;
+  }
   trip.progressAt = millis();
   trip.drawnStep = -1;
+  shell::bluetoothOnLock(120);  // locking keeps the phone connected (pollNav renews the window)
   navLockDirty = true;
   redraw = true;
   LOGI("nav", "%s %s to %s: %d steps, %d m", again ? "re-route" : "trip", modeName(r.mode), r.destination.c_str(),
@@ -3116,11 +3128,15 @@ void pollNavAnswer() {
   if (!navAsk.active) return;
   if (!navAsk.resultReady) {
     lastTurnAt = millis();  // the chat stays open meanwhile
-    if (navPending.route() && !navPending.complete() && navAsk.routeAt && millis() - navAsk.routeAt > 10000)
-      answerNav("The route didn't come through from the iPhone. Tell the user briefly and offer to try again.");
-    else if (millis() - navAsk.at > 20000)
-      answerNav("The iPhone didn't answer. Tell the user briefly that directions need their iPhone nearby, with the "
-                "Dotty app.");
+    const bool incomplete = navPending.route() && !navPending.complete() && navAsk.routeAt && millis() - navAsk.routeAt > 10000;
+    if (incomplete || millis() - navAsk.at > 20000) {  // given up: the iPhone stops too, late steps are refused
+      const int req = navAsk.req;
+      navPending = NavRoute();
+      sendNav("nav.stop", [req](JsonDocument &d) { d["req"] = req; });
+      answerNav(incomplete ? "The route didn't come through from the iPhone. Tell the user briefly and offer to try again."
+                           : "The iPhone didn't answer. Tell the user briefly that directions need their iPhone nearby, "
+                             "with the Dotty app.");
+    }
     return;
   }
   const bool spoke = firstAudioAt || !said.empty() || !textQueue.empty();
@@ -3224,12 +3240,17 @@ bool navShowing() {
 
 void playClip(int i, ClipPlan::Play how) {
   const NavRoute &r = trip.route;
-  if (shell::locked()) shell::wake();  // a turn: on screen too
+  if (shell::locked()) {  // a turn: on screen too, then locked again (pollNav)
+    shell::wake();
+    trip.relock = true;
+  }
+  trip.relockAt = millis();
   if (how == ClipPlan::Play::Clip) {
     const String wav = moments::recordingPath(trip.companion, navKey(i), "wav");
     if (player.play(wav.c_str())) return (void)LOGI("nav", "clip %d played at %d m", i, trip.progress.toTurn);
   }
-  const std::string line = trip.lines.size() > static_cast<size_t>(i) && !trip.lines[i].empty() ? trip.lines[i] : r.text(i);
+  const std::string written = trip.lines.at(i);
+  const std::string line = written.empty() ? r.text(i) : written;
   if (relay::phoneReady() && canRecord()) {
     queueTypedTurn("(Dotty, not the user: the next turn is coming up.) Say this to the user now, word for word: " + line,
                    "(directions)", true);
@@ -3242,8 +3263,12 @@ void playClip(int i, ClipPlan::Play how) {
 }
 
 void onNavProgress() {
+  // A ready clip plays even while another is being recorded (the recording never uses the speaker); a live
+  // line waits for it (a typed turn on the recording session would land in the clip).
+  const bool recording = capturingLine || lineJob.busy();
   const bool busy = info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking ||
-                    voice::playing() || player.isPlaying() || !pendingTypedText.empty();
+                    voice::playing() || player.isPlaying() || !pendingTypedText.empty() ||
+                    (recording && !trip.clips.ready(trip.progress.step));
   const ClipPlan::Play play = trip.clips.onProgress(trip.progress, trip.route.mode, busy, trip.route);
   if (play == ClipPlan::Play::Drop) LOGI("nav", "step %d passed before its line could play", trip.clips.playStep());
   else if (play != ClipPlan::Play::None) playClip(trip.clips.playStep(), play);
@@ -3278,7 +3303,19 @@ void pollNav() {
     wasShowing = navShowing();
     redraw = true;
   }
-  if (!shell::locked()) shell::wake();  // no auto-lock on a trip
+  if (!shell::locked() && trip.relock) {  // a turn woke it: lock again once it has been said
+    // An open chat keeps Dotty awake (the loop's own wake): lock once it has closed (~20 s after a live line).
+    const bool talking = info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking ||
+                         player.isPlaying() || !pendingTypedText.empty() || live.connected() || connecting;
+    if (talking) trip.relockAt = millis();
+    else if (millis() - trip.relockAt > 4000) {
+      trip.relock = false;
+      shell::lock();
+      return;
+    }
+  } else if (!shell::locked()) {
+    shell::wake();  // no auto-lock on a trip the user is watching
+  }
   else if (!shell::bluetoothWindowOpen() || millis() - trip.windowAt > 60000) {  // the phone stays connected
     trip.windowAt = millis();
     shell::bluetoothWindow(120);
@@ -3287,33 +3324,41 @@ void pollNav() {
     trip.confirm = false;
     redraw = true;
   }
-  // The lines: once per route, through the phone (or the session's Wi-Fi).
-  if (!trip.linesAsked && storage::available() && !jobs.busy() && !writing && !planRunning && !lineJob.busy() &&
-      !foldRunning && relay::phoneReady()) {
+  // The lines: once per route, through the phone, on their own fetch (the chat's job slot is the chat's).
+  if (!trip.linesAsked && storage::available() && relay::phoneReady()) {
     const Profile *who = companions::find(trip.companion);
     if (who) {
-      writerBody = navLinesRequest(*who, trip.companion == companions::active().id ? memories::store().promptSection() : "",
-                                   trip.route);
-      jobKind = Job::NavLines;
-      trip.linesAsked = trip.linesRunning = true;
-      LOGI("nav", "writing %d lines", trip.route.count());
-      launchJob();
+      trip.linesFetch = relay::fetch(kWriterModel, navLinesRequest(*who, trip.companion == companions::active().id
+                                                                          ? memories::store().promptSection()
+                                                                          : std::string(),
+                                                                  trip.route));
+      trip.linesAsked = true;
+      trip.linesAt = millis();
+      LOGI("nav", "writing %d lines (through the iPhone)", trip.route.count());
     }
   }
-  if (trip.linesRunning) {
-    Written w;
-    if (jobs.take(w)) {
-      trip.linesRunning = false;
-      trip.linesReady = true;
-      if (w.tokens) usage::addTokens(w.tokens, sessionKey);
-      trip.lines = parseNavLines(w, trip.route);
-      int got = 0;
-      for (int i = 0; i < trip.route.count(); i++) {
-        got += !trip.lines[i].empty();
-        if (trip.route.at(i).spoken() && trip.lines[i].empty()) trip.clips.noClip(i);  // said live instead
+  if (trip.linesFetch) {
+    int status = 0;
+    std::string body;
+    if (relay::takeFetched(trip.linesFetch, status, body)) {
+      trip.linesFetch = 0;
+      const Written w = status ? parseWritten(status, body) : Written();
+      if (!w.ok) {  // tried again in a while (the steps are said live meanwhile)
+        LOGW("nav", "lines failed: %s", status ? w.error.c_str() : body.c_str());
+        trip.linesAsked = millis() - trip.linesAt < 30000;  // once more after a quick failure, not forever
+      } else {
+        if (w.tokens) usage::addTokens(w.tokens, sessionKey);
+        const std::vector<std::string> lines = parseNavLines(w, trip.route);
+        trip.lines.set(lines);
+        trip.linesReady = true;
+        int got = 0;
+        for (int i = 0; i < trip.route.count(); i++) {
+          got += !lines[i].empty();
+          if (trip.route.at(i).spoken() && lines[i].empty()) trip.clips.noClip(i);  // said live instead
+        }
+        LOGI("nav", "lines written: %d of %d", got, trip.route.count());
+        lineScanStale = true;
       }
-      LOGI("nav", "lines %s: %d of %d", w.ok ? "written" : w.error.c_str(), got, trip.route.count());
-      lineScanStale = true;
     }
   }
   if (!storage::available()) trip.linesReady = true;  // no card: every step said live
@@ -3328,8 +3373,8 @@ void pollNav() {
         ble::runHere("{\"cmd\":\"nav.arrived\",\"route\":" + std::to_string(trip.route.route()) + "}");
         return;
       }
+      p.toTurn = trip.route.at(p.step).distance;  // the stretch after this turn, up to the next one
       p.step++;
-      p.toTurn = trip.route.at(p.step).distance;
     }
     trip.progressAt = millis();
     onNavProgress();
@@ -3339,7 +3384,7 @@ void pollNav() {
     info.note = "Lost the iPhone";
     noteUntil = millis() + 5000;
     LOGW("nav", "no progress for 2 minutes");
-    return endTrip("lost the iPhone", false);
+    return endTrip("lost the iPhone", true);
   }
   if ((quiet > 30000) != trip.waiting) {
     trip.waiting = quiet > 30000;
@@ -3399,10 +3444,14 @@ void registerNavCommands() {
     p.end();
     loadPlaceNames();
   });
-  ble::on("nav.route", [](JsonObjectConst args, JsonObject) {
+  ble::on("nav.route", [](JsonObjectConst args, JsonObject reply) {
     const int req = args["req"] | 0;
     const bool reroute = args["reroute"] | false;
-    if (!(navAsk.active && !navAsk.nearby && req == navAsk.req) && !(reroute && trip.active)) return;
+    if (!(navAsk.active && !navAsk.nearby && req == navAsk.req) && !(reroute && trip.active)) {
+      reply["ok"] = false;  // nobody is waiting for it (given up, or no trip): the iPhone stops
+      reply["error"] = "not wanted";
+      return;
+    }
     const bool ok = navPending.begin(args);
     navAsk.routeAt = millis();
     if (ok || reroute) return;
@@ -3417,8 +3466,13 @@ void registerNavCommands() {
                 ". Tell the user briefly.");
     }
   });
-  ble::on("nav.step", [](JsonObjectConst args, JsonObject) {
-    if (!navPending.step(args) || !navPending.complete()) return;
+  ble::on("nav.step", [](JsonObjectConst args, JsonObject reply) {
+    if (!navPending.step(args)) {
+      reply["ok"] = false;  // a route Dotty no longer waits for
+      reply["error"] = "not wanted";
+      return;
+    }
+    if (!navPending.complete()) return;
     const NavRoute done = navPending;
     navPending = NavRoute();
     if (done.reroute && trip.active) {
@@ -3438,8 +3492,13 @@ void registerNavCommands() {
       answerNav(navStartNote(done, time(nullptr)));
     }
   });
-  ble::on("nav.progress", [](JsonObjectConst args, JsonObject) {
-    if (!trip.active || navFake || !parseProgress(args, trip.route.route(), trip.progress)) return;
+  ble::on("nav.progress", [](JsonObjectConst args, JsonObject reply) {
+    if (navFake) return;
+    if (!trip.active || !parseProgress(args, trip.route.route(), trip.progress)) {
+      reply["ok"] = false;  // not the trip Dotty holds: the iPhone stops following
+      reply["error"] = "not this trip";
+      return;
+    }
     trip.progressAt = millis();
     onNavProgress();
   });
@@ -3455,7 +3514,13 @@ void registerNavCommands() {
   });
   ble::on("nav.places", [](JsonObjectConst args, JsonObject) {
     if (!navAsk.active || !navAsk.nearby || (args["req"] | 0) != navAsk.req) return;
-    nearbyCount = (args["ok"] | false) ? (args["count"] | 0) : 0;
+    if (!(args["ok"] | false)) {  // the iPhone couldn't search (no location...): not "nothing nearby"
+      nearbyCount = 0;
+      answerNav(std::string("The iPhone couldn't search: ") + (args["error"] | "it didn't say why") +
+                ". Tell the user briefly; don't say there's nothing nearby.");
+      return;
+    }
+    nearbyCount = args["count"] | 0;
     if (nearbyCount == 0) answerNav(nearbyResult(navAsk.what, {}));
   });
   ble::on("nav.place", [](JsonObjectConst args, JsonObject) {
@@ -3477,11 +3542,11 @@ void fakeTrip() {
                ",\"route\":900,\"ok\":true,\"destination\":\"Rossio\",\"mode\":\"walking\",\"distance\":450,\"eta\":" +
                std::to_string(now + 360) + ",\"count\":5}");
   const char *steps[] = {
-      R"("i":0,"text":"","street":"","distance":0,"arrow":"straight")",
-      R"("i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":120,"arrow":"right")",
-      R"("i":2,"text":"Take the 2nd exit at the roundabout onto Rua do Ouro","street":"Rua do Ouro","distance":80,"arrow":"roundabout","exit":2)",
-      R"("i":3,"text":"Turn slightly left onto Praca da Figueira","street":"Praca da Figueira","distance":150,"arrow":"slight-left")",
-      R"("i":4,"text":"Arrive at Rossio","street":"","distance":100,"arrow":"arrive")"};
+      R"("i":0,"text":"","street":"","distance":120,"arrow":"straight")",
+      R"("i":1,"text":"Turn right onto Rua Augusta","street":"Rua Augusta","distance":80,"arrow":"right")",
+      R"("i":2,"text":"Take the 2nd exit at the roundabout onto Rua do Ouro","street":"Rua do Ouro","distance":150,"arrow":"roundabout","exit":2)",
+      R"("i":3,"text":"Turn slightly left onto Praca da Figueira","street":"Praca da Figueira","distance":100,"arrow":"slight-left")",
+      R"("i":4,"text":"Arrive at Rossio","street":"","distance":0,"arrow":"arrive")"};
   for (const char *s : steps) ble::runHere(std::string("{\"cmd\":\"nav.step\",\"route\":900,") + s + "}");
   navFake = true;
   navFakeAt = millis();
@@ -5151,6 +5216,7 @@ void loop() {
     wasLocked = true;
     pollMoments();  // one due unlocks Dotty (shell::wake) and plays from the next pass
     pollTimer();
+    if (trip.active && !bgSession) relay::poll();  // the trip's lines come back through the phone
     pollNav();  // a trip carries on locked (the phone stays connected; a turn wakes Dotty)
     if (phoneWake.stage() != PhoneWake::Stage::Idle || bgSession || connecting || lineJob.busy()) backgroundPoll();
     else pollPhoneWake();  // is one due?
@@ -5275,7 +5341,7 @@ void loop() {
       !writing && !reading && !reviewStart && path.takeHandover()) {
     handOver();
   }
-  if (live.connected() && !live.overRelay() && ble::running() && !path.keepBluetooth(millis())) {
+  if (live.connected() && !live.overRelay() && ble::running() && !path.keepBluetooth(millis()) && !trip.active) {
     LOGI("companion", "Wi-Fi chat: Bluetooth off for the rest of it");
     ble::stop();
   }

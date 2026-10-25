@@ -74,6 +74,7 @@ uint32_t nextLockedWake = 0;
 uint32_t wakeAtMs = 0;
 // bluetoothWindow: when it ends (millis), 0 = closed; when it opened.
 uint32_t windowUntil = 0, windowOpenedAt = 0;
+uint32_t keepOnLockSeconds = 0;  // bluetoothOnLock
 
 // The place (core.place), read from NVS on first use.
 bool placeRead = false, placeKnown = false;
@@ -764,6 +765,10 @@ void endBluetoothWindow() {
   closeWindow();
 }
 
+void bluetoothOnLock(uint32_t seconds) {
+  keepOnLockSeconds = seconds;
+}
+
 bool bluetoothWindowOpen() {
   return windowUntil != 0;
 }
@@ -783,7 +788,8 @@ void lock() {
   if (cfg.beforeLock) cfg.beforeLock();
   isLocked = true;
   nextLockedWake = millis() + cfg.lockedWakeSeconds * 1000;
-  if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock
+  if (keepOnLockSeconds) bluetoothWindow(keepOnLockSeconds);  // kept on (bluetoothOnLock): no drop, no reconnect
+  else if (!cfg.bluetoothWhileLocked) ble::stop();  // the phone disconnects; back on at unlock
   const String playing = nowPlaying();
   LOGI("ui", "locked%s", playing.length() ? " (keeps playing)" : "");
   drawLock();

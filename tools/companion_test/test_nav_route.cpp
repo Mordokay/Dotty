@@ -138,6 +138,15 @@ int main() {
     CHECK("a step without a line is skipped for recording and said live",
           skipped && plan.onProgress(at(1, 30), NavMode::Walking, false, r) == ClipPlan::Play::Live);
   }
+  CHECK("the steps array past the PSRAM threshold too", r.stepBytes() > 4096);
+  {
+    NavLines lines;
+    lines.set({"", "Right onto Rua Augusta, my lord!", "", "Here we are."});
+    CHECK("lines: one buffer past the threshold, by step", lines.bufferBytes() > 4096 && lines.count() == 4 &&
+                                                               lines.at(1) == "Right onto Rua Augusta, my lord!" &&
+                                                               lines.at(0).empty() && lines.at(3) == "Here we are." &&
+                                                               lines.at(9).empty());
+  }
   {
     ClipPlan plan;
     plan.reset(r);

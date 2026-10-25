@@ -1,5 +1,7 @@
 #include "nav_route.h"
 
+#include <algorithm>
+
 namespace {
 
 const char *const kModes[] = {"walking", "cycling", "driving"};
@@ -47,6 +49,8 @@ NavRoute &NavRoute::operator=(const NavRoute &o) {
   req_ = o.req_;
   count_ = o.count_;
   received_ = o.received_;
+  steps_.clear();
+  steps_.reserve(std::max(kStepsReserved, o.steps_.size()));
   steps_ = o.steps_;
   buffer_.clear();
   buffer_.reserve(kBufferBytes);
@@ -71,6 +75,7 @@ bool NavRoute::begin(JsonObjectConst msg) {
   reroute = msg["reroute"] | false;
   count_ = msg["count"] | 0;
   if (count_ < 0 || count_ > 200) count_ = 0;
+  steps_.reserve(std::max(kStepsReserved, static_cast<size_t>(count_)));
   steps_.assign(count_, NavStep());
   return count_ > 0;
 }
@@ -92,6 +97,20 @@ bool NavRoute::step(JsonObjectConst msg) {
   if (!s.received) received_++;
   s.received = true;
   return true;
+}
+
+void NavLines::set(const std::vector<std::string> &lines) {
+  buffer_.clear();
+  buffer_.reserve(NavRoute::kBufferBytes);
+  at_.clear();
+  for (const std::string &l : lines) {
+    at_.push_back({static_cast<uint32_t>(buffer_.size()), static_cast<uint32_t>(l.size())});
+    buffer_ += l;
+  }
+}
+
+std::string NavLines::at(size_t i) const {
+  return i < at_.size() ? buffer_.substr(at_[i].first, at_[i].second) : std::string();
 }
 
 std::string NavRoute::text(int i) const {

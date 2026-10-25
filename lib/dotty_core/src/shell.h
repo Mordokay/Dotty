@@ -85,6 +85,9 @@ void wakeLockedAt(time_t local);
 void bluetoothWindow(uint32_t seconds);
 void endBluetoothWindow();
 bool bluetoothWindowOpen();
+// While set (seconds > 0), locking keeps Bluetooth on as a window of that length instead of turning it off
+// (e.g. directions: the phone must stay connected through a lock); 0 = the usual.
+void bluetoothOnLock(uint32_t seconds);
 
 // Shared hardware, ready after begin().
 extern EpdDisplay epd;

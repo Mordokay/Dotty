@@ -73,6 +73,11 @@ struct PlacesView: View {
                     .frame(maxHeight: 300)
                     .glassSurface(cornerRadius: Radius.soft)
                 }
+                if !NavigationService.shared.hasAlways && !focused {
+                    Text("For directions with your iPhone in your pocket, allow the Dotty app's location \"Always\" (Settings › Dotty › Location).")
+                        .font(.lpCaption).foregroundStyle(Color.inkFaint)
+                        .padding(Spacing.m).glassSurface(cornerRadius: Radius.soft)
+                }
                 if store.places.isEmpty && !focused && draft == nil {
                     Text("Search for a place or long-press the map, then save it with a name like Home: \"walk me home\" works after that.")
                         .font(.lpCaption).foregroundStyle(Color.inkFaint)
@@ -85,6 +90,7 @@ struct PlacesView: View {
         .navigationTitle("Places")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: query) { _, text in search.update(text) }
+        .onAppear { NavigationService.shared.askAlways() }  // directions start with the iPhone in a pocket
         .sheet(item: $draft) { place in
             PlaceEditor(place: place, isNew: true) { saved in
                 store.save(saved)
