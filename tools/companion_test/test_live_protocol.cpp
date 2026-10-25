@@ -47,7 +47,20 @@ int main() {
   }
   CHECK_EQ("setup: the tools", names, std::string("set_mood,remember,update_memory,forget_memory,set_name,evolve,write_long,recall,summarize,run_macro,"
                                                   "set_moment,cancel_moment,list_moments,start_timer,stop_timer,"
-                                                  "start_recording,play_recording,delete_recording,show_recordings,new_conversation,"));
+                                                  "start_recording,play_recording,delete_recording,show_recordings,new_conversation,"
+                                                  "navigate_to,stop_navigation,find_nearby,"));
+  {  // directions (spec 2026-10-25): the place is required, the mode one of three; find_nearby needs what
+    JsonObjectConst nav, nearby;
+    for (JsonObjectConst f : fns) {
+      if (std::string(f["name"] | "") == "navigate_to") nav = f;
+      if (std::string(f["name"] | "") == "find_nearby") nearby = f;
+    }
+    std::string modes;
+    for (JsonVariantConst m : nav["parameters"]["properties"]["mode"]["enum"].as<JsonArrayConst>()) modes += m.as<std::string>() + ",";
+    CHECK("navigate_to: place required, three modes", std::string(nav["parameters"]["required"][0] | "") == "place" &&
+                                                          modes == "walking,cycling,driving,");
+    CHECK("find_nearby: what required", std::string(nearby["parameters"]["required"][0] | "") == "what");
+  }
   CHECK("setup declares start_recording, play_recording, delete_recording",
         fns[15]["parameters"]["required"][0] == "title" && fns[16]["parameters"]["required"][0] == "query" &&
             fns[17]["parameters"]["required"][0] == "query");
@@ -134,6 +147,10 @@ int main() {
                                                 many.calls[1].group == "people");
   CHECK("parse: forget_memory's id", many.calls.size() == 3 && many.calls[2].memoryId == 12);
   const LiveEvent named = liveParse(R"({"toolCall":{"functionCalls":[{"name":"set_name","args":{"name":"Luna"},"id":"c9"}]}})");
+  {
+    const LiveEvent nav = liveParse(R"({"toolCall":{"functionCalls":[{"name":"navigate_to","args":{"place":"home","mode":"cycling"},"id":"n1"}]}})");
+    CHECK("parse: navigate_to place and mode", nav.calls.size() == 1 && nav.calls[0].text == "home" && nav.calls[0].kind == "cycling");
+  }
   const LiveEvent evolved = liveParse(R"({"toolCall":{"functionCalls":[{"name":"evolve","args":{"field":"traits","value":"a\nb","why":"braver"},"id":"e1"}]}})");
   CHECK("parse: evolve", evolved.calls.size() == 1 && evolved.calls[0].field == "traits" && evolved.calls[0].text == "a\nb" &&
                              evolved.calls[0].why == "braver");
@@ -178,6 +195,9 @@ int main() {
   CHECK("instruction: the voice carries the mood", noPlace.find("Let your voice carry your mood") != std::string::npos);
   CHECK("instruction: long answers are written, then read", noPlace.find("call write_long") != std::string::npos);
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
+  CHECK("instruction: directions and nearby", noPlace.find("call navigate_to") != std::string::npos &&
+                                                 noPlace.find("call find_nearby") != std::string::npos &&
+                                                 noPlace.find("never say a place is open") != std::string::npos);
   CHECK("instruction: a new conversation when asked", noPlace.find("call new_conversation") != std::string::npos &&
                                                          noPlace.find("switch tape") != std::string::npos);
   CHECK("instruction: the recordings list", noPlace.find("call show_recordings") != std::string::npos);

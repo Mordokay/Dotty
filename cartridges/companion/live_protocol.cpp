@@ -172,6 +172,15 @@ std::string liveSetup(const LiveConfig &config) {
   declare("show_recordings", "Show the list of the user's voice notes on Dotty's screen, where they can tap one to play it");
   // The open conversation (conversation.h) carries on across unlocks until this or 6 hours of silence.
   declare("new_conversation", "Set the conversation so far aside and start a fresh one, when the user asks for that");
+  // Directions (nav_route.h): the iPhone finds the place and the way; Dotty shows the turns.
+  JsonObject nav = declare("navigate_to", "Guide the user to a place, turn by turn (needs their iPhone nearby)");
+  param(nav, "place", "STRING", true)["description"] =
+      "a saved place's name, a place to search for near them, or \"nearby N\" for a find_nearby result";
+  JsonObject navMode = param(nav, "mode", "STRING", false);
+  for (const char *m : {"walking", "cycling", "driving"}) navMode["enum"].add(m);
+  declare("stop_navigation", "Stop the directions");
+  JsonObject nearby = declare("find_nearby", "Find places of a kind near the user (an ATM, a pharmacy, coffee...)");
+  param(nearby, "what", "STRING", true)["description"] = "the kind of place, or what they're looking for";
   return serialize(doc);
 }
 
@@ -226,14 +235,14 @@ LiveEvent liveParse(const std::string &message) {
     c.name = call["name"] | "";
     JsonObject args = call["args"];
     c.mood = args["mood"] | "";
-    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | (args["question"] | (args["query"] | "")))));
+    c.text = args["text"] | (args["name"] | (args["value"] | (args["what"] | (args["question"] | (args["query"] | (args["place"] | ""))))));
     c.field = args["field"] | "";
     c.why = args["why"] | "";
     c.seconds = args["seconds"] | 0;
     c.group = args["group"] | (args["topic"] | "");  // recall's topic travels as the group
     c.from = args["from"] | "";
     c.to = args["to"] | "";
-    c.kind = args["kind"] | "";
+    c.kind = args["kind"] | (args["mode"] | "");  // navigate_to's mode travels as the kind
     c.at = args["at"] | "";
     c.repeat = args["repeat"] | "";
     c.style = args["style"] | "";
@@ -305,6 +314,10 @@ std::string systemInstruction(const std::string &localTime, const std::string &p
       "afterwards. To play one, call play_recording; to delete one, only after they confirmed, delete_recording. "
       "When they want to see or browse their recordings (\"show me my recordings\", \"what have I recorded lately\"), "
       "call show_recordings and say a few words: the list opens on the screen after your reply. "
+      "To guide the user somewhere (\"walk me home\", \"take me to the nearest pharmacy\"), call navigate_to: walking "
+      "unless they say ride, cycle or drive. Asked what's around (\"is there an ATM nearby?\"), call find_nearby; "
+      "\"take me there\" or \"the second one\" after it is navigate_to with \"nearby 1\", \"nearby 2\"... You don't "
+      "know opening hours: never say a place is open or closed. To stop, stop_navigation. "
       "When the user wants to start afresh (\"let's start a new conversation\", \"switch tape\", \"let's change topic\", "
       "\"new chat\"), call new_conversation and mark the fresh start in a few words of your own; what was said stays in "
       "your summaries. Don't call it just because the subject drifts by itself. "
