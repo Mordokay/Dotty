@@ -140,6 +140,26 @@ void drawNav(const NavView &v) {
   centeredIn(number, 108, 100, 198);
   epd.setFont(&FreeSans12pt7b);
   centeredIn(unit, 132, 100, 198);
+  if (!v.talk.empty()) {  // talking on the way (the user: stay on the directions, the turn always in view)
+    // A white panel with a black outline (a black fill ghosts more on e-paper), over the street lines.
+    for (int k = 0; k < 2; k++) epd.drawRoundRect(4 + k, 142 + k, kW - 8 - 2 * k, 54 - 2 * k, 8, kBlack);
+    epd.setFont(&FreeSansBold9pt7b);
+    epd.setTextColor(kBlack);
+    if (v.listening) {  // the words, and the microphone's level as 20 bars (-60..0 dBFS, like the deck's)
+      ui::drawCentered(epd, ui::printable(v.talk.c_str()), 162);
+      const int bars = constrain((v.levelDb + 60) / 3, 0, 20);
+      for (int i = 0; i < 20; i++) {
+        const int16_t x = 30 + i * 7, h = 3 + i / 2;
+        if (i < bars) epd.fillRect(x, 188 - h, 5, h, kBlack);
+        else epd.drawFastHLine(x, 187, 5, kBlack);
+      }
+      return;
+    }
+    const std::vector<String> lines = ui::wrapText(epd, ui::printable(v.talk.c_str()), kW - 24, 2);
+    const int16_t top = lines.size() > 1 ? 164 : 174;
+    for (size_t i = 0; i < lines.size(); i++) ui::drawCentered(epd, lines[i], top + i * 19);
+    return;
+  }
   epd.setFont(&FreeSansBold9pt7b);
   if (v.waiting) {
     ui::drawCentered(epd, "Waiting for your iPhone...", 166);

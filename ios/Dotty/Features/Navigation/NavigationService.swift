@@ -505,19 +505,23 @@ final class NavigationService: NSObject {
         guard authorized(), let from = await fix() else {
             return await send(NavMessages.places(req: req, ok: false, error: "the iPhone couldn't tell where it is", places: []))
         }
-        let category = NearbySearch.category(what)
-        var radius: Double = mode == .driving ? 5000 : 1000
+        let categories = NearbySearch.categories(what)
+        let here = NearbySearch.isHere(what)  // "this building on my left": what's right by them
+        var radius: Double = here ? 80 : mode == .driving ? 5000 : 1000
         var items: [MKMapItem] = []
         for _ in 0..<2 where items.isEmpty {
-            items = await search(what: what, category: category, around: from.coordinate, radius: radius)
+            items = await search(what: what, categories: categories, around: from.coordinate, radius: radius)
             radius *= 2
         }
+        let heading = walkingHeading(at: from.coordinate)  // on a trip: left / right of the way you're going
         let nearest = NearbySearch.nearest(items, distance: { $0.location.distance(from: from) })
         lastNearby = nearest
         let places = nearest.map { item in
             let metres = item.location.distance(from: from)
             return NavMessages.Place(name: item.name ?? what, category: NearbySearch.name(item.pointOfInterestCategory),
-                                     street: street(item), direction: RouteGeometry.directionWords(from: from.coordinate, to: item.location.coordinate),
+                                     street: street(item),
+                                     direction: heading.map { RouteGeometry.sideWords(heading: $0, toward: RouteGeometry.bearing(from.coordinate, item.location.coordinate)) }
+                                         ?? RouteGeometry.directionWords(from: from.coordinate, to: item.location.coordinate),
                                      distance: Int(metres), minutes: NearbySearch.minutes(metres: metres, mode: mode),
                                      phone: item.phoneNumber)
         }
@@ -525,10 +529,17 @@ final class NavigationService: NSObject {
         await send(NavMessages.places(req: req, ok: true, error: nil, places: places))
     }
 
-    private func search(what: String, category: MKPointOfInterestCategory?, around: CLLocationCoordinate2D, radius: Double) async -> [MKMapItem] {
-        if let category {
+    /// The direction of travel where you are on the trip's route (nil with no trip).
+    private func walkingHeading(at p: CLLocationCoordinate2D) -> Double? {
+        guard let line = trip?.line, line.count >= 2 else { return nil }
+        let seg = RouteGeometry.project(line, p).segment
+        return RouteGeometry.bearing(line[seg], line[min(seg + 1, line.count - 1)])
+    }
+
+    private func search(what: String, categories: [MKPointOfInterestCategory]?, around: CLLocationCoordinate2D, radius: Double) async -> [MKMapItem] {
+        if let categories {
             let request = MKLocalPointsOfInterestRequest(center: around, radius: radius)
-            request.pointOfInterestFilter = MKPointOfInterestFilter(including: [category])
+            request.pointOfInterestFilter = MKPointOfInterestFilter(including: categories)
             return (try? await MKLocalSearch(request: request).start().mapItems) ?? []
         }
         let request = MKLocalSearch.Request()

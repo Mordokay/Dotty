@@ -100,6 +100,12 @@ check("nearby: hospital", NearbySearch.category("the nearest hospital") == .hosp
 check("nearby: coffee → cafe", NearbySearch.category("good coffee") == .cafe)
 check("nearby: toilet → restroom", NearbySearch.category("a toilet") == .restroom)
 check("nearby: a sushi place → free text", NearbySearch.category("a sushi place") == nil)
+// "what's interesting around us" / "this building on my left": many kinds at once, close by (the user's walk)
+check("nearby: interesting things → many kinds", (NearbySearch.categories("points of interest")?.count ?? 0) >= 6
+      && NearbySearch.categories("anything interesting around us")?.contains(.museum) == true)
+check("nearby: here / this building → many kinds, close", NearbySearch.categories("here")?.contains(.landmark) == true
+      && NearbySearch.isHere("this building to my left") && NearbySearch.isHere("here") && !NearbySearch.isHere("ATM"))
+check("nearby: one kind stays one kind", NearbySearch.categories("ATM") == [.atm] && NearbySearch.categories("a sushi place") == nil)
 let picked = NearbySearch.nearest([("C", 900.0), ("A", 120.0), ("B", 450.0), ("D", 1000.0), ("E", 50.0), ("F", 2000.0)], distance: { $0.1 })
 check("nearby: nearest first, at most 5", picked.map(\.0) == ["E", "A", "B", "C", "D"])
 check("nearby: walking minutes", NearbySearch.minutes(metres: 150, mode: .walking) == 2 && NearbySearch.minutes(metres: 10, mode: .walking) == 1)

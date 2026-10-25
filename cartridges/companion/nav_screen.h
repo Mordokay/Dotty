@@ -19,6 +19,9 @@ struct NavView {
   int toTurn = 0, left = 0, minutes = 0;
   bool confirm = false;  // "Stop the directions?" Yes / No
   bool waiting = false;  // no progress for 30 s: "Waiting for your iPhone..."
+  std::string talk;      // a chat on the way: "Listening...", "Thinking...", "Percival is answering..." ("" = none)
+  bool listening = false;
+  int levelDb = -60;     // the microphone meter while listening
 };
 enum class NavHit { None, Stop, Yes, No };
 

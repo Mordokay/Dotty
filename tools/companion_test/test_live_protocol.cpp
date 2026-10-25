@@ -199,6 +199,7 @@ int main() {
   CHECK("instruction: looking back", noPlace.find("call recall") != std::string::npos);
   CHECK("instruction: a new place mid-trip replaces it; a stop on the way uses then",
         noPlace.find("replaces the trip") != std::string::npos && noPlace.find("\"then\"") != std::string::npos);
+  CHECK("instruction: \"this building on my left\" → find_nearby here", noPlace.find("what = \"here\"") != std::string::npos);
   CHECK("instruction: directions and nearby", noPlace.find("call navigate_to") != std::string::npos &&
                                                  noPlace.find("call find_nearby") != std::string::npos &&
                                                  noPlace.find("never say a place is open") != std::string::npos);

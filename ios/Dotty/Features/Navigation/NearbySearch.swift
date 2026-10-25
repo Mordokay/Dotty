@@ -31,6 +31,29 @@ enum NearbySearch {
         return nil
     }
 
+    /// Notable kinds of place: "what's interesting around here", "what's this building".
+    nonisolated static let interesting: [MKPointOfInterestCategory] = [
+        .landmark, .museum, .castle, .theater, .park, .nationalMonument, .library, .musicVenue, .cafe, .restaurant,
+        .bakery, .nightlife,
+    ]
+
+    /// "Here" questions: what's right by them ("this building on my left", "what's that", "here").
+    nonisolated static func isHere(_ what: String) -> Bool {
+        let w = " " + what.lowercased() + " "
+        return [" here ", "this building", "this place", "that building", "that place", "what's that", "on my left",
+                "on my right", "next to me", "this shop", "this church"].contains { w.contains($0) }
+    }
+
+    /// The kinds to look for: one category, the notable ones (interesting / here), or nil = search the words.
+    nonisolated static func categories(_ what: String) -> [MKPointOfInterestCategory]? {
+        if let one = category(what) { return [one] }
+        let w = what.lowercased()
+        let general = ["interesting", "point of interest", "points of interest", "sights", "sightseeing", "landmark",
+                       "around us", "around here", "nearby places", "what's around"]
+        if isHere(what) || general.contains(where: { w.contains($0) }) { return interesting }
+        return nil
+    }
+
     /// Nearest first, five at most.
     nonisolated static func nearest<T>(_ items: [T], distance: (T) -> Double) -> [T] {
         Array(items.sorted { distance($0) < distance($1) }.prefix(5))

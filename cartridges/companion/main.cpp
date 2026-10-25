@@ -3276,15 +3276,19 @@ NavView navView() {
   v.minutes = secs > 0 ? static_cast<int>((secs + 30) / 60) : 0;
   v.confirm = trip.confirm;
   v.waiting = trip.waiting;
+  const Profile &who = companions::active();
+  v.listening = info.state == Talk::Listening;
+  v.levelDb = info.levelDb;
+  if (info.state == Talk::Listening) v.talk = "Listening...";
+  else if (info.state == Talk::Thinking || writing || reading) v.talk = "Thinking...";
+  else if (info.state == Talk::Speaking) v.talk = (who.awake() ? who.name : std::string("Your companion")) + " is answering...";
   return v;
 }
 
-// The chat is on screen (a question, a reply and 5 s after it), else the turn.
+// On a trip the directions stay on screen, a chat included (the user: no switching to the companion's screen;
+// a panel says it's listening / answering).
 bool navShowing() {
-  if (!trip.active || deckOpen || listOpen || nearbyOpen || settingsOpen || historyOpen) return false;
-  if (info.state == Talk::Listening || info.state == Talk::Thinking || info.state == Talk::Speaking) return false;
-  if (info.state == Talk::After && millis() - stateSince < 5000) return false;
-  return true;
+  return trip.active && !deckOpen && !listOpen && !nearbyOpen && !settingsOpen && !historyOpen;
 }
 
 void playClip(int i, ClipPlan::Play how) {
