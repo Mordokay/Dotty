@@ -406,7 +406,7 @@ final class NavigationService: NSObject {
         if RouteGeometry.arrived(toTarget: RouteGeometry.distance(p, t.target), leftAlong: leftAlong, mode: t.mode) {
             let route = t.route, next = t.then, mode = t.mode
             log("arrived at \(t.destination)" + (next.map { ", next \($0)" } ?? ""))
-            finish()
+            finish(keepSimulatedPlace: next != nil)
             Task {
                 var arrived: [String: Any] = ["cmd": "nav.arrived", "route": route]
                 if let next { arrived["next"] = next }
@@ -459,7 +459,10 @@ final class NavigationService: NSObject {
         if let why { Task { await send([["cmd": "nav.ended", "route": t.route, "why": why]]) } }
     }
 
-    private func finish() {
+    /// The trip is over. A simulated walk's position goes back to the real GPS (the next test starts from
+    /// home, not from where the last one ended), except on the way on from a stop.
+    private func finish(keepSimulatedPlace: Bool = false) {
+        if !keepSimulatedPlace { simulatedHere = nil }
         trip = nil
         simulation?.cancel()
         simulation = nil
