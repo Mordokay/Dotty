@@ -60,6 +60,8 @@
 #include "storage.h"
 #include "usage_rules.h"
 #include "voice.h"
+#include "assets.h"
+#include "transfer.h"
 #include "voice_pack.h"
 #include <Fonts/FreeSans9pt7b.h>
 #include "voices.h"
@@ -1199,8 +1201,18 @@ void pollFold() {
        countWords(c.summary));
 }
 
+// The packs download only while nothing else wants Wi-Fi, a session or the card's attention, and Bluetooth is off.
+bool assetsIdle() {
+  // Bluetooth off (locked, as a rule): with the iPhone connected, joining Wi-Fi left 13 KB of internal RAM
+  // (largest block 6 KB) and HTTPS failed or aborted; locked there's ~150 KB.
+  return !ble::running() && !connecting && !live.connected() && !bgSession && !trip.active && !note::active() &&
+         !transfer::active() && !lineJob.busy() && !jobs.busy() && !relayFetch.active &&
+         phoneWake.stage() == PhoneWake::Stage::Idle;
+}
+
 void connect() {
   if (connecting || live.connected()) return;
+  assets::stop("(a chat)");  // the radio and the RAM are the chat's
   if (freshStart) {  // new_conversation: no resuming the old session
     live.forgetResume();
     freshStart = false;
@@ -2729,6 +2741,7 @@ bool jobsDue() {
 
 // A session only for recording: that companion's voice and character, no chat.
 bool startBackgroundSession(const std::string &companion, bool viaPhone) {
+  assets::stop("(a recording session)");
   const Profile *p = companions::find(companion);
   const int key = ring.pick(nowUtc());
   if (!p || key < 0) return false;
@@ -4971,6 +4984,9 @@ void registerCommands() {
     }
     reply["active"] = companions::active().id;
     reply["name"] = companions::active().name;
+    JsonObject packs = reply["assets"].to<JsonObject>();
+    packs["avatars"] = assets::state("avatars");
+    packs["voices"] = assets::state("voices");
     JsonObject today = reply["today"].to<JsonObject>();
     today["turns"] = usage::turnsToday();
     today["tokens"] = usage::tokensToday();
@@ -5232,6 +5248,7 @@ void setup() {
   config.offPictureCount = 1;
   config.sleepApp = [] { player.powerDown(); };
   config.wakeApp = [] { player.powerUp(); };
+  config.beforeBluetooth = [] { assets::stop("(Bluetooth is coming on)"); };  // a download ends, Wi-Fi off first
   config.beforeLock = [] {  // a recording ends (Done) while Bluetooth is still on: the phone hears its end
     if (deckOpen) finishDeck(deck.lockOrPower(millis()) == NoteDeck::Event::Done);
   };
@@ -5253,6 +5270,7 @@ void setup() {
   shell::begin(config);
   storage::begin();
   companions::begin();  // also points memories and history at the active companion
+  assets::begin();      // the avatars and voice samples on the card (downloaded when missing)
   moments::begin();     // reminders, alarms, the companions' own lines, the timer
   note::repairAll();    // voice notes a power cut left with a stale header
   LOGI("boot", "audio %s", player.begin(voice::kInRate) ? "ok" : "FAILED");
@@ -5298,6 +5316,7 @@ void loop() {
     pollTimer();
     if (trip.active && !bgSession) relay::poll();  // the trip's lines come back through the phone
     pollNav();  // a trip carries on locked (the phone stays connected; a turn wakes Dotty)
+    assets::poll(assetsIdle());
     if (phoneWake.stage() != PhoneWake::Stage::Idle || bgSession || connecting || lineJob.busy()) backgroundPoll();
     else pollPhoneWake();  // is one due?
     armLockedWake();
@@ -5329,6 +5348,8 @@ void loop() {
   // The phone's data when no relay session reads it (a session's own poll does, in order).
   if (!(live.overRelay() && live.connected())) relay::poll();
   voice::poll();
+  assets::poll(assetsIdle());
+  if (assets::takeChanged()) redraw = true;  // the real avatar instead of the robot
   pollReplay();
   lastSavePoll();
 
@@ -5645,6 +5666,22 @@ void loop() {
       Serial.flush();
       Serial.print("#END\n");
     }
+  }
+  if (input.key == '$') {  // dev: forget the downloaded packs (avatars, voices, stamps), then restart
+    assets::stop("(forgetting the packs)");
+    const String data = storage::myDataDir();
+    SD_MMC.remove(data + "/avatars.bin");
+    for (const String &d : {data + "/voices", data + "/assets"}) {
+      File folder = SD_MMC.open(d);
+      std::vector<String> names;
+      for (File f = folder.openNextFile(); f; f = folder.openNextFile()) names.push_back(d + "/" + f.name());
+      folder.close();
+      for (const String &n : names) SD_MMC.remove(n);
+    }
+    LOGI("assets", "packs forgotten: restarting");
+    delay(300);
+    cartridge::confirmHealthy();
+    ESP.restart();
   }
   if (input.key == '%') {  // dev: internal RAM now (hunting a leak)
     LOGI("heap", "internal %u KB free, largest %u KB, min ever %u KB; PSRAM %u KB", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,

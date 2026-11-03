@@ -176,6 +176,7 @@ void unlock() {
   if (!isLocked) return;
   lastLockToggle = millis();
   wakePeripherals();
+  if (cfg.beforeBluetooth) cfg.beforeBluetooth();
   ble::start();
   isLocked = false;
   lastInteraction = millis();
@@ -765,6 +766,7 @@ void bluetoothWindow(uint32_t seconds) {
     windowOpenedAt = millis();
     LOGI("ble", "bluetooth window: %lu s", static_cast<unsigned long>(seconds));
     power::setWakeLock(power::kWakeLockWindow, true);
+    if (cfg.beforeBluetooth) cfg.beforeBluetooth();
     ble::start();
   }
   windowUntil = millis() + seconds * 1000;
