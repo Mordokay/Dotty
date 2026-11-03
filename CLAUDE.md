@@ -1388,8 +1388,12 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   `#END`. **Fitted** (2026-10-20, `battery.cpp` `curve`): the 400 mAh battery ran 4.09 -> 3.48 V in
   57 h nearly always locked (~6 mA average); the share of time left at each voltage gave 3.59 V =
   19 %, 3.72 V = 36 %, 3.81 V = 45 % (the generic curve said 4 %, 18 %, 44 %). The same day the
-  user fitted a **1000 mAh** battery (expect ~2.5x the runtime, ~6 days locked): check its first
-  discharge in the log against the curve.
+  user fitted a **1000 mAh** battery. **Refitted** to it (2026-11-03): locked the whole run, 4.05 V
+  just off the charger → 3.475 V in **140 h** (2.45x the 400 mAh run: a real ~1000 mAh, ~7 mA locked),
+  then back on the charger; ~10 h more estimated down to the 3.40 V cutoff (still falling ~4-5 mV/h),
+  so ~6 days locked from full. 4.05 V = 100 %, 3.95 = 83 %, 3.80 = 57 %, 3.64 = 36 %, 3.52 = 13 %,
+  3.475 = 7 % (the old curve said 81 % when full and 1 % at the end). Full rests at only ~4.05-4.08 V
+  on this board. A run down to the cutoff would pin the bottom 7 %.
 - `battery.*` (no fuel gauge, no charge-status pin: STAT only lights the orange LED, and no
   GPIO sees VBUS — checked in the schematic): voltage EMA sampled every 5 s (every wake
   while locked); on battery the shown % only drops when a lower level lasts 1 min (load
