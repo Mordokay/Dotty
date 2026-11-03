@@ -69,12 +69,35 @@ def cartridge_ids():
                   key=lambda name: (name in custom, name))
 
 
+# Key-shaped text: Google's API keys (AIza…, and the newer AQ.… ones). Published firmware is public.
+KEY_PATTERNS = [re.compile(rb"AIza[0-9A-Za-z_-]{35}"), re.compile(rb"AQ\.[0-9A-Za-z_.-]{40,}")]
+
+
+def bench_secrets():
+    """Quoted strings in the gitignored bench headers (cartridges/*/dev_key.h, secret.h)."""
+    found = []
+    for header in [*REPO.glob("cartridges/*/dev_key.h"), *REPO.glob("cartridges/*/secret.h")]:
+        found += [m.encode() for m in re.findall(r'"([^"]{16,})"', header.read_text())]
+    return found
+
+
+def check_no_secrets(cartridge_id, image):
+    """Refuses a firmware that carries a key (catalog builds went public with the bench key once,
+    2026-10-22..11-03, because dev_key.h was included whenever it existed). Never prints the key."""
+    if any(p.search(image) for p in KEY_PATTERNS) or any(s in image for s in bench_secrets()):
+        sys.exit(f"{cartridge_id}: the firmware contains an API key; not publishing it "
+                 "(release builds define DOTTY_RELEASE, which must leave bench keys out)")
+
+
 def build(cartridge_id):
     print(f"building {cartridge_id}...", file=sys.stderr)
-    result = subprocess.run([PIO, "run", "-e", cartridge_id], cwd=REPO, text=True, capture_output=True)
+    # DOTTY_RELEASE: what goes to the public catalog leaves the bench's dev code and keys out.
+    env = {**os.environ, "PLATFORMIO_BUILD_FLAGS": (os.environ.get("PLATFORMIO_BUILD_FLAGS", "") + " -DDOTTY_RELEASE").strip()}
+    result = subprocess.run([PIO, "run", "-e", cartridge_id], cwd=REPO, text=True, capture_output=True, env=env)
     if result.returncode != 0:
         sys.exit(f"{cartridge_id} failed to build:\n{result.stdout[-3000:]}{result.stderr[-2000:]}")
     image = (REPO / ".pio" / "build" / cartridge_id / "firmware.bin").read_bytes()
+    check_no_secrets(cartridge_id, image)
     try:
         info = read_cartridge_info(image)
     except NotACartridge as e:

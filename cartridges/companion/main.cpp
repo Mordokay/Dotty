@@ -66,11 +66,11 @@
 #include <SD_MMC.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
-#if __has_include("dev_key.h")
-#include "dev_key.h"  // bench only (gitignored): COMPANION_DEV_KEY seeds an empty key
+#if !defined(DOTTY_RELEASE) && __has_include("dev_key.h")
+#include "dev_key.h"  // bench only (gitignored; never in catalog builds): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.8.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.8.1");
 
 namespace {
 

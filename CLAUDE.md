@@ -1234,7 +1234,13 @@ with the user. Read `README.md` for the overview and `docs/HARDWARE.md` for the 
   running dry (dotty_core `stream_gate.h`, host-tested: -78 dBm gave 1,137 gaps in one reply).
   Each reply logs "spoken; longest loop pause N ms" (choppy = network if small).
 - The key: NVS `companion/key` from the app; `cartridges/companion/dev_key.h` (gitignored, never
-  commit) seeds an empty key on the bench. Dev keys: `r` simulated BOOT hold, `t` gear, `X` close the
+  commit) seeds an empty key on the bench — **USB builds only**: catalog builds define
+  `DOTTY_RELEASE` (`build_catalog.py` sets `PLATFORMIO_BUILD_FLAGS`), which leaves it out, and
+  `check_no_secrets` refuses any firmware holding a key-shaped string (`AIza…`, `AQ.…`) or a
+  bench header's string. Until 2026-11-03 it was included whenever the file existed, so every
+  released Companion (0.1.0-0.8.0) carried the bench key in public: the user revoked the keys and
+  those 15 .bin files were deleted from the releases. Google's newer keys start `AQ.` (53
+  characters): a check for `AIza` alone misses them. Dev keys: `r` simulated BOOT hold, `t` gear, `X` close the
   socket, `m` cycle moods, `q` fake quota close, `Q` clear it, `J` send invalid JSON (the server
   closes: tests the close path), `M` break the memory file, `N` show the memory note. Host tests:
   `python3 tools/companion_test/run.py` (frames, protocol with captured samples, Pacific reset,
