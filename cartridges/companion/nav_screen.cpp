@@ -3,7 +3,7 @@
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
+#include "fonts.h"
 #include <Fonts/FreeSansBold9pt7b.h>
 
 #include "nav_bar.h"
@@ -136,7 +136,7 @@ void drawNav(const NavView &v) {
   drawArrow(epd, v.arrow, v.exit, 52, 94, 88, kBlack);
   String number, unit;
   splitDistance(v.toTurn, number, unit);
-  epd.setFont(&FreeSansBold24pt7b);
+  epd.setFont(&kBold24);
   centeredIn(number, 108, 100, 198);
   epd.setFont(&FreeSans12pt7b);
   centeredIn(unit, 132, 100, 198);
@@ -199,7 +199,7 @@ int16_t drawNavLockCard(Adafruit_GFX &c, const NavView &v) {
   drawArrow(c, v.arrow, v.exit, 34, 40, 64, kBlack);
   String number, unit;
   splitDistance(v.toTurn, number, unit);
-  c.setFont(&FreeSansBold24pt7b);
+  c.setFont(&kBold24);
   int16_t bx, by;
   uint16_t w, h;
   c.getTextBounds(number + " " + unit, 0, 0, &bx, &by, &w, &h);

@@ -3,7 +3,7 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
+#include "fonts.h"
 
 #include "art.h"
 #include "epd_display.h"
@@ -42,7 +42,7 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
 
   char clock[6] = "--:--";
   if (info.timeValid) snprintf(clock, sizeof(clock), "%02d:%02d", info.time.tm_hour, info.time.tm_min);
-  gfx.setFont(&FreeSansBold24pt7b);
+  gfx.setFont(&kBold24);
 
   // With a widget (a joke, the forecast…): it draws into its own canvas and says how tall it
   // is; the clock row (clock + small padlock) and the widget are then centred together
@@ -59,7 +59,7 @@ void drawLockScreen(Adafruit_GFX &gfx, const LockScreenInfo &info) {
   }
   const bool widgetShown = widgetH > 0;
   if (widgetShown) {
-    gfx.setFont(&FreeSansBold24pt7b);  // the widget may have changed it (it can share this display)
+    gfx.setFont(&kBold24);  // the widget may have changed it (it can share this display)
     int16_t x1, y1;
     uint16_t w, h;
     gfx.getTextBounds(clock, 0, 0, &x1, &y1, &w, &h);  // y1 < 0: the digits' top above the baseline

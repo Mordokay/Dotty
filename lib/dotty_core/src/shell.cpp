@@ -2,7 +2,7 @@
 
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
+#include "fonts.h"
 #include <Preferences.h>
 #include <SD_MMC.h>
 #include <Wire.h>
@@ -343,7 +343,7 @@ void drawPairing(uint32_t code) {
   epd.setFont(&FreeSans9pt7b);
   ui::drawCentered(epd, "Type this code", 78);
   ui::drawCentered(epd, "on your iPhone", 98);
-  epd.setFont(&FreeSansBold24pt7b);
+  epd.setFont(&kBold24);
   ui::drawCentered(epd, digits, 152);
   epd.setFont(&FreeSans9pt7b);
   ui::drawCentered(epd, ble::name(), 188);

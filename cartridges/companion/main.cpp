@@ -5618,7 +5618,9 @@ void loop() {
     redraw = true;
   }
 
-  // Developer aids.
+  // Developer aids (USB builds only: catalog builds define DOTTY_RELEASE, and the helpers only these call
+  // are dropped by the linker).
+#if !defined(DOTTY_RELEASE)
   if (input.key == 'r') simulatedHold = !simulatedHold;
   if (input.key == '>') fakeTrip();  // a made-up walk, no iPhone
   if (input.key == '`') {  // directions plan, Task 1: the iPhone starts location from the background
@@ -5896,6 +5898,7 @@ void loop() {
     setState(Talk::Offline, idleStatus());
   }
   if (input.key == 'q') callbacks().failed("Resource has been exhausted (e.g. check quota).", -1, true, false);
+#endif
 
   // The avatar's animation clock.
   if (millis() - lastFrameAt > kFrameMs && info.state != Talk::Listening && !timerShowing()) {

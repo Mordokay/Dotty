@@ -3,7 +3,7 @@
 
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
+#include "fonts.h"
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 
@@ -159,7 +159,7 @@ void drawTimer(const ScreenInfo &info) {
   epd.fillScreen(kWhite);
   epd.setTextColor(kBlack);
   nav::draw(epd, ui::printable(info.timerLabel), nav::Icon::Back, nav::Icon::None);  // back: the companion
-  epd.setFont(&FreeSansBold24pt7b);
+  epd.setFont(&kBold24);
   ui::drawCentered(epd, info.timerClock, 108);
   epd.setFont(&FreeSans9pt7b);
   if (info.timerConfirm) {
@@ -199,7 +199,7 @@ void drawDeck(const DeckView &v) {
   }
   if (v.recording) {
     epd.fillCircle(52, 84, 9, kBlack);
-    epd.setFont(&FreeSansBold24pt7b);
+    epd.setFont(&kBold24);
     epd.setCursor(70, 100);
     epd.print("REC");
   } else if (v.empty) {
