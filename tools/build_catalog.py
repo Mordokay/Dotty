@@ -33,6 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import companion_assets
 from dotty_image import REPO, NotACartridge, cartridge_icon_path, icon_bytes, read_cartridge_info
 
 GITHUB_REPO = "Mordokay/Dotty"
@@ -164,6 +165,8 @@ def main():
     parser.add_argument("--release", action="store_true", help="publish dist/ as the latest GitHub Release")
     args = parser.parse_args()
 
+    if not companion_assets.check_manifest():  # the firmware would ask for packs nobody publishes
+        sys.exit("assets_manifest.h is stale: run tools/avatar_art.py / tools/build_voice_pack.py")
     commit = check_publishable() if args.release else None
     now = datetime.datetime.now(datetime.timezone.utc)
     tag = now.strftime("cartridges-%Y.%m.%d-%H%M") if args.release else None
@@ -175,6 +178,11 @@ def main():
     for cartridge_id in cartridge_ids():
         image, info = build(cartridge_id)
         entries.append(catalog_entry(cartridge_id, image, info, base_url))
+    # The Companion's packs (voices, avatars), under the names its firmware downloads from the latest release.
+    packs = []
+    for pack in companion_assets.packs():
+        packs.append(companion_assets.fingerprint_name(pack))
+        shutil.copy(pack, DIST / packs[-1])
 
     catalog = {
         "format": CATALOG_FORMAT,
@@ -186,11 +194,14 @@ def main():
     (DIST / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n")
     for e in entries:
         print(f"  {e['id']:10} {e['version']:8} {e['size'] // 1024:5} KB  {e['sha256'][:12]}…")
+    for name in packs:
+        print(f"  pack       {name} ({(DIST / name).stat().st_size // 1024} KB)")
 
     if args.release:
         notes = "\n".join(f"- **{e['name']}** {e['version']} ({e['size'] // 1024} KB)" for e in entries)
         files = [str(DIST / "catalog.json")] + [str(DIST / Path(e["firmware"]).name) for e in entries]
         files += [str(DIST / Path(e["artwork"]).name) for e in entries if e["artwork"]]
+        files += [str(DIST / name) for name in packs]
         run(["gh", "release", "create", tag, *files, "--repo", GITHUB_REPO, "--target", commit,
              "--title", f"Cartridges {now:%Y-%m-%d %H:%M} UTC", "--notes", notes, "--latest"])
         print(f"published {tag}: https://github.com/{GITHUB_REPO}/releases/tag/{tag}")
