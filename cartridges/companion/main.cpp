@@ -1424,41 +1424,14 @@ void closeSettings() {
 
 void drawApp();
 
-extern const uint8_t voicePackStart[] asm("_binary_cartridges_companion_voices_bin_start");
-extern const uint8_t voicePackEnd[] asm("_binary_cartridges_companion_voices_bin_end");
+void showNote(const String &note);
 
-// Plays a voice's sample (as the app does): copied from the firmware to the card when it isn't
-// there yet (or differs), since the player reads files.
+// Plays a voice's sample (as the app does) from the card: data/voices/<name>.mp3, unpacked there from
+// the downloaded voice pack (assets.*). Not there yet: a note says so.
 void playSample(const char *name) {
   if (voice::playing() || info.state == Talk::Listening || info.state == Talk::Thinking) return;
-  const String dir = storage::myDataDir() + "/voices";
-  const String path = dir + "/" + name + ".mp3";
-  const VoicePack pack(voicePackStart, voicePackEnd - voicePackStart);
-  const uint8_t *bytes = nullptr;
-  size_t len = 0;
-  if (!pack.find(name, bytes, len)) return LOGW("companion", "no sample for %s", name);
-  // Is the card's copy this sample? Same size and same first bytes (a straight write from flash
-  // once left a file of zeros with the right size).
-  File existing = SD_MMC.open(path);
-  uint8_t head[64] = {};
-  const bool current = existing && existing.size() == len && existing.read(head, sizeof(head)) == sizeof(head) &&
-                       memcmp(head, bytes, sizeof(head)) == 0;
-  existing.close();
-  if (!current) {
-    SD_MMC.mkdir(dir);
-    File f = SD_MMC.open(path + ".part", FILE_WRITE);
-    // Through RAM: the card driver can't read the firmware's flash directly (it wrote zeros).
-    static uint8_t chunk[4096];
-    bool ok = static_cast<bool>(f);
-    for (size_t at = 0; ok && at < len; at += sizeof(chunk)) {
-      const size_t n = min(sizeof(chunk), len - at);
-      memcpy(chunk, bytes + at, n);
-      ok = f.write(chunk, n) == n;
-    }
-    f.close();
-    SD_MMC.remove(path);
-    if (!ok || !SD_MMC.rename(path + ".part", path)) return LOGW("companion", "couldn't save the %s sample", name);
-  }
+  const String path = storage::myDataDir() + "/voices/" + name + ".mp3";
+  if (!SD_MMC.exists(path)) return showNote("Not downloaded yet");
   player.play(path.c_str());
 }
 

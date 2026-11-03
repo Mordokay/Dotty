@@ -2,6 +2,8 @@
 // The voice samples built into the firmware: one file, "DVS1", a count, then
 // {name[16], offset, size} per sample (little-endian), then the MP3s.
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -40,5 +42,13 @@ int main() {
   CHECK("pack: a cut file is invalid", !bad.valid());
   pack[0] = 'X';
   CHECK("pack: wrong magic", !VoicePack(pack.data(), pack.size()).valid());
+
+  // The real pack (tools/build_voice_pack.py), as the Companion downloads it to the card.
+  std::ifstream in("../../cartridges/companion/assets/voices.bin", std::ios::binary);
+  const std::vector<uint8_t> file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const VoicePack real(file.data(), file.size());
+  CHECK("voice pack file: valid", !file.empty() && real.valid());
+  CHECK_EQ("voice pack file: 30 samples", real.valid() ? real.count() : 0, 30);
+  CHECK("voice pack file: has Zephyr", real.valid() && real.find("Zephyr", bytes, len) && len > 0);
   return failures ? 1 : 0;
 }

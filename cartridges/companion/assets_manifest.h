@@ -13,5 +13,6 @@ struct AssetPack {
 
 constexpr AssetPack kAssetPacks[] = {
     {"avatars", "companion-avatars-60225df3.bin", 252440, "60225df3f2dda42824383bcbe5115d23e982f83ba5f160d8cd935767dc560594"},
+    {"voices", "companion-voices-ab3d09d6.bin", 1407752, "ab3d09d6112c7e3be8fd71b93213eba173cdf1fb91cae93af1ba14a4be8c1dcb"},
 };
 constexpr int kAssetPackCount = sizeof(kAssetPacks) / sizeof(kAssetPacks[0]);
