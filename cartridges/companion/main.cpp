@@ -72,7 +72,7 @@
 #include "dev_key.h"  // bench only (gitignored; never in catalog builds): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.8.1");
+DOTTY_CARTRIDGE("companion", "Companion", "0.9.0");
 
 namespace {
 

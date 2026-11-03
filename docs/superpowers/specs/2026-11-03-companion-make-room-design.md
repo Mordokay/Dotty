@@ -117,3 +117,13 @@ the fingerprinted names exist only on release uploads and the bench server.)
 - Sizes: `firmware.bin` ≤ 2.2 MB; a `DOTTY_RELEASE` build has no dev key handlers (e.g. the `fakeTrip`
   symbol is absent) and passes `check_no_secrets`.
 - Release: the catalog release has both packs, and a Dotty updated from it downloads them.
+
+## Changes during the build (2026-11-03)
+
+- **No bench server** (the user doesn't want a local server for this project): `bench.h`,
+  `COMPANION_ASSET_BASE` and `serve_assets.py` were dropped; packs only come from the latest release.
+- **Downloads only with Bluetooth off** (locked, as a rule): with the iPhone connected, joining Wi-Fi left
+  13 KB of internal RAM and HTTPS failed or aborted the system. A RAM floor (40 KB free, 20 KB block) guards
+  HTTPS, and dotty_core's `shell::Config::beforeBluetooth` ends a download before the shell turns Bluetooth
+  on (unlocking mid-download had frozen NimBLE: interrupt watchdog). First start therefore shows the robot
+  until Dotty first locks.
