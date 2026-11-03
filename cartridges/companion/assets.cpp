@@ -33,6 +33,7 @@ volatile bool cancel = false, finished = false;
 bool ok = false;
 String error;
 uint8_t *newAvatars = nullptr;
+size_t avatarSize = 0, newAvatarSize = 0;
 uint32_t startedAt = 0;
 
 // HTTPS needs internal RAM (lwIP, the Wi-Fi driver; mbedTLS itself is in PSRAM on this build): below this,
@@ -72,9 +73,14 @@ uint8_t *readAll(const String &path, size_t size) {
   return data;
 }
 
-uint8_t *loadAvatars(const AssetPack &p) {
-  uint8_t *data = readAll(avatarsPath(), p.size);
-  if (data && !AvatarPack(data, p.size).valid()) {
+// data/avatars.bin into PSRAM, whatever pack it is (an older firmware's keeps drawing until the new one is
+// verified); nullptr when there's none or it isn't a valid DAV1 file.
+uint8_t *loadAvatars(size_t &size) {
+  File f = SD_MMC.open(avatarsPath());
+  size = f ? f.size() : 0;
+  f.close();
+  uint8_t *data = size ? readAll(avatarsPath(), size) : nullptr;
+  if (data && !AvatarPack(data, size).valid()) {
     free(data);
     data = nullptr;
   }
@@ -149,6 +155,7 @@ bool unpackVoices(const AssetPack &p, String &err) {
     good = good && SD_MMC.rename(path + ".part", path);
   }
   free(data);
+  if (cancel) good = false;  // stopped part-way: some samples are missing, so no stamp
   if (!good) err = cancel ? "cancelled" : "couldn't unpack the voices";
   return good;
 }
@@ -160,13 +167,17 @@ bool install(const AssetPack &p, String &err) {
       err = "couldn't rename the pack";
       return false;
     }
-    newAvatars = loadAvatars(p);
-    if (!newAvatars) {
+    newAvatars = loadAvatars(newAvatarSize);
+    if (!newAvatars || newAvatarSize != p.size) {
       err = "the pack didn't load";
       return false;
     }
   } else if (!strcmp(p.stem, "voices")) {
     if (!unpackVoices(p, err)) return false;
+  }
+  if (cancel) {
+    err = "cancelled";
+    return false;
   }
   File f = SD_MMC.open(stampPath(p), FILE_WRITE);  // only now: the pack is in place
   const bool stamped = f && f.print(p.sha256) == strlen(p.sha256);
@@ -180,6 +191,7 @@ void run(void *) {
   String err;
   const bool joined = !net::connected();
   bool good = cancel ? false : (net::connected() || net::connect(err));
+  if (cancel) good = false;  // connect() clears a stop's abortConnect() when it begins
   if (good) good = enoughRam(err) && download(p, kReleaseAssetBase, err) && !cancel && install(p, err);
   if (cancel && err.isEmpty()) err = "cancelled";
   if (joined && !transfer::active()) net::disconnect();  // only the Wi-Fi this download joined
@@ -199,10 +211,10 @@ void begin() {
   for (int i = 0; i < kAssetPackCount; i++) {
     const AssetPack &p = kAssetPacks[i];
     ready[i] = assetReady(readStamp(p), p);
-    if (ready[i] && !strcmp(p.stem, "avatars")) {
-      avatarData = loadAvatars(p);
-      ready[i] = avatarData != nullptr;
-      if (avatarData) avatar::setPack(avatarData, p.size);
+    if (!strcmp(p.stem, "avatars")) {
+      avatarData = loadAvatars(avatarSize);
+      if (avatarData) avatar::setPack(avatarData, avatarSize);  // an older pack draws until the new one is in
+      ready[i] = ready[i] && avatarData && avatarSize == p.size;
     }
     if (ready[i]) retry[i].succeeded();
     LOGI("assets", "%s %s", p.stem, ready[i] ? "ready" : "missing");
@@ -213,14 +225,15 @@ void poll(bool idle) {
   if (finished) {  // the task ended: take its result over (here, on the loop)
     finished = false;
     const AssetPack &p = kAssetPacks[current];
-    if (!transfer::active()) power::setWakeLock(power::kWakeLockNetwork, false);
+    power::setWakeLock(power::kWakeLockDownload, false);
     if (ok) {
       ready[current] = true;
       retry[current].succeeded();
       if (newAvatars) {
-        avatar::setPack(newAvatars, p.size);
+        avatar::setPack(newAvatars, newAvatarSize);
         free(avatarData);
         avatarData = newAvatars;
+        avatarSize = newAvatarSize;
         newAvatars = nullptr;
         changed = true;
       }
@@ -228,7 +241,8 @@ void poll(bool idle) {
     } else {
       free(newAvatars);
       newAvatars = nullptr;
-      retry[current].failed(millis());
+      if (cancel) retry[current].reset(millis());  // stopped for something else: try again soon (when idle)
+      else retry[current].failed(millis());
       LOGW("assets", "%s failed: %s%s%s; next try in %lu s", p.stem, error.c_str(), *why ? " " : "", why,
            (retry[current].due() - millis()) / 1000);
     }
@@ -250,7 +264,7 @@ void poll(bool idle) {
     ok = false;
     error = "";
     startedAt = millis();
-    power::setWakeLock(power::kWakeLockNetwork, true);  // a locked Dotty stays awake for it
+    power::setWakeLock(power::kWakeLockDownload, true);  // a locked Dotty stays awake for it
     LOGI("assets", "downloading %s (%lu bytes)", kAssetPacks[i].stem, static_cast<unsigned long>(kAssetPacks[i].size));
     if (xTaskCreatePinnedToCore(run, "assets", 12288, nullptr, 1, &task, 0) != pdPASS) {
       task = nullptr;
@@ -266,8 +280,11 @@ void stop(const char *reason) {
   why = reason;
   cancel = true;
   net::abortConnect();
-  for (int i = 0; i < 250 && task; i++) vTaskDelay(pdMS_TO_TICKS(20));  // ≤ 5 s: the sink stops at its next block
-  if (task) LOGW("assets", "the download is still ending after 5 s");
+  // Until the task has really ended (its Wi-Fi off): Bluetooth or a chat starting under it was the crash. The
+  // sink stops at its next block (well under a second while data flows); a TLS handshake or a stalled read
+  // can take longer, so up to 20 s (the loop watchdog allows 90).
+  for (int i = 0; i < 1000 && task; i++) vTaskDelay(pdMS_TO_TICKS(20));
+  if (task) LOGW("assets", "the download is still ending after 20 s");
   poll(false);  // report it now, so the caller's Wi-Fi is its own
 }
 

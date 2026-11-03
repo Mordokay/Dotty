@@ -165,6 +165,8 @@ def main():
     parser.add_argument("--release", action="store_true", help="publish dist/ as the latest GitHub Release")
     args = parser.parse_args()
 
+    if subprocess.run([sys.executable, str(REPO / "tools/check_release_gate.py")]).returncode:
+        sys.exit("main.cpp gates more than dev keys out of release builds")
     if not companion_assets.check_manifest():  # the firmware would ask for packs nobody publishes
         sys.exit("assets_manifest.h is stale: run tools/avatar_art.py / tools/build_voice_pack.py")
     commit = check_publishable() if args.release else None

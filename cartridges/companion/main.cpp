@@ -72,7 +72,7 @@
 #include "dev_key.h"  // bench only (gitignored; never in catalog builds): COMPANION_DEV_KEY seeds an empty key
 #endif
 
-DOTTY_CARTRIDGE("companion", "Companion", "0.9.0");
+DOTTY_CARTRIDGE("companion", "Companion", "0.9.1");
 
 namespace {
 
@@ -1205,7 +1205,9 @@ void pollFold() {
 bool assetsIdle() {
   // Bluetooth off (locked, as a rule): with the iPhone connected, joining Wi-Fi left 13 KB of internal RAM
   // (largest block 6 KB) and HTTPS failed or aborted; locked there's ~150 KB.
-  return !ble::running() && !connecting && !live.connected() && !bgSession && !trip.active && !note::active() &&
+  // Locked only: unlocked, Bluetooth is off just for the second after a Wi-Fi chat (bleBackAt) and comes
+  // back by itself, not through the shell's beforeBluetooth.
+  return shell::locked() && !bleBackAt && !ble::running() && !connecting && !live.connected() && !bgSession && !trip.active && !note::active() &&
          !transfer::active() && !lineJob.busy() && !jobs.busy() && !relayFetch.active &&
          phoneWake.stage() == PhoneWake::Stage::Idle;
 }
@@ -1412,6 +1414,7 @@ SettingsView settingsView() {
   v.speak = !settings.textOnly;
   v.voice = settings.voice;
   v.style = kVoices[max(0, voiceIndex(settings.voice.c_str()))].style;
+  if (!assets::voicesReady()) v.style = "Not downloaded yet";  // its sample can't play yet (assets.*)
   v.choices = favouriteCount(settings.favourites.c_str());
   const Profile &who = companions::active();
   v.companion = who.awake() ? screenName(who) : String("Not awake yet");
@@ -1436,14 +1439,12 @@ void closeSettings() {
 
 void drawApp();
 
-void showNote(const String &note);
-
 // Plays a voice's sample (as the app does) from the card: data/voices/<name>.mp3, unpacked there from
-// the downloaded voice pack (assets.*). Not there yet: a note says so.
+// the downloaded voice pack (assets.*). Not there yet: nothing (the row says "Not downloaded yet").
 void playSample(const char *name) {
   if (voice::playing() || info.state == Talk::Listening || info.state == Talk::Thinking) return;
   const String path = storage::myDataDir() + "/voices/" + name + ".mp3";
-  if (!SD_MMC.exists(path)) return showNote("Not downloaded yet");
+  if (!SD_MMC.exists(path)) return;
   player.play(path.c_str());
 }
 
@@ -5301,7 +5302,10 @@ void loop() {
   }
   if (bleBackAt && millis() > bleBackAt && !connecting && !live.connected()) {
     bleBackAt = 0;
-    if (!shell::locked()) ble::start();
+    if (!shell::locked()) {
+      assets::stop("(Bluetooth is coming back)");  // never under a download (assetsIdle rules it out too)
+      ble::start();
+    }
   }
   static bool wasLocked = false;
   if (!unlocked && deckOpen) {  // locking (or the auto-lock) = Done
@@ -5886,10 +5890,6 @@ void loop() {
     noteUntil = millis() + 3000;
     redraw = true;
   }
-  if (info.note.length() && millis() > noteUntil) {
-    info.note = "";
-    redraw = true;
-  }
   if (input.key == 'Q') {  // undo q
     usage::markOut(0);
     ring = KeyRing();
@@ -5899,6 +5899,12 @@ void loop() {
   }
   if (input.key == 'q') callbacks().failed("Resource has been exhausted (e.g. check quota).", -1, true, false);
 #endif
+
+  // The note card ("Remembered", "Not downloaded yet"…) goes after its time.
+  if (info.note.length() && millis() > noteUntil) {
+    info.note = "";
+    redraw = true;
+  }
 
   // The avatar's animation clock.
   if (millis() - lastFrameAt > kFrameMs && info.state != Talk::Listening && !timerShowing()) {
