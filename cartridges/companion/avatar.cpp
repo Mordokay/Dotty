@@ -1,5 +1,6 @@
 #include "avatar.h"
 
+#include "avatar_pack.h"
 #include "epd_display.h"
 #include "images/avatars.h"
 
@@ -37,11 +38,7 @@ Face faceFor(Talk state, const String &mood, int frame) {
 
 namespace {
 
-int indexOf(const String &id) {
-  for (int i = 0; i < art::kAvatarCount; i++)
-    if (id == art::kAvatarIds[i]) return i;
-  return 0;
-}
+AvatarPack pack(nullptr, 0);  // the others, from the card (setPack); the robot is built in
 
 }  // namespace
 
@@ -101,10 +98,21 @@ void draw(Adafruit_GFX &g, int16_t x, int16_t y, const String &id, Face face, in
     else badge(g, x + 41, y + 41, 7, face);
     return;
   }
-  const int a = indexOf(id), f = static_cast<int>(face);
+  const int f = static_cast<int>(face);
+  const bool big = size >= art::kBigSize;
   const int16_t bob = face == Face::Idle && frame % 2 ? 1 : 0;
-  if (size >= art::kBigSize) g.drawBitmap(x, y + bob, art::kBig[a][f], art::kBigSize, art::kBigSize, EpdDisplay::kBlack);
-  else g.drawBitmap(x, y + bob, art::kSmall[a][f], art::kSmallSize, art::kSmallSize, EpdDisplay::kBlack);
+  const uint8_t *bits = pack.face(id.c_str(), f, big);  // nullptr: not on the card yet (or the robot)
+  if (!bits) bits = big ? art::kRobotBig[f] : art::kRobotSmall[f];
+  const int16_t side = big ? art::kBigSize : art::kSmallSize;
+  g.drawBitmap(x, y + bob, bits, side, side, EpdDisplay::kBlack);
+}
+
+void setPack(const uint8_t *data, size_t size) {
+  pack = AvatarPack(data, size);
+}
+
+bool packed(const String &id) {
+  return id == "robot" || id == "photo" || pack.face(id.c_str(), 0, true) != nullptr;
 }
 
 void setPhoto(const uint8_t *big, const uint8_t *small) {

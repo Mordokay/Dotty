@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""The companion's ten avatars → cartridges/companion/images/avatars.h (1-bit, 96x96 and 48x48,
-every expression), tools/avatar_art_preview.png (check by eye) and the app's previews
-(ios/Dotty/Resources/Avatars/<id>.png).
+"""The companion's ten avatars (1-bit, 128x128 and 48x48, every expression): the robot into
+cartridges/companion/images/avatars.h (built in: it stands in until the others are on the card), the
+other nine into cartridges/companion/assets/avatars.bin (downloaded to the card; format in
+cartridges/companion/avatar_pack.h), then the manifest (tools/companion_assets.py); also
+tools/avatar_art_preview.png (check by eye) and the app's previews (ios/Dotty/Resources/Avatars/<id>.png).
 
 An avatar's body is the user's picture `tools/avatar_art_src/<id>.png` when there is one (made
 with docs/companion-avatar-prompts.md: black lines on white, face left empty), else a simple
@@ -16,9 +18,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
+import companion_assets
+
 REPO = Path(__file__).resolve().parent.parent
 SRC = Path(__file__).resolve().parent / "avatar_art_src"
 OUT = REPO / "cartridges/companion/images/avatars.h"
+PACK = REPO / "cartridges/companion/assets/avatars.bin"
+BUILT_IN = "robot"
 PREVIEW = Path(__file__).resolve().parent / "avatar_art_preview.png"
 APP = REPO / "ios/Dotty/Resources/Avatars"
 
@@ -339,19 +345,28 @@ def main():
              "const char *const kAvatarIds[kAvatarCount] = {" + ", ".join(f'"{i}"' for i in IDS) + "};",
              "const char *const kAvatarNames[kAvatarCount] = {" + ", ".join(f'"{n}"' for n in NAMES) + "};", ""]
     sheet = Image.new("1", (len(FACES) * (BIG + 6) + 6, len(IDS) * (BIG + SMALL + 14) + 6), 1)
-    for size, name in ((BIG, "kBig"), (SMALL, "kSmall")):
-        lines.append(f"// [avatar][face] (faces in avatar::Face order: {', '.join(FACES)})")
-        lines.append(f"const uint8_t {name}[kAvatarCount][kFaceCount][{size * size // 8}] PROGMEM = {{")
-        for ai, key in enumerate(IDS):
-            lines.append(f"  {{  // {key}")
+    faces = {}  # (key, size) -> [bytes per face]
+    for ai, key in enumerate(IDS):
+        for size in (BIG, SMALL):
+            faces[key, size] = []
             for fi, expr in enumerate(FACES):
                 img = frame(key, expr, size)
-                lines.append(f"    {{{c_array(to_bytes(img))}}},  // {expr}")
+                faces[key, size].append(bytes(to_bytes(img)))
                 y = 6 + ai * (BIG + SMALL + 14) + (0 if size == BIG else BIG + 4)
                 sheet.paste(img, (6 + fi * (BIG + 6), y))
-            lines.append("  },")
+    for size, name in ((BIG, "kRobotBig"), (SMALL, "kRobotSmall")):
+        lines.append(f"// The robot's faces, in avatar::Face order: {', '.join(FACES)}")
+        lines.append(f"const uint8_t {name}[kFaceCount][{size * size // 8}] PROGMEM = {{")
+        for fi, expr in enumerate(FACES):
+            lines.append(f"    {{{c_array(faces[BUILT_IN, size][fi])}}},  // {expr}")
         lines.append("};")
         lines.append("")
+    others = [key for key in IDS if key != BUILT_IN]
+    pack = b"DAV1" + len(others).to_bytes(4, "little") + b"".join(k.encode().ljust(16, b"\0") for k in others)
+    for key in others:
+        pack += b"".join(faces[key, BIG]) + b"".join(faces[key, SMALL])
+    PACK.parent.mkdir(parents=True, exist_ok=True)
+    PACK.write_bytes(pack)
     lines.append("}  // namespace art")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines) + "\n")
@@ -361,7 +376,9 @@ def main():
         frame(key, "idle", BIG).convert("L").resize((BIG * 2, BIG * 2), Image.NEAREST).save(APP / f"{key}.png")
     # The cartridge's install icon (64x64, 1-bit): the girl, happy (the app artwork is her too).
     frame("girl", "happy", 64).save(REPO / "cartridges/companion/icon.png")
-    print(f"{len(IDS)} avatars x {len(FACES)} faces -> {OUT.relative_to(REPO)}, {PREVIEW.name}, {APP.relative_to(REPO)}/")
+    companion_assets.write_manifest()
+    print(f"{len(IDS)} avatars x {len(FACES)} faces -> {OUT.relative_to(REPO)} (robot), {PACK.relative_to(REPO)} "
+          f"({len(pack)} bytes), {PREVIEW.name}, {APP.relative_to(REPO)}/")
 
 
 if __name__ == "__main__":
